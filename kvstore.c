@@ -64,7 +64,6 @@ const char *response[] = {
 
 
 int kvs_split_token(char *msg, char *tokens[]) {
-
 	if (msg == NULL || tokens == NULL) return -1;
 
 	int idx = 0;
