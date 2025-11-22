@@ -60,25 +60,27 @@ int kvs_array_set(kvs_array_t *inst, char *key, char *value) {
 	strncpy(kvalue, value, strlen(value));
 
 	int i = 0;
-	for (i = 0;i < inst->total;i ++) {
+	// 首先尝试在现有空间中找到空槽
+	for (i = 0; i < inst->total; i++) {
 		if (inst->table[i].key == NULL) {
-			
 			inst->table[i].key = kcopy;
 			inst->table[i].value = kvalue;
-			inst->total ++;
-			
 			return 0;
 		}
 	}
 
-	if (i == inst->total && i < KVS_ARRAY_SIZE) {
-
+	// 如果没找到空槽且未达到最大容量，则在末尾添加
+	if (i < KVS_ARRAY_SIZE) {
 		inst->table[i].key = kcopy;
 		inst->table[i].value = kvalue;
-		inst->total ++;
+		inst->total++;
+		return 0;
 	}
 
-	return 0;
+	// 如果已达到最大容量
+	kvs_free(kcopy);
+	kvs_free(kvalue);
+	return -1; // 返回错误
 }
 
 char* kvs_array_get(kvs_array_t *inst, char *key) {
@@ -109,44 +111,42 @@ int kvs_array_del(kvs_array_t *inst, char *key) {
 	if (inst == NULL || key == NULL) return -1;
 
 	int i = 0;
-	for (i = 0;i < inst->total;i ++) {
+	for (i = 0; i < inst->total; i++) {
 
-		if (strcmp(inst->table[i].key, key) == 0) {
+		if (inst->table[i].key != NULL && strcmp(inst->table[i].key, key) == 0) {
 
 			kvs_free(inst->table[i].key);
 			inst->table[i].key = NULL;
 
 			kvs_free(inst->table[i].value);
 			inst->table[i].value = NULL;
-// error: > 1024
-			if (inst->total-1 == i) {
-				inst->total --;
+
+			// 如果删除的是最后一个元素，且之前没有空槽，减少total计数
+			if (i == inst->total - 1) {
+				// 向前查找，看是否可以减少total计数
+				while (inst->total > 0 && inst->table[inst->total - 1].key == NULL) {
+					inst->total--;
+				}
 			}
-			
 
 			return 0;
 		}
 	}
 
-	return i;
+	return 1; // 表示不存在
 }
 
 
 /*
- * @return : < 0, error; =0, success; >0, no exist 
+ * @return : < 0, error; =0, success; >0, no exist
  */
 
 int kvs_array_mod(kvs_array_t *inst, char *key, char *value) {
 
 	if (inst == NULL || key == NULL || value == NULL) return -1;
-// error: > 1024
-	if (inst->total == 0) {
-		return KVS_ARRAY_SIZE;
-	}
-	
 
 	int i = 0;
-	for (i = 0;i < inst->total;i ++) {
+	for (i = 0; i < inst->total; i++) {
 
 		if (inst->table[i].key == NULL) {
 			continue;
@@ -168,7 +168,7 @@ int kvs_array_mod(kvs_array_t *inst, char *key, char *value) {
 
 	}
 
-	return i;
+	return 1; // 表示不存在
 }
 
 
