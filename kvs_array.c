@@ -12,6 +12,9 @@ int kvs_array_create(kvs_array_t *inst) {
     return -2;
   }
   inst->table = kvs_calloc(KVS_ARRAY_SIZE, sizeof(kvs_array_item_t));
+  for (int i = 0; i < KVS_ARRAY_SIZE; i++) {
+    inst->table[i].key = inst->table[i].value = NULL;
+  }
   inst->total = 0;
   
   return 0;
@@ -29,7 +32,7 @@ void kvs_array_destroy(kvs_array_t* inst) {
 char* kvs_array_get(kvs_array_t* inst, char* key) {
 
   if (inst == NULL || key == NULL) return NULL;
-
+  printf("-->arr not NULL\n");
   // for (int i = 0; i < inst->total; i++) {
   for (int i = 0; i < KVS_ARRAY_SIZE; i++) {
     if (inst->table[i].key) { // 找到了一个非空位
@@ -53,7 +56,7 @@ int kvs_array_set(kvs_array_t* inst, char* key, char* value) {
 
   char* tmpKey = strdup(key); // strdup 自动 malloc 且自动预留 \0
   char* tmpValue = strdup(value); // 两行替代下面两坨注释 但是它好像是 POXIS API
-
+  printf("tmpkey = %s, tmpvalue = %s\n", tmpKey, tmpValue);
   // char* tmpKey = kvs_calloc(1, strlen(key) + 1);
   // if (tmpKey == NULL) return -3;
   // strncpy(tmpKey, key, strlen(key));
@@ -62,7 +65,6 @@ int kvs_array_set(kvs_array_t* inst, char* key, char* value) {
   // if (tmpValue == NULL) return -4;
   // strncpy(tmpValue, value, strlen(value));
 
-  // 先查找中间有没有空位
   
   for (int idx = 0; idx < KVS_ARRAY_SIZE; idx++) {
     if (inst->table[idx].key == NULL) {

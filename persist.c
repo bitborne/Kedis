@@ -67,6 +67,12 @@ int kvs_persist_init(int mode) {
  * @return 成功返回0，失败返回-1
  */
 int kvs_persist_log_operation(const char *operation, const char *key, const char *value) {
+    // 只在增量模式下记录日志
+    if (persist_mode != PERSIST_MODE_INCREMENTAL) {
+        // 在快照模式下，不记录操作日志，因为数据会在关闭时一次性保存
+        return 0;
+    }
+
     if (log_file == NULL) {
         printf("错误：日志文件未初始化\n");
         return -1;
@@ -237,35 +243,33 @@ int kvs_snapshot_save(void) {
 
     printf("开始保存快照...\n");
 
-    // 保存数组后端数据
+    // 保存数组后端数据 (使用SET命令)
 #if ENABLE_ARRAY
-    for (int i = 0; i < global_array.total; i++) {
-        if (global_array.table[i].key != NULL) {
-            fprintf(snapshot_file, "ASET %s %s\n", global_array.table[i].key, global_array.table[i].value);
+    if (global_array.table != NULL) {
+        for (int i = 0; i < KVS_ARRAY_SIZE; i++) {  // 遍历整个数组大小，而不是total
+            // 额外检查数组元素是否有效
+            // printf("--> out of if\n");
+            if (global_array.table[i].key != NULL && global_array.table[i].value != NULL) {
+              printf("--> in if\n");
+                fprintf(snapshot_file, "SET %s %s\n", global_array.table[i].key, global_array.table[i].value);
+            }
         }
     }
-#endif
-
-    // 保存红黑树后端数据（简化实现，实际需要遍历树）
-#if ENABLE_RBTREE
-    // 注意：红黑树需要实现遍历函数来导出所有键值对
-    printf("红黑树快照保存待实现\n");
-#endif
-
-    // 保存哈希表后端数据
-#if ENABLE_HASH
-    for (int i = 0; i < global_hash.max_slots; i++) {
-        hashnode_t *node = global_hash.nodes[i];
-        while (node != NULL) {
-#if HASH_ENABLE_KEY_POINTER
-            fprintf(snapshot_file, "HSET %s %s\n", node->key, node->value);
-#else
-            fprintf(snapshot_file, "HSET %s %s\n", node->key, node->value);
-#endif
-            node = node->next;
-        }
-    }
-#endif
+    printf("--> arr OK\n");
+    #endif
+    
+    
+    // 保存红黑树后端数据 (使用RSET命令)
+    #if ENABLE_RBTREE
+    kvs_rbtree_save_snapshot(&global_rbtree, snapshot_file);
+    printf("--> tree OK\n");
+    #endif
+    
+    // 保存哈希表后端数据 (使用HSET命令)
+    #if ENABLE_HASH
+    kvs_hash_save_snapshot(&global_hash, snapshot_file);
+    printf("--> hash OK\n");
+    #endif
 
     fclose(snapshot_file);
     printf("快照保存完成\n");
@@ -301,17 +305,23 @@ int kvs_snapshot_load(void) {
             char *val_start = value;
             while (*val_start == ' ' && *val_start != '\0') val_start++;
 
-            // 根据操作类型执行对应操作
-            if (strcmp(operation, "ASET") == 0) {
+                    // 根据操作类型执行对应操作
+            if (strcmp(operation, "SET") == 0) {
 #if ENABLE_ARRAY
-                kvs_array_set(&global_array, key, val_start);
+                // 对于快照加载，尝试设置，如果键存在则修改
+                int result = kvs_array_set(&global_array, key, val_start);
+                if (result > 0) {  // 如果键已存在
+                    kvs_array_mod(&global_array, key, val_start);
+                }
 #endif
             } else if (strcmp(operation, "RSET") == 0) {
 #if ENABLE_RBTREE
+                // 红黑树的set会自动处理已存在的键
                 kvs_rbtree_set(&global_rbtree, key, val_start);
 #endif
             } else if (strcmp(operation, "HSET") == 0) {
 #if ENABLE_HASH
+                // 哈希表的set会自动处理已存在的键
                 kvs_hash_set(&global_hash, key, val_start);
 #endif
             }

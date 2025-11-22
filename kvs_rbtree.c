@@ -441,6 +441,8 @@ int kvs_rbtree_create(kvs_rbtree_t* inst) {
   inst->nil->parent = inst->nil;
   inst->nil->left = inst->nil;
   inst->nil->right = inst->nil;
+  inst->nil->key = NULL; // 安全初始化
+  inst->nil->value = NULL; // 安全初始化
   inst->root = inst->nil;
 
   return 0;
@@ -465,6 +467,10 @@ char* kvs_rbtree_get(kvs_rbtree_t* inst, char* key) {
   if (inst == NULL || key == NULL) return NULL;
   
   rbtree_node* node = rbtree_search(inst, key);
+
+  if (node == inst->nil) {
+    return NULL; // 键不存在，安全返回NULL
+  }
 
   return node->value;
 }
@@ -531,6 +537,33 @@ int kvs_rbtree_mod(kvs_rbtree_t* inst, char* key, char* value) {
   return 0;
 }
 
+// 递归遍历红黑树并保存到文件
+static void _rbtree_save_recursive(rbtree *T, rbtree_node *node, FILE *file, const char *prefix) {
+    if (!T || !node || !file || !prefix || node == T->nil) {
+        return;
+    }
+
+    _rbtree_save_recursive(T, node->left, file, prefix);
+
+    // 保存当前节点的数据，使用适当的前缀
+    if (node->key && node->value) {
+        fprintf(file, "%sSET %s %s\n", prefix, (char*)node->key, (char*)node->value);
+    }
+
+    _rbtree_save_recursive(T, node->right, file, prefix);
+}
+
+// 保存红黑树到快照文件（使用RSET格式）
+void kvs_rbtree_save_snapshot(rbtree *T, FILE *file) {
+    if (!T || !file || !T->root || !T->nil) return;
+
+    // 确保根节点不是nil节点才开始遍历
+    if (T->root != T->nil) {
+        _rbtree_save_recursive(T, T->root, file, "R");
+    }
+}
+
+
 /// @brief
 /// @param inst
 /// @param key
@@ -539,7 +572,7 @@ int kvs_rbtree_exist(kvs_rbtree_t* inst, char* key) {
   if (inst == NULL || key == NULL) return -1;
 
   return rbtree_search(inst, key) != inst->nil;
-  
+
 }
 
 #endif

@@ -4,9 +4,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <signal.h>
+#include <stdbool.h>
+
 #if (NETWORK_SELECT == NETWORK_REACTOR)
 #include "server.h"  // only for reactor.c
 #endif
+
+
 
 #define ECHO_LOGIC 0
 #define KV_LOGIC 1
@@ -79,8 +84,11 @@ int kvs_split_token(char* msg, char* tokens[]) {
   // 将tokens[i]指针 赋值为上面的首地址
   while (token != NULL) {
     tokens[idx++] = token;
-    // printf("idx: %d -> %s\n", idx - 1, token); // DEBUG
+    printf("idx: %d -> %s\n", idx - 1, token); // DEBUG
     token = strtok(NULL, " ");
+  }
+  for (int i = 0; i < 3; i++) {
+    printf("tokens[%d] =  %s", i , tokens[i]);
   }
   return idx;  // 每拆出来一个token，idx++ ==> 返回值为token的个数
 }
@@ -104,11 +112,14 @@ int kvs_filter_protocol(char** tokens, int count, char* response) {
   int ret = 0;
   char* key = tokens[1];
   char* value = tokens[2];
+  printf("keyOUT = %s\n", key);
 
   switch (cmd) {
 #if ENABLE_ARRAY
     case KVS_CMD_SET:  // --> OK
       ret = kvs_array_set(&global_array, key, value);
+      printf("inSET key = %s\n", key);
+
       if (ret < 0) {
         length = sprintf(response, "ERROR\r\n");
       } else if (ret == 0) {
@@ -120,6 +131,7 @@ int kvs_filter_protocol(char** tokens, int count, char* response) {
       }
       break;
     case KVS_CMD_GET:  // --> Value
+    printf("keyIN = %s\n", key);
       char* gotValue = kvs_array_get(&global_array, key);
       if (gotValue == NULL) {
         length = sprintf(response, "ERROR / Not Exist\r\n");
@@ -338,6 +350,11 @@ int init_kvengine(void) {
 }
 
 void dest_kvengine(void) {
+  // 根据模式保存数据
+  if (g_persist_mode == PERSIST_MODE_SNAPSHOT) {
+    kvs_snapshot_save();
+  }
+
 #if ENABLE_ARRAY
   kvs_array_destroy(&global_array);
 #endif
@@ -348,13 +365,16 @@ void dest_kvengine(void) {
   kvs_hash_destroy(&global_hash);
 #endif
 
-  // 根据模式保存数据
-  if (g_persist_mode == PERSIST_MODE_SNAPSHOT) {
-    kvs_snapshot_save();
-  }
-
   // 关闭持久化功能
   kvs_persist_close();
+}
+
+
+// 信号处理函数
+void signal_handler(int sig) {
+    printf("\n接收到信号 %d，准备关闭服务...\n", sig);
+    // 不直接调用dest_kvengine，而是正常退出，让atexit处理清理
+    exit(0);  // 正常退出，会调用atexit注册的函数
 }
 
 int main(int argc, char* argv[]) {
@@ -378,14 +398,23 @@ int main(int argc, char* argv[]) {
     g_persist_mode = PERSIST_MODE_INCREMENTAL;
   }
 
+  // 注册信号处理器，捕获SIGINT (Ctrl+C) 和 SIGTERM
+  signal(SIGINT, signal_handler);
+  signal(SIGTERM, signal_handler);
+
+  // 注册退出函数，确保在程序正常退出时保存数据（仅在非信号退出时使用）
+  if (atexit(dest_kvengine) != 0) {
+      printf("警告：无法注册退出函数\n");
+  }
+
   init_kvengine();
 
 #if (NETWORK_SELECT == NETWORK_REACTOR)
   reactor_start(port, kvs_protocol);  //
 #elif (NETWORK_SELECT == NETWORK_PROACTOR)
-  ntyco_start(port, kvs_protocol);
-#elif (NETWORK_SELECT == NETWORK_NTYCO)
   proactor_start(port, kvs_protocol);
+#elif (NETWORK_SELECT == NETWORK_NTYCO)
+  ntyco_start(port, kvs_protocol);
 #endif
 
   dest_kvengine();

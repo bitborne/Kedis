@@ -86,24 +86,27 @@ int kvs_hash_create(kvs_hash_t *hash) {
 // 
 void kvs_hash_destroy(kvs_hash_t *hash) {
 
-	if (!hash) return;
+	if (!hash || !hash->nodes) return;
 
-	int i = 0;
-	for (i = 0;i < hash->max_slots;i ++) {
+	for (int i = 0; i < hash->max_slots; i++) {
 		hashnode_t *node = hash->nodes[i];
-
-		while (node != NULL) { // error
-
+		while (node != NULL) {
 			hashnode_t *tmp = node;
 			node = node->next;
-			hash->nodes[i] = node;
-			
+
+#if HASH_ENABLE_KEY_POINTER
+			if (tmp->key) kvs_free(tmp->key);
+			if (tmp->value) kvs_free(tmp->value);
+#endif
 			kvs_free(tmp);
-			
 		}
+		hash->nodes[i] = NULL; // 清空当前槽
 	}
 
 	kvs_free(hash->nodes);
+	hash->nodes = NULL; // 将nodes指针置空
+	hash->count = 0;
+	hash->max_slots = 0;
 	
 }
 
@@ -111,13 +114,11 @@ void kvs_hash_destroy(kvs_hash_t *hash) {
 
 // mp
 int kvs_hash_set(kvs_hash_t *hash, char *key, char *value) {
-  printf("--> 1\n");
 	if (!hash || !key || !value) return -1;
   
 	int idx = _hash(key, MAX_TABLE_SIZE);
   
 	hashnode_t *node = hash->nodes[idx];
-  printf("--> 2\n");
   #if 1
 	while (node != NULL) {
     if (strcmp(node->key, key) == 0) { // exist
@@ -125,16 +126,13 @@ int kvs_hash_set(kvs_hash_t *hash, char *key, char *value) {
 		}
 		node = node->next;
 	}
-  printf("--> 3\n");
   #endif
   
 	hashnode_t *new_node = _create_node(key, value);
-  printf("--> 4\n");
 	new_node->next = hash->nodes[idx];
 	hash->nodes[idx] = new_node;
 	
 	hash->count ++;
-  printf("--> 5\n");
 
 	return 0;
 }
@@ -211,7 +209,11 @@ int kvs_hash_del(kvs_hash_t *hash, char *key) {
 	if (strcmp(head->key, key) == 0) {
 		hashnode_t *tmp = head->next;
 		hash->nodes[idx] = tmp;
-		
+
+#if HASH_ENABLE_KEY_POINTER
+		kvs_free(head->key);
+		kvs_free(head->value);
+#endif
 		kvs_free(head);
 		hash->count --;
 		
@@ -244,13 +246,30 @@ int kvs_hash_del(kvs_hash_t *hash, char *key) {
 }
 
 
+// 遍历哈希表并保存到文件
+void kvs_hash_save_snapshot(kvs_hash_t *hash, FILE *file) {
+    if (!hash || !file || !hash->nodes) {
+        return;
+    }
+
+    for (int i = 0; i < hash->max_slots; i++) {
+        hashnode_t *current = hash->nodes[i];
+        while (current != NULL) {
+            if (current->key && current->value) {
+                fprintf(file, "HSET %s %s\n", current->key, current->value);
+            }
+            current = current->next;
+        }
+    }
+}
+
 int kvs_hash_exist(kvs_hash_t *hash, char *key) {
 
 	char *value = kvs_hash_get(hash, key);
 	if (value) return 1;
 
 	return 0;
-	
+
 }
 
 #if 0

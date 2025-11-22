@@ -103,6 +103,8 @@ char* kvs_rbtree_get(kvs_rbtree_t *inst, char *key);
 int kvs_rbtree_del(kvs_rbtree_t *inst, char *key);
 int kvs_rbtree_mod(kvs_rbtree_t *inst, char *key, char *value);
 int kvs_rbtree_exist(kvs_rbtree_t *inst, char *key);
+void kvs_rbtree_save_snapshot(rbtree *T, FILE *file);
+// kvs_hash_save_snapshot的声明将在ENABLE_HASH块中定义
 
 
 
@@ -150,6 +152,7 @@ char* kvs_hash_get(kvs_hash_t *hash, char *key);
 int kvs_hash_mod(kvs_hash_t *hash, char *key, char *value);
 int kvs_hash_del(kvs_hash_t *hash, char *key);
 int kvs_hash_exist(kvs_hash_t *hash, char *key);
+void kvs_hash_save_snapshot(kvs_hash_t *hash, FILE *file);
 
 
 #endif
