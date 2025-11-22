@@ -261,6 +261,133 @@ void hash_testcase_1w_mix(int connfd) {
   
 }
 
+void persistence_test_1w(int connfd) {
+  const int cnt = 10000;
+
+  gettimeofday(&tv_begin, NULL);
+
+
+  for (int i = 0; i < cnt; i++) {
+    // array * 60000 - 每次循环执行6个操作
+    char cmd_set1[64] = {0};
+    char cmd_set2[64] = {0};
+    char cmd_get[64] = {0};
+    char cmd_mod1[64] = {0};
+    char cmd_del[64] = {0};
+    char expect_Ok[16] = {0};
+    char expect_get1[64] = {0};
+    char expect_get2[64] = {0};
+    snprintf(cmd_set1, 64, "SET Array_k%d Array_v%d", 2 * i, 2 * i);
+    snprintf(cmd_set2, 64, "SET Array_k%d Array_v%d", 2 * i + 1, 2 * i + 1);
+    snprintf(cmd_get, 64, "GET Array_k%d", i);
+    snprintf(cmd_mod1, 64, "MOD Array_k%d Array_MOD_v%d", i, i);
+    snprintf(cmd_del, 64, "DEL Array_k%d", i);
+
+    strcpy(expect_Ok, "OK\r\n");
+    snprintf(expect_get1, 64, "Value: Array_v%d\r\n", i);
+    snprintf(expect_get2, 64, "Value: Array_MOD_v%d\r\n", i);
+
+
+    testcase(connfd, cmd_set1, expect_Ok, "pers_SET1");
+    testcase(connfd, cmd_set2, expect_Ok, "pers_SET2");
+    testcase(connfd, cmd_get, expect_get1, "pers_GET1");
+    testcase(connfd, cmd_mod1, expect_Ok, "pers_MOD1");
+    testcase(connfd, cmd_get, expect_get2, "pers_GET2");
+    testcase(connfd, cmd_del, expect_Ok, "pers_DEL");
+
+    // rbtree * 60000 - 每次循环执行6个操作
+    char r_cmd_set1[64] = {0};
+    char r_cmd_set2[64] = {0};
+    char r_cmd_get[64] = {0};
+    char r_cmd_mod1[64] = {0};
+    char r_cmd_del[64] = {0};
+    char r_expect_get1[64] = {0};
+    char r_expect_get2[64] = {0};
+    snprintf(r_cmd_set1, 64, "RSET R_k%d R_v%d", 2 * i, 2 * i);
+    snprintf(r_cmd_set2, 64, "RSET R_k%d R_v%d", 2 * i + 1, 2 * i + 1);
+    snprintf(r_cmd_get, 64, "RGET R_k%d", i);
+    snprintf(r_cmd_mod1, 64, "RMOD R_k%d R_MOD_v%d", i, i);
+    snprintf(r_cmd_del, 64, "RDEL R_k%d", i);
+
+    snprintf(r_expect_get1, 64, "Value: R_v%d\r\n", i);
+    snprintf(r_expect_get2, 64, "Value: R_MOD_v%d\r\n", i);
+
+    testcase(connfd, r_cmd_set1, expect_Ok, "pers_RSET1");
+    testcase(connfd, r_cmd_set2, expect_Ok, "pers_RSET2");
+    testcase(connfd, r_cmd_get, r_expect_get1, "pers_RGET1");
+    testcase(connfd, r_cmd_mod1, expect_Ok, "pers_RMOD1");
+    testcase(connfd, r_cmd_get, r_expect_get2, "pers_RGET2");
+    testcase(connfd, r_cmd_del, expect_Ok, "pers_RDEL");
+
+    // hash * 60000 - 每次循环执行6个操作
+    char h_cmd_set1[64] = {0};
+    char h_cmd_set2[64] = {0};
+    char h_cmd_get[64] = {0};
+    char h_cmd_mod1[64] = {0};
+    char h_cmd_del[64] = {0};
+    char h_expect_get1[64] = {0};
+    char h_expect_get2[64] = {0};
+    snprintf(h_cmd_set1, 64, "HSET H_k%d H_v%d", 2 * i, 2 * i);
+    snprintf(h_cmd_set2, 64, "HSET H_k%d H_v%d", 2 * i + 1, 2 * i + 1);
+    snprintf(h_cmd_get, 64, "HGET H_k%d", i);
+    snprintf(h_cmd_mod1, 64, "HMOD H_k%d H_MOD_v%d", i, i);
+    snprintf(h_cmd_del, 64, "HDEL H_k%d", i);
+
+    snprintf(h_expect_get1, 64, "Value: H_v%d\r\n", i);
+    snprintf(h_expect_get2, 64, "Value: H_MOD_v%d\r\n", i);
+
+    testcase(connfd, h_cmd_set1, expect_Ok, "pers_HSET1");
+    testcase(connfd, h_cmd_set2, expect_Ok, "pers_HSET2");
+    testcase(connfd, h_cmd_get, h_expect_get1, "pers_HGET1");
+    testcase(connfd, h_cmd_mod1, expect_Ok, "pers_HMOD1");
+    testcase(connfd, h_cmd_get, h_expect_get2, "pers_HGET2");
+    testcase(connfd, h_cmd_del, expect_Ok, "pers_HDEL");
+  }
+
+  gettimeofday(&tv_end, NULL);
+  int time_used = TIME_SUB_MS(tv_end, tv_begin);
+  // 总请求数：array(60000) + rbtree(60000) + hash(60000) = 180000
+  printf("persistence_test_1w (180000 REQ) --> time_used: %d ms  QPS: %d\n", time_used, 180000 * 1000 / time_used);
+}
+
+void persistence_get_all(int connfd) {
+  const int cnt = 10000;
+
+  gettimeofday(&tv_begin, NULL);
+
+  // 根据persistence_test_1w函数中的操作，每次循环设置键2*i和2*i+1，然后删除键i
+  // 所以最终会剩下键[10000, 19999]，因为键[0, 9999]被删除了
+  // 每个后端都会剩下10000个键值对
+  for (int i = 10000; i < 20000; i++) {
+    // GET array后端的键
+    char cmd_get_array[64] = {0};
+    char expect_get_array[64] = {0};
+    snprintf(cmd_get_array, 64, "GET Array_k%d", i);
+    snprintf(expect_get_array, 64, "Value: Array_v%d\r\n", i);
+    testcase(connfd, cmd_get_array, expect_get_array, "pers_GET_ARRAY");
+
+    // GET rbtree后端的键
+    char cmd_get_rbtree[64] = {0};
+    char expect_get_rbtree[64] = {0};
+    snprintf(cmd_get_rbtree, 64, "RGET R_k%d", i);
+    snprintf(expect_get_rbtree, 64, "Value: R_v%d\r\n", i);
+    testcase(connfd, cmd_get_rbtree, expect_get_rbtree, "pers_GET_RBTREE");
+
+    // GET hash后端的键
+    char cmd_get_hash[64] = {0};
+    char expect_get_hash[64] = {0};
+    snprintf(cmd_get_hash, 64, "HGET H_k%d", i);
+    snprintf(expect_get_hash, 64, "Value: H_v%d\r\n", i);
+    testcase(connfd, cmd_get_hash, expect_get_hash, "pers_GET_HASH");
+  }
+
+  gettimeofday(&tv_end, NULL);
+  int time_used = TIME_SUB_MS(tv_end, tv_begin);
+  // 总请求数：array(10000) + rbtree(10000) + hash(10000) = 30000
+  printf("persistence_get_all (30000 REQ) --> time_used: %d ms  QPS: %d\n", time_used, 30000 * 1000 / time_used);
+}
+
+
 int main(int argc, char* argv[]) {
 
   if (argc != 4) {
@@ -282,7 +409,14 @@ int main(int argc, char* argv[]) {
     rbtree_testcase_single_1w(connfd);
   } else if (mode == 2) {
     hash_testcase_single_1w(connfd);
-  } else {
+  } else if (mode == 3) {
+    persistence_test_1w(connfd);
+  } else if (mode == 4) {
+    persistence_get_all(connfd);
+  }
+  
+  
+  else {
     printf("ARG: ERROR\n");
     return -1;
   }

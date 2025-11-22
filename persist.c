@@ -97,7 +97,7 @@ int kvs_persist_log_operation(const char *operation, const char *key, const char
     // 确保日志立即写入磁盘
     fflush(log_file);
 
-    printf("已记录操作日志: %s %s %s\n", operation, key, value ? value : "");
+    // printf("已记录操作日志: %s %s %s\n", operation, key, value ? value : "");
     return 0;
 }
 
@@ -128,11 +128,11 @@ int kvs_persist_replay_log(void) {
         int args_count = sscanf(log_start, "%31s %255s %511[^\n]", operation, key, value);
         
         // 输出解析的详细信息，便于调试
-        printf("解析日志: '%s', 参数个数: %d, 操作: %s, 键: %s", log_start, args_count, operation, key);
+        // printf("解析日志: '%s', 参数个数: %d, 操作: %s, 键: %s", log_start, args_count, operation, key);
         if (args_count >= 3) {
-            printf(", 值: %s", value);
+            // printf(", 值: %s", value);
         }
-        printf("\n");
+        // printf("\n");
 
         if (args_count >= 2) {
             // 检查是否是删除操作（只有操作和键）
@@ -144,17 +144,17 @@ int kvs_persist_replay_log(void) {
                 if (strcmp(operation, "DEL") == 0) {
 #if ENABLE_ARRAY
                     int result = kvs_array_del(&global_array, key);
-                    printf("执行DEL操作，键: %s, 结果: %d\n", key, result);
+                    // printf("执行DEL操作，键: %s, 结果: %d\n", key, result);
 #endif
                 } else if (strcmp(operation, "RDEL") == 0) {
 #if ENABLE_RBTREE
                     int result = kvs_rbtree_del(&global_rbtree, key);
-                    printf("执行RDEL操作，键: %s, 结果: %d\n", key, result);
+                    // printf("执行RDEL操作，键: %s, 结果: %d\n", key, result);
 #endif
                 } else if (strcmp(operation, "HDEL") == 0) {
 #if ENABLE_HASH
                     int result = kvs_hash_del(&global_hash, key);
-                    printf("执行HDEL操作，键: %s, 结果: %d\n", key, result);
+                    // printf("执行HDEL操作，键: %s, 结果: %d\n", key, result);
 #endif
                 }
                 replay_count++;
@@ -169,33 +169,32 @@ int kvs_persist_replay_log(void) {
                 if (strcmp(operation, "SET") == 0) {
 #if ENABLE_ARRAY
                     int result = kvs_array_set(&global_array, key, val_start);
-                    printf("执行SET操作，键: %s, 值: %s, 结果: %d\n", key, val_start, result);
+                    // printf("执行SET操作，键: %s, 值: %s, 结果: %d\n", key, val_start, result);
 #endif
                 } else if (strcmp(operation, "RSET") == 0) {
 #if ENABLE_RBTREE
                     int result = kvs_rbtree_set(&global_rbtree, key, val_start);
-                    printf("执行RSET操作，键: %s, 值: %s, 结果: %d\n", key, val_start, result);
+                    // printf("执行RSET操作，键: %s, 值: %s, 结果: %d\n", key, val_start, result);
 #endif
                 } else if (strcmp(operation, "HSET") == 0) {
 #if ENABLE_HASH
-                    printf("--> 0\n");
                     int result = kvs_hash_set(&global_hash, key, val_start);
-                    printf("执行HSET操作，键: %s, 值: %s, 结果: %d\n", key, val_start, result);
+                    // printf("执行HSET操作，键: %s, 值: %s, 结果: %d\n", key, val_start, result);
 #endif
                 } else if (strcmp(operation, "MOD") == 0) {
 #if ENABLE_ARRAY
                     int result = kvs_array_mod(&global_array, key, val_start);
-                    printf("执行MOD操作，键: %s, 值: %s, 结果: %d\n", key, val_start, result);
+                    // printf("执行MOD操作，键: %s, 值: %s, 结果: %d\n", key, val_start, result);
 #endif
                 } else if (strcmp(operation, "RMOD") == 0) {
 #if ENABLE_RBTREE
                     int result = kvs_rbtree_mod(&global_rbtree, key, val_start);
-                    printf("执行RMOD操作，键: %s, 值: %s, 结果: %d\n", key, val_start, result);
+                    // printf("执行RMOD操作，键: %s, 值: %s, 结果: %d\n", key, val_start, result);
 #endif
                 } else if (strcmp(operation, "HMOD") == 0) {
 #if ENABLE_HASH
                     int result = kvs_hash_mod(&global_hash, key, val_start);
-                    printf("执行HMOD操作，键: %s, 值: %s, 结果: %d\n", key, val_start, result);
+                    // printf("执行HMOD操作，键: %s, 值: %s, 结果: %d\n", key, val_start, result);
 #endif
                 }
                 replay_count++;
@@ -250,25 +249,25 @@ int kvs_snapshot_save(void) {
             // 额外检查数组元素是否有效
             // printf("--> out of if\n");
             if (global_array.table[i].key != NULL && global_array.table[i].value != NULL) {
-              printf("--> in if\n");
+              // printf("--> in if\n");
                 fprintf(snapshot_file, "SET %s %s\n", global_array.table[i].key, global_array.table[i].value);
             }
         }
     }
-    printf("--> arr OK\n");
+    // printf("--> arr OK\n");
     #endif
     
     
     // 保存红黑树后端数据 (使用RSET命令)
     #if ENABLE_RBTREE
     kvs_rbtree_save_snapshot(&global_rbtree, snapshot_file);
-    printf("--> tree OK\n");
+    // printf("--> tree OK\n");
     #endif
     
     // 保存哈希表后端数据 (使用HSET命令)
     #if ENABLE_HASH
     kvs_hash_save_snapshot(&global_hash, snapshot_file);
-    printf("--> hash OK\n");
+    // printf("--> hash OK\n");
     #endif
 
     fclose(snapshot_file);

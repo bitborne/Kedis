@@ -84,11 +84,8 @@ int kvs_split_token(char* msg, char* tokens[]) {
   // 将tokens[i]指针 赋值为上面的首地址
   while (token != NULL) {
     tokens[idx++] = token;
-    printf("idx: %d -> %s\n", idx - 1, token); // DEBUG
+    // printf("idx: %d -> %s\n", idx - 1, token); // DEBUG
     token = strtok(NULL, " ");
-  }
-  for (int i = 0; i < 3; i++) {
-    printf("tokens[%d] =  %s", i , tokens[i]);
   }
   return idx;  // 每拆出来一个token，idx++ ==> 返回值为token的个数
 }
@@ -112,13 +109,11 @@ int kvs_filter_protocol(char** tokens, int count, char* response) {
   int ret = 0;
   char* key = tokens[1];
   char* value = tokens[2];
-  printf("keyOUT = %s\n", key);
 
   switch (cmd) {
 #if ENABLE_ARRAY
     case KVS_CMD_SET:  // --> OK
       ret = kvs_array_set(&global_array, key, value);
-      printf("inSET key = %s\n", key);
 
       if (ret < 0) {
         length = sprintf(response, "ERROR\r\n");
@@ -131,7 +126,6 @@ int kvs_filter_protocol(char** tokens, int count, char* response) {
       }
       break;
     case KVS_CMD_GET:  // --> Value
-    printf("keyIN = %s\n", key);
       char* gotValue = kvs_array_get(&global_array, key);
       if (gotValue == NULL) {
         length = sprintf(response, "ERROR / Not Exist\r\n");
