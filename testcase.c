@@ -1,257 +1,290 @@
+// 自动化测试--> 代替人工连接+发包
 
-
+// 1. TCP 客包户端建立连接
+// 2. 发送 5 种协议
+// 3. 接收数据
+// 4. 比对预期数据和实际返回数据
+#include <netdb.h>
+#include <arpa/inet.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#include <arpa/inet.h>
 #include <sys/time.h>
 
-
-#define MAX_MSG_LENGTH		1024
+#define MAX_MSG 1024
 #define TIME_SUB_MS(tv1, tv2)  ((tv1.tv_sec - tv2.tv_sec) * 1000 + (tv1.tv_usec - tv2.tv_usec) / 1000)
+struct timeval tv_begin, tv_end;
 
 
-int send_msg(int connfd, char *msg, int length) {
+int connect_server(const char *ip, unsigned short port) {
+  int connfd = socket(AF_INET, SOCK_STREAM, 0);
 
-	int res = send(connfd, msg, length, 0);
-	if (res < 0) {
-		perror("send");
-		exit(1);
-	}
-	return res;
-}
+  struct sockaddr_in server_addr = {0};
+// 填写ip
+  server_addr.sin_family = AF_INET;
+  server_addr.sin_port = htons(port);
+  int ret = inet_pton(AF_INET, ip, &server_addr.sin_addr);
+  if (!ret) printf("Not a valid IPv4\n"); 
 
-int recv_msg(int connfd, char *msg, int length) {
-
-	int res = recv(connfd, msg, length, 0);
-	if (res < 0) {
-		perror("recv");
-		exit(1);
-	}
-	return res;
-
+  if (connect(connfd, (struct sockaddr*)&server_addr, sizeof(struct sockaddr_in)) != 0) {
+    perror("connect");
+    return -1;
+  }
+  return connfd;
 }
 
 
+int send_msg(int connfd, char* msg, int length) {
+  int res = send(connfd, msg, length, 0);
+  if (res < 0) {
+    perror("send");
+    exit(1);
+  }
+  return res;
+}
 
+int recv_msg(int connfd, char* result, int length) {
+  int res = recv(connfd, result, length, 0);
+  if (res < 0) {
+    perror("recv");
+    exit(1);
+  }
+  return res;
+} 
 
-void testcase(int connfd, char *msg, char *pattern, char *casename) {
+void testcase(int connfd, char* msg, char* pattern, char* casename) {
+  if (msg == NULL || pattern == NULL || casename == NULL) return;
 
-	if (!msg || !pattern || !casename) return ;
+  send_msg(connfd, msg, strlen(msg));
 
-	send_msg(connfd, msg, strlen(msg));
+  char result[MAX_MSG] = {0};
+  recv_msg(connfd, result, MAX_MSG);
 
-	char result[MAX_MSG_LENGTH] = {0};
-	recv_msg(connfd, result, MAX_MSG_LENGTH);
-
-	if (strcmp(result, pattern) == 0) {
-		printf("==> PASS ->  %s\n", casename);
-	} else {
-		printf("==> FAILED -> %s, '%s' != '%s' \n", casename, result, pattern);
-		exit(1);
-	}
+  if (!strcmp(result, pattern)) {
+    // printf("[PASS] --> %s\n", casename);
+  } else {
+    printf("[FALSE] --> %s: \n==> '%s' != '%s'\n", casename, result, pattern);
+    printf("msg is : %s\n", msg);
+    exit(1);
+  }
 
 }
 
+void array_testcase_mix(int connfd) {
+  testcase(connfd, "SET Qbb Schatten", "OK\r\n", "SET-Qbb-0");
+  testcase(connfd, "GET Qbb", "Value: Schatten\r\n", "GET-Qbb-0");
+  testcase(connfd, "MOD Qbb Cc", "OK\r\n", "MOD-Qbb-0");
+  testcase(connfd, "MOD Bqq Cc", "Not Exist\r\n", "MOD-Qbb-1");
+  testcase(connfd, "SET Qbb Schatten", "Key has existed\r\n", "SET-Qbb-1");
+  testcase(connfd, "EXIST Qbb", "YES, Exist\r\n", "EXIST-Qbb-0");
+  testcase(connfd, "GET Qbb", "Value: Cc\r\n", "GET-Qbb-1");
+  testcase(connfd, "DEL Qbb", "OK\r\n", "DEL-Qbb-0");
+  testcase(connfd, "EXIST Qbb", "NO, Not Exist\r\n", "EXIST-Qbb-1");
+  testcase(connfd, "GET Qbb", "ERROR / Not Exist\r\n", "GET-Qbb-2");
+  testcase(connfd, "DEL Qbb", "Not Exist\r\n", "DEL-Qbb-1");
+  testcase(connfd, "DEL EveRything", "Not Exist\r\n", "DEL-Qbb-2");
 
-
-int connect_tcpserver(const char *ip, unsigned short port) {
-
-	int connfd = socket(AF_INET, SOCK_STREAM, 0);
-
-	struct sockaddr_in server_addr;
-	memset(&server_addr, 0, sizeof(struct sockaddr_in));
-
-	server_addr.sin_family = AF_INET;
-	server_addr.sin_addr.s_addr = inet_addr(ip);
-	server_addr.sin_port = htons(port);
-
-	if (0 !=  connect(connfd, (struct sockaddr*)&server_addr, sizeof(struct sockaddr_in))) {
-		perror("connect");
-		return -1;
-	}
-	
-	return connfd;
-	
+  testcase(connfd, "SET Qbb", "ERROR\r\n", "SET-ERROR");
+  testcase(connfd, "DEL", "ERROR\r\n", "DEL-ERROR");
+  testcase(connfd, "MOD 1", "ERROR\r\n", "MOD-ERROR");
+  testcase(connfd, "EXIST", "ERROR\r\n", "EXIST-ERROR");
 }
 
+void array_testcase_single_1w(int connfd) {
+  gettimeofday(&tv_begin, NULL);
+  const int cnt = 10000;
+  for (int i = 0; i < cnt; i++) {
+    char cmd_set[64] = {0};
+    snprintf(cmd_set, 64, "SET Qbb%d Schatten%d", i, i);
+    testcase(connfd, cmd_set, "OK\r\n", "SET-Qbb-0");
+  }
+  for (int i = 0; i < cnt; i++) {
+    char cmd_get[64] = {0};
+    char expect_get[64] = {0};
+    snprintf(cmd_get, 64, "GET Qbb%d", i, i);
+    snprintf(expect_get, 64, "Value: Schatten%d\r\n", i);
+    testcase(connfd, cmd_get, expect_get, "GET-Qbb-0");
 
-void array_testcase(int connfd) {
-
-	testcase(connfd, "SET Teacher King", "OK\r\n", "SET-Teacher");
-	testcase(connfd, "GET Teacher", "King\r\n", "GET-Teacher");
-	testcase(connfd, "MOD Teacher Darren", "OK\r\n", "MOD-Teacher");
-	testcase(connfd, "GET Teacher", "Darren\r\n", "GET-Teacher");
-	testcase(connfd, "EXIST Teacher", "EXIST\r\n", "GET-Teacher");
-	testcase(connfd, "DEL Teacher", "OK\r\n", "DEL-Teacher");
-	testcase(connfd, "GET Teacher", "NO EXIST\r\n", "GET-Teacher");
-	testcase(connfd, "MOD Teacher KING", "NO EXIST\r\n", "MOD-Teacher");
-	testcase(connfd, "EXIST Teacher", "NO EXIST\r\n", "GET-Teacher");
-
-}
-
-void array_testcase_1w(int connfd) {
-
-	int count = 10000;
-	int i = 0;
-
-	struct timeval tv_begin;
-	gettimeofday(&tv_begin, NULL);
-
-	for (i = 0;i < count;i ++) {
-
-		testcase(connfd, "SET Teacher King", "OK\r\n", "SET-Teacher");
-		testcase(connfd, "GET Teacher", "King\r\n", "GET-Teacher");
-		testcase(connfd, "MOD Teacher Darren", "OK\r\n", "MOD-Teacher");
-		testcase(connfd, "GET Teacher", "Darren\r\n", "GET-Teacher");
-		testcase(connfd, "EXIST Teacher", "EXIST\r\n", "GET-Teacher");
-		testcase(connfd, "DEL Teacher", "OK\r\n", "DEL-Teacher");
-		testcase(connfd, "GET Teacher", "NO EXIST\r\n", "GET-Teacher");
-		testcase(connfd, "MOD Teacher KING", "NO EXIST\r\n", "MOD-Teacher");
-		testcase(connfd, "EXIST Teacher", "NO EXIST\r\n", "GET-Teacher");
-
-	}
-
-	struct timeval tv_end;
-	gettimeofday(&tv_end, NULL);
-
-	int time_used = TIME_SUB_MS(tv_end, tv_begin); // ms
-
-	printf("array testcase --> time_used: %d, qps: %d\n", time_used, 90000 * 1000 / time_used);
+  }
+    
+  for (int i = 0; i < cnt; i++) {
+    char cmd_del[64] = {0};
+    snprintf(cmd_del, 64, "DEL Qbb%d", i);
+    testcase(connfd, cmd_del, "OK\r\n", "DEL-Qbb-0");
+  }
+  gettimeofday(&tv_end, NULL);
+  int time_used = TIME_SUB_MS(tv_end, tv_begin);
+  printf("array_single(3w req) --> time_used: %d ms  QPS: %d\n", time_used, 30000 * 1000 / time_used);
 
 }
+void rbtree_testcase_single_1w(int connfd) {
 
+  gettimeofday(&tv_begin, NULL);
+  const int cnt = 10000;
+  for (int i = 0; i < cnt; i++) {
+    char cmd_rset[64] = {0};
+    snprintf(cmd_rset, 64, "RSET Qbb%d Schatten%d", i, i);
+    testcase(connfd, cmd_rset, "OK\r\n", "RSET-Qbb-0");
+  }
+  for (int i = 0; i < cnt; i++) {
+    char cmd_rget[64] = {0};
+    char expect_rget[64] = {0};
+    snprintf(cmd_rget, 64, "RGET Qbb%d", i, i);
+    snprintf(expect_rget, 64, "Value: Schatten%d\r\n", i);
+    testcase(connfd, cmd_rget, expect_rget, "RGET-Qbb-0");
 
-void rbtree_testcase(int connfd) {
+  }
+    
+  for (int i = 0; i < cnt; i++) {
+    char cmd_rdel[64] = {0};
+    snprintf(cmd_rdel, 64, "RDEL Qbb%d", i);
+    testcase(connfd, cmd_rdel, "OK\r\n", "RDEL-Qbb-0");
+  }
 
-	testcase(connfd, "RSET Teacher King", "OK\r\n", "RSET-Teacher");
-	testcase(connfd, "RGET Teacher", "King\r\n", "RGET-King-Teacher");
-	testcase(connfd, "RMOD Teacher Darren", "OK\r\n", "RMOD-D-Teacher");
-	testcase(connfd, "RGET Teacher", "Darren\r\n", "RGET-Darren-Teacher");
-	testcase(connfd, "REXIST Teacher", "EXIST\r\n", "REXIST-Teacher");
-	testcase(connfd, "RDEL Teacher", "OK\r\n", "RDEL-Teacher");
-	testcase(connfd, "RGET Teacher", "NO EXIST\r\n", "RGET-K-Teacher");
-	testcase(connfd, "RMOD Teacher KING", "NO EXIST\r\n", "RMOD-K-Teacher");
-	testcase(connfd, "REXIST Teacher", "NO EXIST\r\n", "REXIST-Teacher");
-
-}
-
-void rbtree_testcase_1w(int connfd) {
-
-	int count = 10000;
-	int i = 0;
-
-	struct timeval tv_begin;
-	gettimeofday(&tv_begin, NULL);
-
-	for (i = 0;i < count;i ++) {
-
-		testcase(connfd, "RSET Teacher King", "OK\r\n", "RSET-Teacher");
-		testcase(connfd, "RGET Teacher", "King\r\n", "RGET-King-Teacher");
-		testcase(connfd, "RMOD Teacher Darren", "OK\r\n", "RMOD-D-Teacher");
-		testcase(connfd, "RGET Teacher", "Darren\r\n", "RGET-Darren-Teacher");
-		testcase(connfd, "REXIST Teacher", "EXIST\r\n", "REXIST-Teacher");
-		testcase(connfd, "RDEL Teacher", "OK\r\n", "RDEL-Teacher");
-		testcase(connfd, "RGET Teacher", "NO EXIST\r\n", "RGET-K-Teacher");
-		testcase(connfd, "RMOD Teacher KING", "NO EXIST\r\n", "RMOD-K-Teacher");
-		testcase(connfd, "REXIST Teacher", "NO EXIST\r\n", "REXIST-Teacher");
-
-	}
-
-	struct timeval tv_end;
-	gettimeofday(&tv_end, NULL);
-
-	int time_used = TIME_SUB_MS(tv_end, tv_begin); // ms
-
-	printf("rbtree testcase --> time_used: %d, qps: %d\n", time_used, 90000 * 1000 / time_used);
-	
-}
-
-
-void rbtree_testcase_3w(int connfd) {
-
-	int count = 10000;
-	int i = 0;
-
-	struct timeval tv_begin;
-	gettimeofday(&tv_begin, NULL);
-
-	for (i = 0;i < count;i ++) {
-
-		char cmd[128] = {0};
-		snprintf(cmd, 128, "RSET Teacher%d King%d", i, i);
-		testcase(connfd, cmd, "OK\r\n", "RSET-Teacher");
-	}
-
-	for (i = 0;i < count;i ++) {
-
-		char cmd[128] = {0};
-		snprintf(cmd, 128, "RGET Teacher%d", i);
-
-		char result[128] = {0};
-		snprintf(result, 128, "King%d\r\n", i);
-		
-		testcase(connfd, cmd, result, "RGET-King-Teacher");
-	}
-
-	for (i = 0;i < count;i ++) {
-
-		char cmd[128] = {0};
-		snprintf(cmd, 128, "RMOD Teacher%d King%d", i, i);
-		testcase(connfd, cmd, "OK\r\n", "RGET-King-Teacher");
-	}
-
-	struct timeval tv_end;
-	gettimeofday(&tv_end, NULL);
-
-	int time_used = TIME_SUB_MS(tv_end, tv_begin); // ms
-
-	printf("rbtree testcase --> time_used: %d, qps: %d\n", time_used, 30000 * 1000 / time_used);
-
-}
-
-void hash_testcase(int connfd) {
-
-	testcase(connfd, "HSET Teacher King", "OK\r\n", "HSET-Teacher");
-	testcase(connfd, "HGET Teacher", "King\r\n", "HGET-King-Teacher");
-	testcase(connfd, "HMOD Teacher Darren", "OK\r\n", "HMOD-D-Teacher");
-	testcase(connfd, "HGET Teacher", "Darren\r\n", "HGET-Darren-Teacher");
-	testcase(connfd, "HEXIST Teacher", "EXIST\r\n", "HEXIST-Teacher");
-	testcase(connfd, "HDEL Teacher", "OK\r\n", "HDEL-Teacher");
-	testcase(connfd, "HGET Teacher", "NO EXIST\r\n", "HGET-K-Teacher");
-	testcase(connfd, "HMOD Teacher KING", "NO EXIST\r\n", "HMOD-K-Teacher");
-	testcase(connfd, "HEXIST Teacher", "NO EXIST\r\n", "HEXIST-Teacher");
-
-}
-
-
-// testcase 192.168.243.131  2000
-int main(int argc, char *argv[]) {
-
-	if (argc != 4) {
-		printf("arg error\n");
-		return -1;
-	}
-
-	char *ip = argv[1];
-	int port = atoi(argv[2]);
-	int mode = atoi(argv[3]);
-
-	int connfd = connect_tcpserver(ip, port);
-
-	if (mode == 0) {
-		rbtree_testcase_1w(connfd);
-	} else if (mode == 1) {
-		rbtree_testcase_3w(connfd);
-	} else if (mode == 2) {
-		array_testcase_1w(connfd);
-	} else if (mode == 3) {
-		hash_testcase(connfd);
-	}
-
-	return 0;
-	
+  gettimeofday(&tv_end, NULL);
+  int time_used = TIME_SUB_MS(tv_end, tv_begin);
+  printf("rbtree_single(3w req) --> time_used: %d ms  QPS: %d\n", time_used, 30000 * 1000 / time_used);
 }
 
 
 
+void hash_testcase_single_1w(int connfd) {
+
+  gettimeofday(&tv_begin, NULL);
+  const int cnt = 10000;
+  for (int i = 0; i < cnt; i++) {
+    char cmd_hset[64] = {0};
+    snprintf(cmd_hset, 64, "HSET Qbb%d Schatten%d", i, i);
+    testcase(connfd, cmd_hset, "OK\r\n", "HSET-Qbb-0");
+  }
+  for (int i = 0; i < cnt; i++) {
+    char cmd_hget[64] = {0};
+    char expect_hget[64] = {0};
+    snprintf(cmd_hget, 64, "HGET Qbb%d", i, i);
+    snprintf(expect_hget, 64, "Value: Schatten%d\r\n", i);
+    testcase(connfd, cmd_hget, expect_hget, "HGET-Qbb-0");
+
+  }
+    
+  for (int i = 0; i < cnt; i++) {
+    char cmd_hdel[64] = {0};
+    snprintf(cmd_hdel, 64, "HDEL Qbb%d", i);
+    testcase(connfd, cmd_hdel, "OK\r\n", "HDEL-Qbb-0");
+  }
+
+  gettimeofday(&tv_end, NULL);
+  int time_used = TIME_SUB_MS(tv_end, tv_begin);
+  printf("hash_single(3w req) --> time_used: %d ms  QPS: %d\n", time_used, 30000 * 1000 / time_used);
+}
+
+
+void rbtree_testcase_mix(int connfd) {
+  testcase(connfd, "RSET Qbb Schatten", "OK\r\n", "RSET-Qbb-0");
+  testcase(connfd, "RGET Qbb", "Value: Schatten\r\n", "RGET-Qbb-0");
+  testcase(connfd, "RMOD Qbb Cc", "OK\r\n", "RMOD-Qbb-0");
+  testcase(connfd, "RMOD Bqq Cc", "Not Exist\r\n", "RMOD-Qbb-1");
+  testcase(connfd, "RSET Qbb Schatten", "Key has existed\r\n", "RSET-Qbb-1");
+  testcase(connfd, "REXIST Qbb", "YES, Exist\r\n", "REXIST-Qbb-0");
+  testcase(connfd, "RGET Qbb", "Value: Cc\r\n", "RGET-Qbb-1");
+  testcase(connfd, "RDEL Qbb", "OK\r\n", "RDEL-Qbb-0");
+  testcase(connfd, "REXIST Qbb", "NO, Not Exist\r\n", "REXIST-Qbb-1");
+  testcase(connfd, "RGET Qbb", "ERROR / Not Exist\r\n", "RGET-Qbb-2");
+  testcase(connfd, "RDEL Qbb", "Not Exist\r\n", "RDEL-Qbb-1");
+  testcase(connfd, "RDEL EveRything", "Not Exist\r\n", "RDEL-Qbb-2");
+
+  testcase(connfd, "RSET Qbb", "ERROR\r\n", "RSET-ERROR");
+  testcase(connfd, "RDEL", "ERROR\r\n", "RDEL-ERROR");
+  testcase(connfd, "RMOD 1", "ERROR\r\n", "RMOD-ERROR");
+  testcase(connfd, "REXIST", "ERROR\r\n", "REXIST-ERROR");
+}
+
+void hash_testcase_mix(int connfd) {
+  testcase(connfd, "HSET Qbb Schatten", "OK\r\n", "HSET-Qbb-0");
+  testcase(connfd, "HGET Qbb", "Value: Schatten\r\n", "HGET-Qbb-0");
+  testcase(connfd, "HMOD Qbb Cc", "OK\r\n", "HMOD-Qbb-0");
+  testcase(connfd, "HMOD Bqq Cc", "Not Exist\r\n", "HMOD-Qbb-1");
+  testcase(connfd, "HSET Qbb Schatten", "Key has existed\r\n", "HSET-Qbb-1");
+  testcase(connfd, "HEXIST Qbb", "YES, Exist\r\n", "HEXIST-Qbb-0");
+  testcase(connfd, "HGET Qbb", "Value: Cc\r\n", "HGET-Qbb-1");
+  testcase(connfd, "HDEL Qbb", "OK\r\n", "HDEL-Qbb-0");
+  testcase(connfd, "HEXIST Qbb", "NO, Not Exist\r\n", "HEXIST-Qbb-1");
+  testcase(connfd, "HGET Qbb", "ERROR / Not Exist\r\n", "HGET-Qbb-2");
+  testcase(connfd, "HDEL Qbb", "Not Exist\r\n", "HDEL-Qbb-1");
+  testcase(connfd, "HDEL EveRything", "Not Exist\r\n", "HDEL-Qbb-2");
+  testcase(connfd, "HSET Qbb", "ERROR\r\n", "HSET-ERROR");
+  testcase(connfd, "HDEL", "ERROR\r\n", "HDEL-ERROR");
+  testcase(connfd, "HMOD 1", "ERROR\r\n", "HMOD-ERROR");
+  testcase(connfd, "HEXIST", "ERROR\r\n", "HEXIST-ERROR");
+}
+
+
+void array_testcase_1w_mix(int connfd) {
+
+  const int cnt = 10000;
+
+  gettimeofday(&tv_begin, NULL);
+  for (int i = 0; i < cnt; i++) {
+    array_testcase_mix(connfd);
+  }
+  gettimeofday(&tv_end, NULL);
+  int time_used = TIME_SUB_MS(tv_end, tv_begin);
+  printf("array_testcase_1w (160w REQ) --> time_used: %d ms  QPS: %d\n", time_used, 160000 * 1000 / time_used);
+  
+}
+
+void rbtree_testcase_1w_mix(int connfd) {
+
+  const int cnt = 10000;
+
+  gettimeofday(&tv_begin, NULL);
+  for (int i = 0; i < cnt; i++) {
+    rbtree_testcase_mix(connfd);
+  }
+  gettimeofday(&tv_end, NULL);
+  int time_used = TIME_SUB_MS(tv_end, tv_begin);
+  printf("rbtree_testcase_1w (160w REQ) --> time_used: %d ms  QPS: %d\n", time_used, 160000 * 1000 / time_used);
+  
+}
+
+
+void hash_testcase_1w_mix(int connfd) {
+
+  const int cnt = 10000;
+
+  gettimeofday(&tv_begin, NULL);
+  for (int i = 0; i < cnt; i++) {
+    hash_testcase_mix(connfd);
+  }
+  gettimeofday(&tv_end, NULL);
+  int time_used = TIME_SUB_MS(tv_end, tv_begin);
+  printf("hash_testcase_1w (160w REQ) --> time_used: %d ms  QPS: %d\n", time_used, 160000 * 1000 / time_used);
+  
+}
+
+int main(int argc, char* argv[]) {
+
+  if (argc != 4) {
+    perror("arg error\n");
+    return -1;
+  }
+
+  char* ip = argv[1];
+  unsigned short port = atoi(argv[2]);
+
+  int connfd = connect_server(ip, port);
+  
+  int mode = atoi(argv[3]);
+  if (mode == 0) {
+    // array_testcase_1w_mix(connfd);
+    array_testcase_single_1w(connfd);
+  } else if (mode == 1) {
+    // rbtree_testcase_1w_mix(connfd);
+    rbtree_testcase_single_1w(connfd);
+  } else if (mode == 2) {
+    hash_testcase_single_1w(connfd);
+  } else {
+    printf("ARG: ERROR\n");
+    return -1;
+  }
+  return 0;
+}
