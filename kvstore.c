@@ -298,24 +298,37 @@ int kvs_filter_protocol(char** tokens, int count, char* response) {
  * @return : length of response
  */
 
-int kvs_protocol(char* msg, int length, char* response) {  //
+ int kvs_protocol(char* rmsg, int length, char* response) {
+  if (rmsg == NULL || length == 0 || response == NULL) return -1;
 
-  // SET Key Value
-  // GET Key
-  // DEL Key
-  if (msg == NULL || length <= 0 || response == NULL) return -1;
+  // Ensure the message is null-terminated for string operations
+  if (length < BUFFER_SIZE) {
+    rmsg[length] = '\0';
+  } else {
+    // If buffer is full, ensure last byte is null terminator
+    rmsg[BUFFER_SIZE - 1] = '\0';
+  }
 
-  // printf("recv %d : %s\n", length, msg);
+  // printf("recv: %dbytes:\n%s\n", strlen(rmsg), rmsg);
 
+#if ECHO_LOGIC  // echo
+  printf("copy from rmsg: %s\n", rmsg);
+  memcpy(response, rmsg, length);
+  return strlen(response);
+#elif KV_LOGIC  // 真正的 KV 存储业务逻辑
   char* tokens[KVS_MAX_TOKENS] = {0};
 
-  int count = kvs_split_token(msg, tokens);
-  if (count == -1) return -1;
+  // 分割token
+  int count = kvs_split_token(rmsg, tokens);
+  if (count == -1) return -2;
 
-  // memcpy(response, msg, length);
-
-  return kvs_filter_protocol(tokens, count, response);
+  //  *协议分类器* : 解析 rmsg
+  int ret = kvs_filter_protocol(tokens, count, response);
+  // 返回值相当于 strlen(response)
+  return ret;
+#endif
 }
+
 
 // 全局变量存储持久化模式
 static int g_persist_mode = PERSIST_MODE_INCREMENTAL;
