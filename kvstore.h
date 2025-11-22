@@ -1,9 +1,6 @@
 
-
-
 #ifndef __KV_STORE_H__
 #define __KV_STORE_H__
-
 
 #include <stdio.h>
 #include <string.h>
@@ -26,6 +23,7 @@
 #define ENABLE_RBTREE		1
 #define ENABLE_HASH			1
 
+#define BUFFER_SIZE 1024
 
 typedef int (*msg_handler)(char *msg, int length, char *response);
 
@@ -34,25 +32,27 @@ extern int reactor_start(unsigned short port, msg_handler handler);
 extern int proactor_start(unsigned short port, msg_handler handler);
 extern int ntyco_start(unsigned short port, msg_handler handler);
 
+void* kvs_calloc(size_t num, size_t size);
+void *kvs_malloc(size_t size);
+void kvs_free(void *ptr);
 
 
 #if ENABLE_ARRAY
-
-typedef struct kvs_array_item_s {
-	char *key;
-	char *value;
+#define KVS_ARRAY_SIZE 16384
+// 元素
+typedef struct kvs_array_item {
+  char* key;
+  char* value;
 } kvs_array_item_t;
 
-#define KVS_ARRAY_SIZE		1024
-
-typedef struct kvs_array_s {
-	kvs_array_item_t *table;
-	int idx;
-	int total;
+// 整个数组
+typedef struct kvs_array {
+  kvs_array_item_t* table;
+  int total;
 } kvs_array_t;
 
 int kvs_array_create(kvs_array_t *inst);
-void kvs_array_destory(kvs_array_t *inst);
+void kvs_array_destroy(kvs_array_t *inst);
 
 int kvs_array_set(kvs_array_t *inst, char *key, char *value);
 char* kvs_array_get(kvs_array_t *inst, char *key);
@@ -95,7 +95,7 @@ typedef struct _rbtree {
 typedef struct _rbtree kvs_rbtree_t;
 
 int kvs_rbtree_create(kvs_rbtree_t *inst);
-void kvs_rbtree_destory(kvs_rbtree_t *inst);
+void kvs_rbtree_destroy(kvs_rbtree_t *inst);
 int kvs_rbtree_set(kvs_rbtree_t *inst, char *key, char *value);
 char* kvs_rbtree_get(kvs_rbtree_t *inst, char *key);
 int kvs_rbtree_del(kvs_rbtree_t *inst, char *key);
@@ -113,11 +113,11 @@ int kvs_rbtree_exist(kvs_rbtree_t *inst, char *key);
 #define MAX_VALUE_LEN	512
 #define MAX_TABLE_SIZE	1024
 
-#define ENABLE_KEY_POINTER	1
+#define HASH_ENABLE_KEY_POINTER	1
 
 
 typedef struct hashnode_s {
-#if ENABLE_KEY_POINTER
+#if HASH_ENABLE_KEY_POINTER
 	char *key;
 	char *value;
 #else
@@ -142,9 +142,9 @@ typedef struct hashtable_s kvs_hash_t;
 
 
 int kvs_hash_create(kvs_hash_t *hash);
-void kvs_hash_destory(kvs_hash_t *hash);
+void kvs_hash_destroy(kvs_hash_t *hash);
 int kvs_hash_set(hashtable_t *hash, char *key, char *value);
-char * kvs_hash_get(kvs_hash_t *hash, char *key);
+char* kvs_hash_get(kvs_hash_t *hash, char *key);
 int kvs_hash_mod(kvs_hash_t *hash, char *key, char *value);
 int kvs_hash_del(kvs_hash_t *hash, char *key);
 int kvs_hash_exist(kvs_hash_t *hash, char *key);
@@ -153,10 +153,12 @@ int kvs_hash_exist(kvs_hash_t *hash, char *key);
 #endif
 
 
-void *kvs_malloc(size_t size);
-void kvs_free(void *ptr);
 
-
+// 持久化相关函数声明
+int kvs_persist_init(void);  // 初始化持久化功能
+int kvs_persist_log_operation(const char *operation, const char *key, const char *value);  // 记录操作日志
+int kvs_persist_replay_log(void);  // 回放日志
+int kvs_persist_close(void);  // 关闭持久化功能，确保日志写入完成
 
 
 #endif

@@ -1,13 +1,11 @@
-
-
+#include "kvstore.h"
+#if ENABLE_HASH
 
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#include <pthread.h>
 
 
-#include "kvstore.h"
 
 
 // Key, Value --> 
@@ -40,8 +38,8 @@ hashnode_t *_create_node(char *key, char *value) {
 
 	hashnode_t *node = (hashnode_t*)kvs_malloc(sizeof(hashnode_t));
 	if (!node) return NULL;
-	
-#if ENABLE_KEY_POINTER
+
+#if HASH_ENABLE_KEY_POINTER
 	char *kcopy = kvs_malloc(strlen(key) + 1);
 	if (kcopy == NULL) return NULL;
 	memset(kcopy, 0, strlen(key) + 1);
@@ -50,18 +48,20 @@ hashnode_t *_create_node(char *key, char *value) {
 	node->key = kcopy;
 
 	char *kvalue = kvs_malloc(strlen(value) + 1);
-	if (kvalue == NULL) { 
-		kvs_free(kvalue);
+	if (kvalue == NULL) {
+		kvs_free(kcopy);  // 修正：释放之前分配的kcopy
 		return NULL;
 	}
 	memset(kvalue, 0, strlen(value) + 1);
 	strncpy(kvalue, value, strlen(value));
 
 	node->value = kvalue;
-	
+
 #else
-	strncpy(node->key, key, MAX_KEY_LEN);
-	strncpy(node->value, value, MAX_VALUE_LEN);
+	memset(node->key, 0, MAX_KEY_LEN);  // 修正：初始化key数组
+	memset(node->value, 0, MAX_VALUE_LEN);  // 修正：初始化value数组
+	strncpy(node->key, key, MAX_KEY_LEN - 1);
+	strncpy(node->value, value, MAX_VALUE_LEN - 1);
 #endif
 	node->next = NULL;
 
@@ -84,7 +84,7 @@ int kvs_hash_create(kvs_hash_t *hash) {
 }
 
 // 
-void kvs_hash_destory(kvs_hash_t *hash) {
+void kvs_hash_destroy(kvs_hash_t *hash) {
 
 	if (!hash) return;
 
@@ -111,26 +111,30 @@ void kvs_hash_destory(kvs_hash_t *hash) {
 
 // mp
 int kvs_hash_set(kvs_hash_t *hash, char *key, char *value) {
-
+  printf("--> 1\n");
 	if (!hash || !key || !value) return -1;
-
+  
 	int idx = _hash(key, MAX_TABLE_SIZE);
-
+  
 	hashnode_t *node = hash->nodes[idx];
-#if 1
+  printf("--> 2\n");
+  #if 1
 	while (node != NULL) {
-		if (strcmp(node->key, key) == 0) { // exist
+    if (strcmp(node->key, key) == 0) { // exist
 			return 1;
 		}
 		node = node->next;
 	}
-#endif
-
+  printf("--> 3\n");
+  #endif
+  
 	hashnode_t *new_node = _create_node(key, value);
+  printf("--> 4\n");
 	new_node->next = hash->nodes[idx];
 	hash->nodes[idx] = new_node;
 	
 	hash->count ++;
+  printf("--> 5\n");
 
 	return 0;
 }
@@ -228,7 +232,7 @@ int kvs_hash_del(kvs_hash_t *hash, char *key) {
 
 	hashnode_t *tmp = cur->next;
 	cur->next = tmp->next;
-#if ENABLE_KEY_POINTER
+#if HASH_ENABLE_KEY_POINTER
 	kvs_free(tmp->key);
 	kvs_free(tmp->value);
 #endif
@@ -243,7 +247,7 @@ int kvs_hash_del(kvs_hash_t *hash, char *key) {
 int kvs_hash_exist(kvs_hash_t *hash, char *key) {
 
 	char *value = kvs_hash_get(hash, key);
-	if (!value) return 1;
+	if (value) return 1;
 
 	return 0;
 	
@@ -275,11 +279,11 @@ int main() {
 	ret = kvs_hash_exist(&hash, "Teacher1");
 	printf("Exist Teacher1 ret : %d\n", ret);
 
-	kvs_hash_destory(&hash);
+	kvs_hash_destroy(&hash);
 
 	return 0;
 }
 
 #endif
-
+#endif
 

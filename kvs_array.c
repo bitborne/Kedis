@@ -1,189 +1,140 @@
-
-
 #include "kvstore.h"
-
-
-// singleton
-
+#if ENABLE_ARRAY
+#include <math.h>
+// 使用 singleton 单例模式
 kvs_array_t global_array = {0};
 
 int kvs_array_create(kvs_array_t *inst) {
-
-	if (!inst) return -1;
-	if (inst->table) {
-		printf("table has alloc\n");
-		return -1;
-	}	
-	inst->table = kvs_malloc(KVS_ARRAY_SIZE * sizeof(kvs_array_item_t));
-	if (!inst->table) {
-		return -1;
-	}
-
-	inst->total = 0;
-
-	return 0;
+  
+  if (!inst) return -1;
+  if (inst->table) {
+    printf("kvs_array_create: Table has allocated memory\n");
+    return -2;
+  }
+  inst->table = kvs_calloc(KVS_ARRAY_SIZE, sizeof(kvs_array_item_t));
+  inst->total = 0;
+  
+  return 0;
 }
+// 有开就有关
+void kvs_array_destroy(kvs_array_t* inst) {
 
-void kvs_array_destory(kvs_array_t *inst) {
+  if (inst == NULL) return;
 
-	if (!inst) return ;
-
-	if (inst->table) {
-		kvs_free(inst->table);
-	}
+  if (inst->table) kvs_free(inst->table);
+  /* 为什么不释放inst？ *///=> 因为不是在kvs_array_create 里面创建的，我们不管 ==> `开闭原则`
 
 }
 
+char* kvs_array_get(kvs_array_t* inst, char* key) {
 
-/*
- * @return: <0, error; =0, success; >0, exist
- */
+  if (inst == NULL || key == NULL) return NULL;
 
-int kvs_array_set(kvs_array_t *inst, char *key, char *value) {
+  // for (int i = 0; i < inst->total; i++) {
+  for (int i = 0; i < KVS_ARRAY_SIZE; i++) {
+    if (inst->table[i].key) { // 找到了一个非空位
+      if (!strcmp(key, inst->table[i].key)) return inst->table[i].value;
+      
+    }
+  }
+  return NULL;
+}
+/// @brief 
+/// @param inst ;
+/// @param key ;
+/// @param value ;
+/// @return < 0, error |  == 0, success | >0, key has existed
+int kvs_array_set(kvs_array_t* inst, char* key, char* value) {
+  if (key == NULL || value == NULL || inst == NULL) return -1;
+  if (inst->total == KVS_ARRAY_SIZE) return -2;
 
-	if (inst == NULL || key == NULL || value == NULL) return -1;
-	if (inst->total == KVS_ARRAY_SIZE) return -1;
+  // 先查找是否 key has existed
+  if (kvs_array_get(inst, key)) return 1;  //  > 0 表示 key 已经存在
 
-	char *str = kvs_array_get(inst, key);
-	if (str) {
-		return 1; // 
-	}
+  char* tmpKey = strdup(key); // strdup 自动 malloc 且自动预留 \0
+  char* tmpValue = strdup(value); // 两行替代下面两坨注释 但是它好像是 POXIS API
 
-	char *kcopy = kvs_malloc(strlen(key) + 1);
-	if (kcopy == NULL) return -2;
-	memset(kcopy, 0, strlen(key) + 1);
-	strncpy(kcopy, key, strlen(key));
+  // char* tmpKey = kvs_calloc(1, strlen(key) + 1);
+  // if (tmpKey == NULL) return -3;
+  // strncpy(tmpKey, key, strlen(key));
+  
+  // char* tmpValue = kvs_calloc(1, strlen(value) + 1);
+  // if (tmpValue == NULL) return -4;
+  // strncpy(tmpValue, value, strlen(value));
 
-	char *kvalue = kvs_malloc(strlen(value) + 1);
-	if (kvalue == NULL) return -2;
-	memset(kvalue, 0, strlen(value) + 1);
-	strncpy(kvalue, value, strlen(value));
+  // 先查找中间有没有空位
+  
+  for (int idx = 0; idx < KVS_ARRAY_SIZE; idx++) {
+    if (inst->table[idx].key == NULL) {
+      inst->table[idx].key = tmpKey;
+      inst->table[idx].value = tmpValue;
+      inst->total++;
+      return 0;
+    }
+  }
+};
 
-	int i = 0;
-	// 首先尝试在现有空间中找到空槽
-	for (i = 0; i < inst->total; i++) {
-		if (inst->table[i].key == NULL) {
-			inst->table[i].key = kcopy;
-			inst->table[i].value = kvalue;
-			return 0;
-		}
-	}
 
-	// 如果没找到空槽且未达到最大容量，则在末尾添加
-	if (i < KVS_ARRAY_SIZE) {
-		inst->table[i].key = kcopy;
-		inst->table[i].value = kvalue;
-		inst->total++;
-		return 0;
-	}
+/// @brief 
+/// @param inst ;
+/// @param key ;
+/// @return < 0 error | == 0 success | > 0 not exist;
+int kvs_array_del(kvs_array_t *inst, char* key) {
+  if (inst == NULL || key == NULL) return -1;
 
-	// 如果已达到最大容量
-	kvs_free(kcopy);
-	kvs_free(kvalue);
-	return -1; // 返回错误
+  // for (int i = 0; i < inst->total; i++) {
+  for (int idx = 0; idx < KVS_ARRAY_SIZE; idx++) {
+    if (inst->table[idx].key) {
+      if (!strcmp(key, inst->table[idx].key)) {
+        kvs_free(inst->table[idx].key); // set的时候calloc, del的时候 free
+        inst->table[idx].key = NULL;  // free 后置空
+        kvs_free(inst->table[idx].value); 
+        inst->table[idx].value = NULL;
+        inst->total--;
+        return 0;
+      }
+    }
+  }
+  return 1;
 }
 
-char* kvs_array_get(kvs_array_t *inst, char *key) {
+/// @brief 
+/// @param inst 
+/// @param key 
+/// @param value 
+/// @return < 0 error | == 0 success  | > 0  not exist
+int kvs_array_mod(kvs_array_t *inst, char* key, char* value) {
+  if (inst == NULL || key == NULL || value == NULL) return -1;
 
-	if (inst == NULL || key == NULL) return NULL;
+  int i = 0;
+  // for (;i < inst->total; i++) {
+  for (; i < KVS_ARRAY_SIZE; i++) {
+    if (inst->table[i].key) {
+      if (!strcmp(key, inst->table[i].key)) {
+        kvs_free(inst->table[i].value);
+        inst->table[i].value = NULL;
 
-	int i = 0;
-	for (i = 0;i < inst->total;i ++) {
-		if (inst->table[i].key == NULL) {
-			continue;
-		}
+        char* tmpValue = kvs_calloc(1, strlen(value) + 1);
+        if (!tmpValue) return -2;
+        strncpy(tmpValue, value, strlen(value));
+        inst->table[i].value = tmpValue;
 
-		if (strcmp(inst->table[i].key, key) == 0) {
-			return inst->table[i].value;
-		}
-	}
+        return 0;
 
-	return NULL;
+      }
+    }
+  }
+
+  return i;
 }
 
+/// @brief
+/// @param inst 
+/// @param key 
+/// @return 1 Yes | 0 No | -1 error
+int kvs_array_exist(kvs_array_t *inst, char* key) { 
+  if (inst == NULL || key == NULL ) return -1;
+  return (kvs_array_get(inst, key) != NULL);
 
-/*
- * @return < 0, error;  =0,  success; >0, no exist
- */
-
-int kvs_array_del(kvs_array_t *inst, char *key) {
-
-	if (inst == NULL || key == NULL) return -1;
-
-	int i = 0;
-	for (i = 0; i < inst->total; i++) {
-
-		if (inst->table[i].key != NULL && strcmp(inst->table[i].key, key) == 0) {
-
-			kvs_free(inst->table[i].key);
-			inst->table[i].key = NULL;
-
-			kvs_free(inst->table[i].value);
-			inst->table[i].value = NULL;
-
-			// 如果删除的是最后一个元素，且之前没有空槽，减少total计数
-			if (i == inst->total - 1) {
-				// 向前查找，看是否可以减少total计数
-				while (inst->total > 0 && inst->table[inst->total - 1].key == NULL) {
-					inst->total--;
-				}
-			}
-
-			return 0;
-		}
-	}
-
-	return 1; // 表示不存在
 }
-
-
-/*
- * @return : < 0, error; =0, success; >0, no exist
- */
-
-int kvs_array_mod(kvs_array_t *inst, char *key, char *value) {
-
-	if (inst == NULL || key == NULL || value == NULL) return -1;
-
-	int i = 0;
-	for (i = 0; i < inst->total; i++) {
-
-		if (inst->table[i].key == NULL) {
-			continue;
-		}
-
-		if (strcmp(inst->table[i].key, key) == 0) {
-
-			kvs_free(inst->table[i].value);
-
-			char *kvalue = kvs_malloc(strlen(value) + 1);
-			if (kvalue == NULL) return -2;
-			memset(kvalue, 0, strlen(value) + 1);
-			strncpy(kvalue, value, strlen(value));
-
-			inst->table[i].value = kvalue;
-
-			return 0;
-		}
-
-	}
-
-	return 1; // 表示不存在
-}
-
-
-/*
- * @return 0: exist, 1: no exist
- */
-int kvs_array_exist(kvs_array_t *inst, char *key) {
-
-	if (!inst || !key) return -1;
-	
-	char *str = kvs_array_get(inst, key);
-	if (!str) {
-		return 1; // 
-	}
-	return 0;
-}
-
-
+#endif
