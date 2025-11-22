@@ -305,9 +305,12 @@ int kvs_protocol(char* msg, int length, char* response) {  //
   return kvs_filter_protocol(tokens, count, response);
 }
 
+// 全局变量存储持久化模式
+static int g_persist_mode = PERSIST_MODE_INCREMENTAL;
+
 int init_kvengine(void) {
   // 首先初始化持久化功能
-  kvs_persist_init();
+  kvs_persist_init(g_persist_mode);
 
 #if ENABLE_ARRAY
   memset(&global_array, 0, sizeof(kvs_array_t));
@@ -324,8 +327,12 @@ int init_kvengine(void) {
   kvs_hash_create(&global_hash);
 #endif
 
-  // 在数据结构初始化完成之后，再回放日志
-  kvs_persist_replay_log();
+  // 在数据结构初始化完成之后，根据模式加载数据
+  if (g_persist_mode == PERSIST_MODE_INCREMENTAL) {
+    kvs_persist_replay_log();
+  } else if (g_persist_mode == PERSIST_MODE_SNAPSHOT) {
+    kvs_snapshot_load();
+  }
 
   return 0;
 }
@@ -341,14 +348,35 @@ void dest_kvengine(void) {
   kvs_hash_destroy(&global_hash);
 #endif
 
+  // 根据模式保存数据
+  if (g_persist_mode == PERSIST_MODE_SNAPSHOT) {
+    kvs_snapshot_save();
+  }
+
   // 关闭持久化功能
   kvs_persist_close();
 }
 
 int main(int argc, char* argv[]) {
-  if (argc != 2) return -1;
+  if (argc < 2 || argc > 3) return -1;
 
   int port = atoi(argv[1]);
+
+  // 解析持久化模式参数
+  if (argc == 3) {
+    if (strcmp(argv[2], "inc") == 0) {
+      g_persist_mode = PERSIST_MODE_INCREMENTAL;
+    } else if (strcmp(argv[2], "snap") == 0) {
+      g_persist_mode = PERSIST_MODE_SNAPSHOT;
+    } else {
+      printf("错误：未知的持久化模式 '%s'\n", argv[2]);
+      printf("用法: %s <port> [inc|snap]\n", argv[0]);
+      return -1;
+    }
+  } else {
+    // 默认使用增量模式
+    g_persist_mode = PERSIST_MODE_INCREMENTAL;
+  }
 
   init_kvengine();
 

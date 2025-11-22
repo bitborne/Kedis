@@ -25,6 +25,8 @@
 
 #define BUFFER_SIZE 1024
 
+#define INCREMENTAL_PERSISTENCE 1
+
 typedef int (*msg_handler)(char *msg, int length, char *response);
 
 
@@ -152,14 +154,19 @@ int kvs_hash_exist(kvs_hash_t *hash, char *key);
 
 #endif
 
-
+// 持久化模式定义
+#define PERSIST_MODE_INCREMENTAL 0
+#define PERSIST_MODE_SNAPSHOT    1
 
 // 持久化相关函数声明
-int kvs_persist_init(void);  // 初始化持久化功能
+int kvs_persist_init(int mode);  // 初始化持久化功能，mode: 0-增量, 1-全量
 int kvs_persist_log_operation(const char *operation, const char *key, const char *value);  // 记录操作日志
 int kvs_persist_replay_log(void);  // 回放日志
 int kvs_persist_close(void);  // 关闭持久化功能，确保日志写入完成
 
+// 全量持久化相关函数声明
+int kvs_snapshot_save(void);  // 保存数据快照
+int kvs_snapshot_load(void);  // 加载数据快照
 
 #endif
 

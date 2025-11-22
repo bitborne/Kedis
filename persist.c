@@ -10,6 +10,13 @@
 // 全局日志文件指针
 static FILE *log_file = NULL;
 
+// 持久化模式：0-增量，1-全量
+static int persist_mode = PERSIST_MODE_INCREMENTAL;
+
+// 日志文件和快照文件路径
+#define LOG_FILE_PATH "./kvs_operation.log"
+#define SNAPSHOT_FILE_PATH "./kvs_snapshot.dat"
+
 // 重新声明全局变量
 #if ENABLE_ARRAY
 extern kvs_array_t global_array;
@@ -25,20 +32,30 @@ extern kvs_hash_t global_hash;
 
 /**
  * 初始化持久化功能
- * 打开日志文件以追加模式
+ * @param mode 持久化模式：0-增量，1-全量
  */
-int kvs_persist_init(void) {
-    // 以追加模式打开日志文件
-    log_file = fopen(LOG_FILE_PATH, "a+");
-    if (log_file == NULL) {
-        printf("错误：无法打开日志文件 %s\n", LOG_FILE_PATH);
+int kvs_persist_init(int mode) {
+    persist_mode = mode;
+
+    if (mode == PERSIST_MODE_INCREMENTAL) {
+        // 以追加模式打开日志文件
+        log_file = fopen(LOG_FILE_PATH, "a+");
+        if (log_file == NULL) {
+            printf("错误：无法打开日志文件 %s\n", LOG_FILE_PATH);
+            return -1;
+        }
+
+        // 设置文件缓冲模式为行缓冲，确保日志能及时写入
+        setvbuf(log_file, NULL, _IOLBF, 0);
+
+        printf("增量持久化功能初始化成功，日志文件：%s\n", LOG_FILE_PATH);
+    } else if (mode == PERSIST_MODE_SNAPSHOT) {
+        printf("全量持久化功能初始化成功，快照文件：%s\n", SNAPSHOT_FILE_PATH);
+    } else {
+        printf("错误：未知的持久化模式 %d\n", mode);
         return -1;
     }
 
-    // 设置文件缓冲模式为行缓冲，确保日志能及时写入
-    setvbuf(log_file, NULL, _IOLBF, 0);
-
-    printf("持久化功能初始化成功，日志文件：%s\n", LOG_FILE_PATH);
     return 0;
 }
 
@@ -195,10 +212,113 @@ int kvs_persist_replay_log(void) {
  * 关闭持久化功能，确保所有日志写入完成
  */
 int kvs_persist_close(void) {
-    if (log_file != NULL) {
+    if (persist_mode == PERSIST_MODE_INCREMENTAL && log_file != NULL) {
         fclose(log_file);
         log_file = NULL;
         printf("日志文件已关闭\n");
     }
+    return 0;
+}
+
+/**
+ * 保存数据快照
+ */
+int kvs_snapshot_save(void) {
+    if (persist_mode != PERSIST_MODE_SNAPSHOT) {
+        printf("错误：当前非快照模式\n");
+        return -1;
+    }
+
+    FILE *snapshot_file = fopen(SNAPSHOT_FILE_PATH, "w");
+    if (snapshot_file == NULL) {
+        printf("错误：无法创建快照文件 %s\n", SNAPSHOT_FILE_PATH);
+        return -1;
+    }
+
+    printf("开始保存快照...\n");
+
+    // 保存数组后端数据
+#if ENABLE_ARRAY
+    for (int i = 0; i < global_array.total; i++) {
+        if (global_array.table[i].key != NULL) {
+            fprintf(snapshot_file, "ASET %s %s\n", global_array.table[i].key, global_array.table[i].value);
+        }
+    }
+#endif
+
+    // 保存红黑树后端数据（简化实现，实际需要遍历树）
+#if ENABLE_RBTREE
+    // 注意：红黑树需要实现遍历函数来导出所有键值对
+    printf("红黑树快照保存待实现\n");
+#endif
+
+    // 保存哈希表后端数据
+#if ENABLE_HASH
+    for (int i = 0; i < global_hash.max_slots; i++) {
+        hashnode_t *node = global_hash.nodes[i];
+        while (node != NULL) {
+#if HASH_ENABLE_KEY_POINTER
+            fprintf(snapshot_file, "HSET %s %s\n", node->key, node->value);
+#else
+            fprintf(snapshot_file, "HSET %s %s\n", node->key, node->value);
+#endif
+            node = node->next;
+        }
+    }
+#endif
+
+    fclose(snapshot_file);
+    printf("快照保存完成\n");
+    return 0;
+}
+
+/**
+ * 加载数据快照
+ */
+int kvs_snapshot_load(void) {
+    if (persist_mode != PERSIST_MODE_SNAPSHOT) {
+        printf("错误：当前非快照模式\n");
+        return -1;
+    }
+
+    FILE *snapshot_file = fopen(SNAPSHOT_FILE_PATH, "r");
+    if (snapshot_file == NULL) {
+        printf("快照文件 %s 不存在，跳过加载\n", SNAPSHOT_FILE_PATH);
+        return 0; // 没有快照文件不是错误
+    }
+
+    printf("开始加载快照...\n");
+
+    char line[1024];
+    char operation[32], key[256], value[512];
+
+    // 逐行读取快照并执行操作
+    while (fgets(line, sizeof(line), snapshot_file) != NULL) {
+        int args_count = sscanf(line, "%31s %255s %511[^\n]", operation, key, value);
+
+        if (args_count >= 3) {
+            // 去除值前面可能的空格
+            char *val_start = value;
+            while (*val_start == ' ' && *val_start != '\0') val_start++;
+
+            // 根据操作类型执行对应操作
+            if (strcmp(operation, "ASET") == 0) {
+#if ENABLE_ARRAY
+                kvs_array_set(&global_array, key, val_start);
+#endif
+            } else if (strcmp(operation, "RSET") == 0) {
+#if ENABLE_RBTREE
+                kvs_rbtree_set(&global_rbtree, key, val_start);
+#endif
+            } else if (strcmp(operation, "HSET") == 0) {
+#if ENABLE_HASH
+                kvs_hash_set(&global_hash, key, val_start);
+#endif
+            }
+        }
+    }
+
+    fclose(snapshot_file);
+    printf("快照加载完成\n");
     return 0;
 }
