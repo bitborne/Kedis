@@ -1,0 +1,9 @@
+[package]
+name = "KVS_client"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap = "4.5.53"
+serde_json = "1.0.145"
+tokio = "1.48.0"
