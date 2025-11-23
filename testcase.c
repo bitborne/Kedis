@@ -24,7 +24,7 @@ int connect_server(const char *ip, unsigned short port) {
   server_addr.sin_family = AF_INET;
   server_addr.sin_port = htons(port);
   int ret = inet_pton(AF_INET, ip, &server_addr.sin_addr);
-  if (!ret) printf("Not a valid IPv4\n"); 
+  if (!ret) printf("Not a valid IPv4\n");
 
   if (connect(connfd, (struct sockaddr*)&server_addr, sizeof(struct sockaddr_in)) != 0) {
     perror("connect");
@@ -50,7 +50,7 @@ int recv_msg(int connfd, char* result, int length) {
     exit(1);
   }
   return res;
-} 
+}
 
 void testcase(int connfd, char* msg, char* pattern, char* casename) {
   if (msg == NULL || pattern == NULL || casename == NULL) return;
@@ -106,7 +106,7 @@ void array_testcase_single_1w(int connfd) {
     testcase(connfd, cmd_get, expect_get, "GET-Qbb-0");
 
   }
-    
+
   for (int i = 0; i < cnt; i++) {
     char cmd_del[64] = {0};
     snprintf(cmd_del, 64, "DEL Qbb%d", i);
@@ -134,7 +134,7 @@ void rbtree_testcase_single_1w(int connfd) {
     testcase(connfd, cmd_rget, expect_rget, "RGET-Qbb-0");
 
   }
-    
+
   for (int i = 0; i < cnt; i++) {
     char cmd_rdel[64] = {0};
     snprintf(cmd_rdel, 64, "RDEL Qbb%d", i);
@@ -165,7 +165,7 @@ void hash_testcase_single_1w(int connfd) {
     testcase(connfd, cmd_hget, expect_hget, "HGET-Qbb-0");
 
   }
-    
+
   for (int i = 0; i < cnt; i++) {
     char cmd_hdel[64] = {0};
     snprintf(cmd_hdel, 64, "HDEL Qbb%d", i);
@@ -229,7 +229,7 @@ void array_testcase_1w_mix(int connfd) {
   gettimeofday(&tv_end, NULL);
   int time_used = TIME_SUB_MS(tv_end, tv_begin);
   printf("array_testcase_1w (160w REQ) --> time_used: %d ms  QPS: %d\n", time_used, 160000 * 1000 / time_used);
-  
+
 }
 
 void rbtree_testcase_1w_mix(int connfd) {
@@ -243,7 +243,7 @@ void rbtree_testcase_1w_mix(int connfd) {
   gettimeofday(&tv_end, NULL);
   int time_used = TIME_SUB_MS(tv_end, tv_begin);
   printf("rbtree_testcase_1w (160w REQ) --> time_used: %d ms  QPS: %d\n", time_used, 160000 * 1000 / time_used);
-  
+
 }
 
 
@@ -258,7 +258,7 @@ void hash_testcase_1w_mix(int connfd) {
   gettimeofday(&tv_end, NULL);
   int time_used = TIME_SUB_MS(tv_end, tv_begin);
   printf("hash_testcase_1w (160w REQ) --> time_used: %d ms  QPS: %d\n", time_used, 160000 * 1000 / time_used);
-  
+
 }
 
 void persistence_test_1w(int connfd) {
@@ -387,6 +387,29 @@ void persistence_get_all(int connfd) {
   printf("persistence_get_all (30000 REQ) --> time_used: %d ms  QPS: %d\n", time_used, 30000 * 1000 / time_used);
 }
 
+void multicmd_testcase(int connfd) {
+  // 测试并行命令执行 (使用&)
+  testcase(connfd, "SET key1 value1 & SET key2 value2", "OK\r\nOK\r\n", "MULTICMD-SET-AND-0");
+
+  // 测试串行命令执行 (使用&&)
+  testcase(connfd, "SET key3 value3 && GET key3", "OK\r\nValue: value3\r\n", "MULTICMD-SET-GET-ANDAND-0");
+
+  // 测试混合命令
+  testcase(connfd, "SET key4 value4 && SET key5 value5 & GET key4", "OK\r\nOK\r\nValue: value4\r\n", "MULTICMD-MIXED-0");
+
+  // 测试失败后停止执行 (使用&&)
+  testcase(connfd, "DEL nonexistent_key && SET key6 value6", "Not Exist\r\n", "MULTICMD-FAIL-STOP-0");
+
+  // 测试多个并行命令
+  testcase(connfd, "SET par_key1 par_val1 & SET par_key2 par_val2 & SET par_key3 par_val3", "OK\r\nOK\r\nOK\r\n", "MULTICMD-PARALLEL-0");
+
+  // 验证并行命令的结果
+  testcase(connfd, "GET par_key1", "Value: par_val1\r\n", "MULTICMD-VERIFY-PAR1-0");
+  testcase(connfd, "GET par_key2", "Value: par_val2\r\n", "MULTICMD-VERIFY-PAR2-0");
+  testcase(connfd, "GET par_key3", "Value: par_val3\r\n", "MULTICMD-VERIFY-PAR3-0");
+  printf("passed\n");
+}
+
 
 int main(int argc, char* argv[]) {
 
@@ -399,7 +422,7 @@ int main(int argc, char* argv[]) {
   unsigned short port = atoi(argv[2]);
 
   int connfd = connect_server(ip, port);
-  
+
   int mode = atoi(argv[3]);
   if (mode == 0) {
     // array_testcase_1w_mix(connfd);
@@ -413,9 +436,11 @@ int main(int argc, char* argv[]) {
     persistence_test_1w(connfd);
   } else if (mode == 4) {
     persistence_get_all(connfd);
+  } else if (mode == 5) {
+    multicmd_testcase(connfd);
   }
-  
-  
+
+
   else {
     printf("ARG: ERROR\n");
     return -1;

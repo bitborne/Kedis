@@ -24,6 +24,7 @@
 #define ENABLE_HASH			1
 
 #define BUFFER_SIZE 1024
+#define MAX_MULTICMD_LENGTH 8192  // 增加最大多命令长度
 
 #define INCREMENTAL_PERSISTENCE 1
 
@@ -129,13 +130,13 @@ typedef struct hashnode_s {
 	char value[MAX_VALUE_LEN];
 #endif
 	struct hashnode_s *next;
-	
+
 } hashnode_t;
 
 
 typedef struct hashtable_s {
 
-	hashnode_t **nodes; //* change **, 
+	hashnode_t **nodes; //* change **,
 
 	int max_slots;
 	int count;

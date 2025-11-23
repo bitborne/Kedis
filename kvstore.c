@@ -65,6 +65,9 @@ enum {
   KVS_CMD_COUNT,
 };
 
+/*
+ * 解析单条命令的token
+ */
 int kvs_split_token(char* msg, char* tokens[]) {
   if (msg == NULL || tokens == NULL) return -1;
 
@@ -88,6 +91,75 @@ int kvs_split_token(char* msg, char* tokens[]) {
     token = strtok(NULL, " ");
   }
   return idx;  // 每拆出来一个token，idx++ ==> 返回值为token的个数
+}
+
+/*
+ * 分割多条命令
+ */
+int kvs_split_multicmd(char* msg, char* commands[], int max_commands) {
+  if (msg == NULL || commands == NULL || max_commands <= 0) return -1;
+
+  int cmd_count = 0;
+  char* start = msg;
+  char* pos = msg;
+  int len = strlen(msg);
+
+  while (pos < msg + len && cmd_count < max_commands) {
+    // 查找命令分隔符 & 或 &&
+    if (*pos == '&') {
+      // 检查是单个&还是&&
+      int is_andand = 0;
+      if (pos + 1 < msg + len && *(pos + 1) == '&') {
+        is_andand = 1;
+      }
+
+      // 临时结束字符串以分割命令
+      *pos = '\0';
+
+      // 复制命令到数组
+      commands[cmd_count] = kvs_malloc(strlen(start) + 1);
+      if (commands[cmd_count] == NULL) {
+        // 释放已分配的内存
+        for (int i = 0; i < cmd_count; i++) {
+          kvs_free(commands[i]);
+        }
+        return -1;
+      }
+      strcpy(commands[cmd_count], start);
+
+      // 恢复字符
+      *pos = '&';
+
+      // 跳过&符
+      pos++;
+      if (is_andand) {
+        pos++; // 跳过第二个&
+      }
+
+      // 跳过可能的空格
+      while (*pos == ' ' || *pos == '\t') pos++;
+      start = pos;
+      cmd_count++;
+    } else {
+      pos++;
+    }
+  }
+
+  // 添加最后一个命令（或唯一命令）
+  if (start < msg + len && cmd_count < max_commands) {
+    commands[cmd_count] = kvs_malloc(strlen(start) + 1);
+    if (commands[cmd_count] == NULL) {
+      // 释放已分配的内存
+      for (int i = 0; i < cmd_count; i++) {
+        kvs_free(commands[i]);
+      }
+      return -1;
+    }
+    strcpy(commands[cmd_count], start);
+    cmd_count++;
+  }
+
+  return cmd_count;
 }
 
 // SET Key Value
@@ -286,6 +358,119 @@ int kvs_filter_protocol(char** tokens, int count, char* response) {
 }
 
 /*
+ * 分析命令分隔符的类型
+ * 返回 0 表示 & (并行执行)
+ * 返回 1 表示 && (顺序执行，前一个成功才执行下一个)
+ */
+int get_command_separator_type(char* msg, int position, int msg_len) {
+  if (position >= msg_len - 1) {
+    return 0; // 默认为并行执行
+  }
+
+  if (msg[position] == '&' && msg[position + 1] == '&') {
+    return 1; // 顺序执行
+  } else {
+    return 0; // 并行执行
+  }
+}
+
+/*
+ * 处理多命令
+ * 模拟shell的&和&&操作符行为
+ */
+int kvs_process_multicmd(char* msg, int length, char* response) {
+  if (msg == NULL || response == NULL) return -1;
+
+  // 分割多命令
+  char* commands[64]; // 最多支持64个子命令
+  int cmd_count = kvs_split_multicmd(msg, commands, 64);
+
+  if (cmd_count <= 0) {
+    return sprintf(response, "ERROR: Invalid multi-command format\r\n");
+  }
+
+  int total_len = 0;
+  int msg_len = strlen(msg);
+  int current_pos = 0;
+
+  // 找到第一个命令的位置
+  while (current_pos < msg_len && msg[current_pos] != '\0' &&
+         (msg[current_pos] == ' ' || msg[current_pos] == '\t')) {
+    current_pos++;
+  }
+
+  // 遍历处理每个命令
+  for (int i = 0; i < cmd_count; i++) {
+    // 计算当前命令在原始消息中的位置
+    current_pos += strlen(commands[i]);
+
+    // 跳过可能的空格
+    while (current_pos < msg_len &&
+           (msg[current_pos] == ' ' || msg[current_pos] == '\t')) {
+      current_pos++;
+    }
+
+    // 检查是否有分隔符
+    int separator_type = (current_pos < msg_len - 1) ?
+                         get_command_separator_type(msg, current_pos, msg_len) : 0;
+
+    // 跳过分隔符
+    if (current_pos < msg_len && msg[current_pos] == '&') {
+      current_pos++;
+      if (separator_type == 1) { // 如果是&&，还要跳过第二个&
+        current_pos++;
+      }
+      // 跳过可能的空格
+      while (current_pos < msg_len &&
+             (msg[current_pos] == ' ' || msg[current_pos] == '\t')) {
+        current_pos++;
+      }
+    }
+
+    // 处理命令
+    char temp_buffer[BUFFER_SIZE];
+    strcpy(temp_buffer, commands[i]);
+
+    // 分割token
+    char* tokens[KVS_MAX_TOKENS] = {0};
+    int count = kvs_split_token(temp_buffer, tokens);
+    if (count == -1) {
+      total_len += sprintf(response + total_len, "ERROR: Token parsing failed for command: %s\r\n", commands[i]);
+      continue;
+    }
+
+    // 处理命令
+    char single_response[BUFFER_SIZE];
+    int ret = kvs_filter_protocol(tokens, count, single_response);
+    if (ret < 0) {
+      total_len += sprintf(response + total_len, "ERROR: Command execution failed: %s\r\n", commands[i]);
+    } else {
+      total_len += sprintf(response + total_len, "%s", single_response);
+    }
+
+    // 如果是&&操作符，且上一个命令失败，则跳过后续命令
+    if (separator_type == 1) { // 是&&操作符
+      // 检查响应是否表示错误
+      if (strncmp(single_response, "ERROR", 5) == 0 ||
+          strcmp(single_response, "Not Exist\r\n") == 0 ||
+          strcmp(single_response, "Key has existed\r\n") == 0) {
+        // 如果前一个命令失败，跳过后续所有命令
+        break;
+      }
+    }
+  }
+
+  // 释放分配的内存
+  for (int i = 0; i < cmd_count; i++) {
+    if (commands[i] != NULL) {
+      kvs_free(commands[i]);
+    }
+  }
+
+  return total_len;
+}
+
+/*
  * msg: request message
  * length: length of request message
  * response: need to send
@@ -295,12 +480,12 @@ int kvs_filter_protocol(char** tokens, int count, char* response) {
  int kvs_protocol(char* rmsg, int length, char* response) {
   if (rmsg == NULL || length == 0 || response == NULL) return -1;
 
-  // Ensure the message is null-terminated for string operations
-  if (length < BUFFER_SIZE) {
+  // 确保消息以null结尾以便于字符串操作
+  if (length < MAX_MULTICMD_LENGTH) {
     rmsg[length] = '\0';
   } else {
-    // If buffer is full, ensure last byte is null terminator
-    rmsg[BUFFER_SIZE - 1] = '\0';
+    // 如果缓冲区满，确保最后字节是null终止符
+    rmsg[MAX_MULTICMD_LENGTH - 1] = '\0';
   }
 
   // printf("recv: %dbytes:\n%s\n", strlen(rmsg), rmsg);
@@ -310,16 +495,23 @@ int kvs_filter_protocol(char** tokens, int count, char* response) {
   memcpy(response, rmsg, length);
   return strlen(response);
 #elif KV_LOGIC  // 真正的 KV 存储业务逻辑
-  char* tokens[KVS_MAX_TOKENS] = {0};
+  // 检查是否包含多命令操作符
+  if (strchr(rmsg, '&') != NULL) {
+    // 如果存在&操作符，处理多命令
+    return kvs_process_multicmd(rmsg, length, response);
+  } else {
+    // 单命令处理
+    char* tokens[KVS_MAX_TOKENS] = {0};
 
-  // 分割token
-  int count = kvs_split_token(rmsg, tokens);
-  if (count == -1) return -2;
+    // 分割token
+    int count = kvs_split_token(rmsg, tokens);
+    if (count == -1) return -2;
 
-  //  *协议分类器* : 解析 rmsg
-  int ret = kvs_filter_protocol(tokens, count, response);
-  // 返回值相当于 strlen(response)
-  return ret;
+    //  *协议分类器* : 解析 rmsg
+    int ret = kvs_filter_protocol(tokens, count, response);
+    // 返回值相当于 strlen(response)
+    return ret;
+  }
 #endif
 }
 

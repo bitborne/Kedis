@@ -4,9 +4,6 @@
 #include <string.h>
 #include <time.h>
 
-// 日志文件路径
-#define LOG_FILE_PATH "./kvs_operation.log"
-
 // 全局日志文件指针
 static FILE *log_file = NULL;
 
