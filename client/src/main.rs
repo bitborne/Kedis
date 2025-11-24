@@ -190,6 +190,6 @@ fn run_interactive_mode(client: KVClient) -> Result<(), Box<dyn std::error::Erro
         }
     }
 
-    println!("退出交互模式");
+    println!("Bye!");
     Ok(())
 }
