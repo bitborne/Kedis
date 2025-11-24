@@ -583,13 +583,13 @@ int main(int argc, char* argv[]) {
 
   // 解析持久化模式参数
   if (argc == 3) {
-    if (strcmp(argv[2], "inc") == 0) {
+    if (strcmp(argv[2], "log") == 0) {
       g_persist_mode = PERSIST_MODE_INCREMENTAL;
     } else if (strcmp(argv[2], "snap") == 0) {
       g_persist_mode = PERSIST_MODE_SNAPSHOT;
     } else {
       printf("错误：未知的持久化模式 '%s'\n", argv[2]);
-      printf("用法: %s <port> [inc|snap]\n", argv[0]);
+      printf("用法: %s <port> [log|snap]\n", argv[0]);
       return -1;
     }
   } else {
