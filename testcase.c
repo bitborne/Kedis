@@ -72,12 +72,12 @@ void testcase(int connfd, char* msg, char* pattern, char* casename) {
 
 void array_testcase_mix(int connfd) {
   testcase(connfd, "SET Qbb Schatten", "OK\r\n", "SET-Qbb-0");
-  testcase(connfd, "GET Qbb", "Value: Schatten\r\n", "GET-Qbb-0");
+  testcase(connfd, "GET Qbb", "Schatten\r\n", "GET-Qbb-0");
   testcase(connfd, "MOD Qbb Cc", "OK\r\n", "MOD-Qbb-0");
   testcase(connfd, "MOD Bqq Cc", "Not Exist\r\n", "MOD-Qbb-1");
   testcase(connfd, "SET Qbb Schatten", "Key has existed\r\n", "SET-Qbb-1");
   testcase(connfd, "EXIST Qbb", "YES, Exist\r\n", "EXIST-Qbb-0");
-  testcase(connfd, "GET Qbb", "Value: Cc\r\n", "GET-Qbb-1");
+  testcase(connfd, "GET Qbb", "Cc\r\n", "GET-Qbb-1");
   testcase(connfd, "DEL Qbb", "OK\r\n", "DEL-Qbb-0");
   testcase(connfd, "EXIST Qbb", "NO, Not Exist\r\n", "EXIST-Qbb-1");
   testcase(connfd, "GET Qbb", "ERROR / Not Exist\r\n", "GET-Qbb-2");
@@ -102,7 +102,7 @@ void array_testcase_single_1w(int connfd) {
     char cmd_get[64] = {0};
     char expect_get[64] = {0};
     snprintf(cmd_get, 64, "GET Qbb%d", i, i);
-    snprintf(expect_get, 64, "Value: Schatten%d\r\n", i);
+    snprintf(expect_get, 64, "Schatten%d\r\n", i);
     testcase(connfd, cmd_get, expect_get, "GET-Qbb-0");
 
   }
@@ -130,7 +130,7 @@ void rbtree_testcase_single_1w(int connfd) {
     char cmd_rget[64] = {0};
     char expect_rget[64] = {0};
     snprintf(cmd_rget, 64, "RGET Qbb%d", i, i);
-    snprintf(expect_rget, 64, "Value: Schatten%d\r\n", i);
+    snprintf(expect_rget, 64, "Schatten%d\r\n", i);
     testcase(connfd, cmd_rget, expect_rget, "RGET-Qbb-0");
 
   }
@@ -161,7 +161,7 @@ void hash_testcase_single_1w(int connfd) {
     char cmd_hget[64] = {0};
     char expect_hget[64] = {0};
     snprintf(cmd_hget, 64, "HGET Qbb%d", i, i);
-    snprintf(expect_hget, 64, "Value: Schatten%d\r\n", i);
+    snprintf(expect_hget, 64, "Schatten%d\r\n", i);
     testcase(connfd, cmd_hget, expect_hget, "HGET-Qbb-0");
 
   }
@@ -180,12 +180,12 @@ void hash_testcase_single_1w(int connfd) {
 
 void rbtree_testcase_mix(int connfd) {
   testcase(connfd, "RSET Qbb Schatten", "OK\r\n", "RSET-Qbb-0");
-  testcase(connfd, "RGET Qbb", "Value: Schatten\r\n", "RGET-Qbb-0");
+  testcase(connfd, "RGET Qbb", "Schatten\r\n", "RGET-Qbb-0");
   testcase(connfd, "RMOD Qbb Cc", "OK\r\n", "RMOD-Qbb-0");
   testcase(connfd, "RMOD Bqq Cc", "Not Exist\r\n", "RMOD-Qbb-1");
   testcase(connfd, "RSET Qbb Schatten", "Key has existed\r\n", "RSET-Qbb-1");
   testcase(connfd, "REXIST Qbb", "YES, Exist\r\n", "REXIST-Qbb-0");
-  testcase(connfd, "RGET Qbb", "Value: Cc\r\n", "RGET-Qbb-1");
+  testcase(connfd, "RGET Qbb", "Cc\r\n", "RGET-Qbb-1");
   testcase(connfd, "RDEL Qbb", "OK\r\n", "RDEL-Qbb-0");
   testcase(connfd, "REXIST Qbb", "NO, Not Exist\r\n", "REXIST-Qbb-1");
   testcase(connfd, "RGET Qbb", "ERROR / Not Exist\r\n", "RGET-Qbb-2");
@@ -200,12 +200,12 @@ void rbtree_testcase_mix(int connfd) {
 
 void hash_testcase_mix(int connfd) {
   testcase(connfd, "HSET Qbb Schatten", "OK\r\n", "HSET-Qbb-0");
-  testcase(connfd, "HGET Qbb", "Value: Schatten\r\n", "HGET-Qbb-0");
+  testcase(connfd, "HGET Qbb", "Schatten\r\n", "HGET-Qbb-0");
   testcase(connfd, "HMOD Qbb Cc", "OK\r\n", "HMOD-Qbb-0");
   testcase(connfd, "HMOD Bqq Cc", "Not Exist\r\n", "HMOD-Qbb-1");
   testcase(connfd, "HSET Qbb Schatten", "Key has existed\r\n", "HSET-Qbb-1");
   testcase(connfd, "HEXIST Qbb", "YES, Exist\r\n", "HEXIST-Qbb-0");
-  testcase(connfd, "HGET Qbb", "Value: Cc\r\n", "HGET-Qbb-1");
+  testcase(connfd, "HGET Qbb", "Cc\r\n", "HGET-Qbb-1");
   testcase(connfd, "HDEL Qbb", "OK\r\n", "HDEL-Qbb-0");
   testcase(connfd, "HEXIST Qbb", "NO, Not Exist\r\n", "HEXIST-Qbb-1");
   testcase(connfd, "HGET Qbb", "ERROR / Not Exist\r\n", "HGET-Qbb-2");
@@ -284,8 +284,8 @@ void persistence_test_1w(int connfd) {
     snprintf(cmd_del, 64, "DEL Array_k%d", i);
 
     strcpy(expect_Ok, "OK\r\n");
-    snprintf(expect_get1, 64, "Value: Array_v%d\r\n", i);
-    snprintf(expect_get2, 64, "Value: Array_MOD_v%d\r\n", i);
+    snprintf(expect_get1, 64, "Array_v%d\r\n", i);
+    snprintf(expect_get2, 64, "Array_MOD_v%d\r\n", i);
 
 
     testcase(connfd, cmd_set1, expect_Ok, "pers_SET1");
@@ -309,8 +309,8 @@ void persistence_test_1w(int connfd) {
     snprintf(r_cmd_mod1, 64, "RMOD R_k%d R_MOD_v%d", i, i);
     snprintf(r_cmd_del, 64, "RDEL R_k%d", i);
 
-    snprintf(r_expect_get1, 64, "Value: R_v%d\r\n", i);
-    snprintf(r_expect_get2, 64, "Value: R_MOD_v%d\r\n", i);
+    snprintf(r_expect_get1, 64, "R_v%d\r\n", i);
+    snprintf(r_expect_get2, 64, "R_MOD_v%d\r\n", i);
 
     testcase(connfd, r_cmd_set1, expect_Ok, "pers_RSET1");
     testcase(connfd, r_cmd_set2, expect_Ok, "pers_RSET2");
@@ -333,8 +333,8 @@ void persistence_test_1w(int connfd) {
     snprintf(h_cmd_mod1, 64, "HMOD H_k%d H_MOD_v%d", i, i);
     snprintf(h_cmd_del, 64, "HDEL H_k%d", i);
 
-    snprintf(h_expect_get1, 64, "Value: H_v%d\r\n", i);
-    snprintf(h_expect_get2, 64, "Value: H_MOD_v%d\r\n", i);
+    snprintf(h_expect_get1, 64, "H_v%d\r\n", i);
+    snprintf(h_expect_get2, 64, "H_MOD_v%d\r\n", i);
 
     testcase(connfd, h_cmd_set1, expect_Ok, "pers_HSET1");
     testcase(connfd, h_cmd_set2, expect_Ok, "pers_HSET2");
@@ -363,21 +363,21 @@ void persistence_get_all(int connfd) {
     char cmd_get_array[64] = {0};
     char expect_get_array[64] = {0};
     snprintf(cmd_get_array, 64, "GET Array_k%d", i);
-    snprintf(expect_get_array, 64, "Value: Array_v%d\r\n", i);
+    snprintf(expect_get_array, 64, "Array_v%d\r\n", i);
     testcase(connfd, cmd_get_array, expect_get_array, "pers_GET_ARRAY");
 
     // GET rbtree后端的键
     char cmd_get_rbtree[64] = {0};
     char expect_get_rbtree[64] = {0};
     snprintf(cmd_get_rbtree, 64, "RGET R_k%d", i);
-    snprintf(expect_get_rbtree, 64, "Value: R_v%d\r\n", i);
+    snprintf(expect_get_rbtree, 64, "R_v%d\r\n", i);
     testcase(connfd, cmd_get_rbtree, expect_get_rbtree, "pers_GET_RBTREE");
 
     // GET hash后端的键
     char cmd_get_hash[64] = {0};
     char expect_get_hash[64] = {0};
     snprintf(cmd_get_hash, 64, "HGET H_k%d", i);
-    snprintf(expect_get_hash, 64, "Value: H_v%d\r\n", i);
+    snprintf(expect_get_hash, 64, "H_v%d\r\n", i);
     testcase(connfd, cmd_get_hash, expect_get_hash, "pers_GET_HASH");
   }
 
@@ -392,10 +392,10 @@ void multicmd_testcase(int connfd) {
   testcase(connfd, "SET key1 value1 & SET key2 value2", "OK\r\nOK\r\n", "MULTICMD-SET-AND-0");
 
   // 测试串行命令执行 (使用&&)
-  testcase(connfd, "SET key3 value3 && GET key3", "OK\r\nValue: value3\r\n", "MULTICMD-SET-GET-ANDAND-0");
+  testcase(connfd, "SET key3 value3 && GET key3", "OK\r\nvalue3\r\n", "MULTICMD-SET-GET-ANDAND-0");
 
   // 测试混合命令
-  testcase(connfd, "SET key4 value4 && SET key5 value5 & GET key4", "OK\r\nOK\r\nValue: value4\r\n", "MULTICMD-MIXED-0");
+  testcase(connfd, "SET key4 value4 && SET key5 value5 & GET key4", "OK\r\nOK\r\nvalue4\r\n", "MULTICMD-MIXED-0");
 
   // 测试失败后停止执行 (使用&&)
   testcase(connfd, "DEL nonexistent_key && SET key6 value6", "Not Exist\r\n", "MULTICMD-FAIL-STOP-0");
@@ -404,9 +404,9 @@ void multicmd_testcase(int connfd) {
   testcase(connfd, "SET par_key1 par_val1 & SET par_key2 par_val2 & SET par_key3 par_val3", "OK\r\nOK\r\nOK\r\n", "MULTICMD-PARALLEL-0");
 
   // 验证并行命令的结果
-  testcase(connfd, "GET par_key1", "Value: par_val1\r\n", "MULTICMD-VERIFY-PAR1-0");
-  testcase(connfd, "GET par_key2", "Value: par_val2\r\n", "MULTICMD-VERIFY-PAR2-0");
-  testcase(connfd, "GET par_key3", "Value: par_val3\r\n", "MULTICMD-VERIFY-PAR3-0");
+  testcase(connfd, "GET par_key1", "par_val1\r\n", "MULTICMD-VERIFY-PAR1-0");
+  testcase(connfd, "GET par_key2", "par_val2\r\n", "MULTICMD-VERIFY-PAR2-0");
+  testcase(connfd, "GET par_key3", "par_val3\r\n", "MULTICMD-VERIFY-PAR3-0");
   printf("passed\n");
 }
 

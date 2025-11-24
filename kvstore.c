@@ -202,7 +202,7 @@ int kvs_filter_protocol(char** tokens, int count, char* response) {
       if (gotValue == NULL) {
         length = sprintf(response, "ERROR / Not Exist\r\n");
       } else {
-        length = sprintf(response, "Value: %s\r\n", gotValue);
+        length = sprintf(response, "%s\r\n", gotValue);
       }
       break;
     case KVS_CMD_DEL:  // -> OK
@@ -258,7 +258,7 @@ int kvs_filter_protocol(char** tokens, int count, char* response) {
         if (rgotValue == NULL) {
           length = sprintf(response, "ERROR / Not Exist\r\n");
         } else {
-          length = sprintf(response, "Value: %s\r\n", rgotValue);
+          length = sprintf(response, "%s\r\n", rgotValue);
         }
         break;
         case KVS_CMD_RDEL:  // -> OK
@@ -312,7 +312,7 @@ int kvs_filter_protocol(char** tokens, int count, char* response) {
       if (hgotValue == NULL) {
         length = sprintf(response, "ERROR / Not Exist\r\n");
       } else {
-        length = sprintf(response, "Value: %s\r\n", hgotValue);
+        length = sprintf(response, "%s\r\n", hgotValue);
       }
       break;
       case KVS_CMD_HDEL:  // -> OK
