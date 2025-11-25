@@ -6,12 +6,44 @@
 #include <string.h>
 #include <signal.h>
 #include <stdbool.h>
+#include <unistd.h>
+#include <sys/wait.h>
+#include <time.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <pthread.h>
+#include <semaphore.h>
 
 #if (NETWORK_SELECT == NETWORK_REACTOR)
 #include "server.h"  // only for reactor.c
 #endif
 
+enum {                                 
+  KVS_CMD_START = 0,                   
+  // array                             
+  KVS_CMD_SET = KVS_CMD_START,         
+  KVS_CMD_GET,                         
+  KVS_CMD_DEL,                         
+  KVS_CMD_MOD,                         
+  KVS_CMD_EXIST,                       
+  // rbtree                            
+  KVS_CMD_RSET,                        
+  KVS_CMD_RGET,                        
+  KVS_CMD_RDEL,                        
+  KVS_CMD_RMOD,                        
+  KVS_CMD_REXIST,                      
+  // hash                              
+  KVS_CMD_HSET,                        
+  KVS_CMD_HGET,                        
+  KVS_CMD_HDEL,                        
+  KVS_CMD_HMOD,                        
+  KVS_CMD_HEXIST,  
 
+  KVS_CMD_SAVE,
+  KVS_CMD_BGSAVE,                 
+  
+  KVS_CMD_COUNT                  
+};                                     
 
 #define ECHO_LOGIC 0
 #define KV_LOGIC 1
@@ -29,6 +61,95 @@ extern kvs_rbtree_t global_rbtree;
 #if ENABLE_HASH
 extern kvs_hash_t global_hash;
 #endif
+
+// AOF缓冲区和长度
+char aof_buf[AOF_BUF_SIZE] = {0};
+int aof_len = 0;
+
+// 用于同步的互斥锁和条件变量
+pthread_mutex_t aof_mutex = PTHREAD_MUTEX_INITIALIZER;
+sem_t aof_sem;  // 用于通知fsync线程
+
+/**
+ * 将命令追加到AOF缓冲区
+ * @param cmd_str 命令字符串
+ */
+void appendToAofBuffer(const char* cmd_str) {
+    int len = strlen(cmd_str);
+
+    pthread_mutex_lock(&aof_mutex);
+
+    // 检查是否有足够的空间
+    if (aof_len + len >= AOF_BUF_SIZE) {
+        // 如果缓冲区不够，写入文件并清空
+        int fd = open("appendonly.aof", O_WRONLY | O_CREAT | O_APPEND, 0644);
+        if (fd != -1) {
+            write(fd, aof_buf, aof_len);
+            fsync(fd);
+            close(fd);
+        }
+        aof_len = 0;
+    }
+
+    // 如果命令长度超过缓冲区大小，则分块处理
+    if (len >= AOF_BUF_SIZE) {
+        int fd = open("appendonly.aof", O_WRONLY | O_CREAT | O_APPEND, 0644);
+        if (fd != -1) {
+            write(fd, cmd_str, len);
+            fsync(fd);
+            close(fd);
+        }
+        pthread_mutex_unlock(&aof_mutex);
+        return;
+    }
+
+    // 将命令追加到缓冲区
+    memcpy(aof_buf + aof_len, cmd_str, len);
+    aof_len += len;
+
+    pthread_mutex_unlock(&aof_mutex);
+}
+
+/**
+ * AOF同步线程 - 每秒将缓冲区内容写入磁盘
+ */
+void* aof_sync_thread(void* arg) {
+    while(1) {
+        // 每秒执行一次
+        sleep(1);
+
+        pthread_mutex_lock(&aof_mutex);
+
+        // 将当前AOF缓冲区内容写入文件
+        if (aof_len > 0) {
+            int fd = open("appendonly.aof", O_WRONLY | O_CREAT | O_APPEND, 0644);
+            if (fd != -1) {
+                write(fd, aof_buf, aof_len);
+                fsync(fd);  // 强制同步到磁盘
+                close(fd);
+            }
+            aof_len = 0;  // 清空缓冲区
+        }
+
+        pthread_mutex_unlock(&aof_mutex);
+    }
+
+    return NULL;
+}
+
+/**
+ * 启动AOF同步线程
+ */
+int startAofSyncThread() {
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, aof_sync_thread, NULL) != 0) {
+        return -1;
+    }
+
+    printf("AOF同步线程已启动\n");
+    return 0;
+}
+
 // 不直接使用系统调用(第三方接口)
 // 跨平台的时候，只需要修改这个函数即可--> 可迭代
 void* kvs_calloc(size_t num, size_t size) { return calloc(num, size); }
@@ -39,31 +160,8 @@ void kvs_free(void* ptr) { free(ptr); }
 // 定义了头文件中 command 变量的声明
 const char* command[] = {"SET",  "GET",  "DEL",  "MOD",  "EXIST",
                          "RSET", "RGET", "RDEL", "RMOD", "REXIST",
-                         "HSET", "HGET", "HDEL", "HMOD", "HEXIST"};
-
-enum {
-  KVS_CMD_START = 0,
-  // array
-  KVS_CMD_SET = KVS_CMD_START,
-  KVS_CMD_GET,
-  KVS_CMD_DEL,
-  KVS_CMD_MOD,
-  KVS_CMD_EXIST,
-  // rbtree
-  KVS_CMD_RSET,
-  KVS_CMD_RGET,
-  KVS_CMD_RDEL,
-  KVS_CMD_RMOD,
-  KVS_CMD_REXIST,
-  // hash
-  KVS_CMD_HSET,
-  KVS_CMD_HGET,
-  KVS_CMD_HDEL,
-  KVS_CMD_HMOD,
-  KVS_CMD_HEXIST,
-
-  KVS_CMD_COUNT,
-};
+                         "HSET", "HGET", "HDEL", "HMOD", "HEXIST",
+                         "SAVE", "BGSAVE"};  // 添加SAVE和BGSAVE命令
 
 /*
  * 解析单条命令的token

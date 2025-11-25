@@ -1,0 +1,25 @@
+# === Rust ===
+**/target/
+
+# === C/C++/GCC ===
+*.o
+*.a
+*.so
+*.dylib
+*.exe
+*.out
+*.app
+
+# === 数据 ===
+*.ksf
+*.aof
+
+# === 构建输出目录 ===
+# 忽略顶层产物目录，但保留源码里的 src/bin/
+/build/
+/dist/
+/out/
+
+# === 根目录无后缀可执行文件 ===
+/testcase
+/kvstore
