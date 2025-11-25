@@ -412,3 +412,24 @@ int ksfLoad(const char *filename) {
 
     return result;
 }
+
+/**
+ * 后台保存KSF快照到固定文件名
+ * @return 成功返回0，失败返回-1
+ */
+int ksfSaveBackgroundFixed() {
+    pid_t pid = fork();
+    if (pid == 0) {
+        // 在子进程中执行KSF保存到固定文件名
+        int result = ksfSave("dump.ksf"); // 使用固定文件名
+        exit(result == 0 ? 0 : 1); // 子进程退出码表示成功或失败
+    } else if (pid > 0) {
+        // 父进程
+        printf("BGSAVE子进程已启动，PID: %d\n", pid);
+        return 0; // 父进程立即返回
+    } else {
+        // fork失败
+        fprintf(stderr, "错误：fork BGSAVE进程失败\n");
+        return -1;
+    }
+}
