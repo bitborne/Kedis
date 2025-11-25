@@ -18,32 +18,32 @@
 #include "server.h"  // only for reactor.c
 #endif
 
-enum {                                 
-  KVS_CMD_START = 0,                   
-  // array                             
-  KVS_CMD_SET = KVS_CMD_START,         
-  KVS_CMD_GET,                         
-  KVS_CMD_DEL,                         
-  KVS_CMD_MOD,                         
-  KVS_CMD_EXIST,                       
-  // rbtree                            
-  KVS_CMD_RSET,                        
-  KVS_CMD_RGET,                        
-  KVS_CMD_RDEL,                        
-  KVS_CMD_RMOD,                        
-  KVS_CMD_REXIST,                      
-  // hash                              
-  KVS_CMD_HSET,                        
-  KVS_CMD_HGET,                        
-  KVS_CMD_HDEL,                        
-  KVS_CMD_HMOD,                        
-  KVS_CMD_HEXIST,  
+enum {
+  KVS_CMD_START = 0,
+  // array
+  KVS_CMD_SET = KVS_CMD_START,
+  KVS_CMD_GET,
+  KVS_CMD_DEL,
+  KVS_CMD_MOD,
+  KVS_CMD_EXIST,
+  // rbtree
+  KVS_CMD_RSET,
+  KVS_CMD_RGET,
+  KVS_CMD_RDEL,
+  KVS_CMD_RMOD,
+  KVS_CMD_REXIST,
+  // hash
+  KVS_CMD_HSET,
+  KVS_CMD_HGET,
+  KVS_CMD_HDEL,
+  KVS_CMD_HMOD,
+  KVS_CMD_HEXIST,
 
   KVS_CMD_SAVE,
-  KVS_CMD_BGSAVE,                 
-  
-  KVS_CMD_COUNT                  
-};                                     
+  KVS_CMD_BGSAVE,
+
+  KVS_CMD_COUNT
+};
 
 #define ECHO_LOGIC 0
 #define KV_LOGIC 1
@@ -68,7 +68,7 @@ int aof_len = 0;
 
 // 用于同步的互斥锁和条件变量
 pthread_mutex_t aof_mutex = PTHREAD_MUTEX_INITIALIZER;
-sem_t aof_sem;  // 用于通知fsync线程
+// sem_t aof_sem;  // 用于通知fsync线程
 
 /**
  * 将命令追加到AOF缓冲区
@@ -162,6 +162,15 @@ const char* command[] = {"SET",  "GET",  "DEL",  "MOD",  "EXIST",
                          "RSET", "RGET", "RDEL", "RMOD", "REXIST",
                          "HSET", "HGET", "HDEL", "HMOD", "HEXIST",
                          "SAVE", "BGSAVE"};  // 添加SAVE和BGSAVE命令
+
+// 全局变量存储持久化模式和自动保存参数
+static int g_persist_mode = PERSIST_MODE_INCREMENTAL;
+
+// 自动保存参数：save seconds changes
+static int save_params_seconds = 300;      // 5分钟
+static int save_params_changes = 100;      // 100次变化
+static time_t last_save_time = 0;          // 上次保存时间
+static int changes_since_last_save = 0;    // 自上次保存以来的变化次数
 
 /*
  * 解析单条命令的token
@@ -568,6 +577,26 @@ int kvs_process_multicmd(char* msg, int length, char* response) {
   return total_len;
 }
 
+// 检查是否需要执行自动快照保存（根据save参数）
+void check_and_perform_autosave() {
+    time_t current_time = time(0);
+
+    // 检查是否满足自动保存条件：时间间隔达到且写入次数达到阈值
+    if (current_time - last_save_time >= save_params_seconds &&
+        changes_since_last_save >= save_params_changes) {
+
+        printf("触发自动快照保存：已超过 %d 秒且发生 %d 次变化\n",
+               save_params_seconds, save_params_changes);
+
+        // 更新最后保存时间
+        last_save_time = current_time;
+        changes_since_last_save = 0; // 重置变化计数
+
+        // 执行后台保存
+        ksfSaveBackgroundFixed();
+    }
+}
+
 /*
  * msg: request message
  * length: length of request message
@@ -596,7 +625,11 @@ int kvs_process_multicmd(char* msg, int length, char* response) {
   // 检查是否包含多命令操作符
   if (strchr(rmsg, '&') != NULL) {
     // 如果存在&操作符，处理多命令
-    return kvs_process_multicmd(rmsg, length, response);
+    int ret = kvs_process_multicmd(rmsg, length, response);
+
+    // 在多命令处理中，如果有写操作，也需要检查是否需要自动保存
+    check_and_perform_autosave();
+    return ret;
   } else {
     // 单命令处理
     char* tokens[KVS_MAX_TOKENS] = {0};
@@ -608,14 +641,30 @@ int kvs_process_multicmd(char* msg, int length, char* response) {
     //  *协议分类器* : 解析 rmsg
     int ret = kvs_filter_protocol(tokens, count, response);
     // 返回值相当于 strlen(response)
+
+    // 检查是否为写操作（SET、MOD、DEL等），如果是则增加计数
+    if (count > 0 && tokens[0] != NULL) {
+        if (strcmp(tokens[0], "SET") == 0 ||
+            strcmp(tokens[0], "RSET") == 0 ||
+            strcmp(tokens[0], "HSET") == 0 ||
+            strcmp(tokens[0], "MOD") == 0 ||
+            strcmp(tokens[0], "RMOD") == 0 ||
+            strcmp(tokens[0], "HMOD") == 0 ||
+            strcmp(tokens[0], "DEL") == 0 ||
+            strcmp(tokens[0], "RDEL") == 0 ||
+            strcmp(tokens[0], "HDEL") == 0) {
+            changes_since_last_save++;
+        }
+    }
+
+    // 检查是否需要自动保存
+    check_and_perform_autosave();
+
     return ret;
   }
 #endif
 }
 
-
-// 全局变量存储持久化模式
-static int g_persist_mode = PERSIST_MODE_INCREMENTAL;
 
 int init_kvengine(void) {
   // 首先初始化持久化功能
