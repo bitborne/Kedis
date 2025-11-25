@@ -22,10 +22,10 @@ kvstore.c
    char aof_buf[256*1024];     // 256 KB 静态缓冲
    int  aof_len;               
    ```
-   1.2 写命令入口 `call()` 最后把命令按 RESP 追加到 `aof_buf`，**不写盘**。  
-   1.3 启动时 `fork()` 一个**子进程** `aof_fsync_process()`：  
-       - 死循环 `sleep(1); write(aof_fd, aof_buf, aof_len); fsync(aof_fd);`  
-       - 父进程在 fork 前把 `aof_buf + aof_len` 通过 `pipe` 送给子进程，**以后每秒通过 pipe 传一次缓冲区快照**（无锁，父进程只在 pipe 里写）。  
+   1.2 写命令入口最后把命令按追加到 `aof_buf`，时间循环结束时直接 write 
+   1.3 启动时 创建后台线程：  
+       - 死循环 `sleep(1);  fsync(aof_fd);`  
+       - 父进程在 fork 
    1.4 不提供 AOF 重写，**文件会越来越大**，先接受。  
    1.5 单测：随机写 1 万次，kill -9 → 重启丢数据 ≤ 1 秒。
 
@@ -68,8 +68,8 @@ kvstore.c
   有关原先的持久化存储方案全部改写
 
 3. `aof.c`
-   - `appendToAofBuffer()` → 把 RESP 串追加到 `aof_buf`  
-   - `aof_fsync_process()` → 子进程死循环 1 s fsync  
+   - `appendToAofBuffer()` → 命令串追加到 `aof_buf`  
+   - `aof_fsync_process()` → 后台线程死循环 1 s fsync  
    - 启动时 `pipe()` + `fork()` 一次，父进程只写 pipe。
 
 4. `ksf.c` 新建（100 行左右）

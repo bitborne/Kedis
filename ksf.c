@@ -31,7 +31,7 @@ extern kvs_hash_t global_hash;
  * @param output 存储编码结果的缓冲区
  * @return 编码后占用的字节数
  */
-int encode_vlq(uint64_t value, uint8_t *output) {
+static int encode_vlq(uint64_t value, uint8_t *output) {
     int count = 0;
     do {
         output[count] = value & 0x7F;
@@ -50,7 +50,7 @@ int encode_vlq(uint64_t value, uint8_t *output) {
  * @param value 存储解码结果的变量
  * @return 解码后占用的字节数
  */
-int decode_vlq(const uint8_t *input, uint64_t *value) {
+static int decode_vlq(const uint8_t *input, uint64_t *value) {
     int count = 0;
     *value = 0;
     int shift = 0;
@@ -250,16 +250,8 @@ int ksfSave(const char *filename) {
 int ksfSaveBackground() {
     pid_t pid = fork();
     if (pid == 0) {
-        // 子进程：生成时间戳
-        time_t now = time(0);
-        struct tm *tm = localtime(&now);
-        char filename[256];
-        snprintf(filename, sizeof(filename), "dump-%04d%02d%02d-%02d%02d%02d.ksf",
-                 tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday,
-                 tm->tm_hour, tm->tm_min, tm->tm_sec);
-
-        // 在子进程中执行KSF保存
-        int result = ksfSave(filename);
+        // 在子进程中执行KSF保存到固定文件名
+        int result = ksfSave("dump.ksf");
         exit(result == 0 ? 0 : 1); // 子进程退出码表示成功或失败
     } else if (pid > 0) {
         // 父进程

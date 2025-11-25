@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <assert.h>
 #include <stddef.h>
+#include <stdint.h>
 
 
 #define NETWORK_REACTOR 	0
@@ -182,6 +183,11 @@ int ksfSaveBackground(void);  // 后台保存KSF快照
 int ksfSaveBackgroundFixed(void);  // 后台保存KSF快照到固定文件名
 int ksfLoad(const char *filename);  // 加载KSF快照
 char* getLatestKsfFile(void);  // 获取最新的KSF文件
+
+// AOF相关函数声明
+void appendToAofBuffer(int type, const char* key, const char* value);  // 添加到AOF缓冲区
+int flushAofBuffer(void);  // 刷新AOF缓冲区
+int start_aof_fsync_process(void);  // 启动AOF同步进程
 
 #endif
 

@@ -66,90 +66,6 @@ extern kvs_hash_t global_hash;
 char aof_buf[AOF_BUF_SIZE] = {0};
 int aof_len = 0;
 
-// 用于同步的互斥锁和条件变量
-pthread_mutex_t aof_mutex = PTHREAD_MUTEX_INITIALIZER;
-// sem_t aof_sem;  // 用于通知fsync线程
-
-/**
- * 将命令追加到AOF缓冲区
- * @param cmd_str 命令字符串
- */
-void appendToAofBuffer(const char* cmd_str) {
-    int len = strlen(cmd_str);
-
-    pthread_mutex_lock(&aof_mutex);
-
-    // 检查是否有足够的空间
-    if (aof_len + len >= AOF_BUF_SIZE) {
-        // 如果缓冲区不够，写入文件并清空
-        int fd = open("appendonly.aof", O_WRONLY | O_CREAT | O_APPEND, 0644);
-        if (fd != -1) {
-            write(fd, aof_buf, aof_len);
-            fsync(fd);
-            close(fd);
-        }
-        aof_len = 0;
-    }
-
-    // 如果命令长度超过缓冲区大小，则分块处理
-    if (len >= AOF_BUF_SIZE) {
-        int fd = open("appendonly.aof", O_WRONLY | O_CREAT | O_APPEND, 0644);
-        if (fd != -1) {
-            write(fd, cmd_str, len);
-            fsync(fd);
-            close(fd);
-        }
-        pthread_mutex_unlock(&aof_mutex);
-        return;
-    }
-
-    // 将命令追加到缓冲区
-    memcpy(aof_buf + aof_len, cmd_str, len);
-    aof_len += len;
-
-    pthread_mutex_unlock(&aof_mutex);
-}
-
-/**
- * AOF同步线程 - 每秒将缓冲区内容写入磁盘
- */
-void* aof_sync_thread(void* arg) {
-    while(1) {
-        // 每秒执行一次
-        sleep(1);
-
-        pthread_mutex_lock(&aof_mutex);
-
-        // 将当前AOF缓冲区内容写入文件
-        if (aof_len > 0) {
-            int fd = open("appendonly.aof", O_WRONLY | O_CREAT | O_APPEND, 0644);
-            if (fd != -1) {
-                write(fd, aof_buf, aof_len);
-                fsync(fd);  // 强制同步到磁盘
-                close(fd);
-            }
-            aof_len = 0;  // 清空缓冲区
-        }
-
-        pthread_mutex_unlock(&aof_mutex);
-    }
-
-    return NULL;
-}
-
-/**
- * 启动AOF同步线程
- */
-int startAofSyncThread() {
-    pthread_t thread;
-    if (pthread_create(&thread, NULL, aof_sync_thread, NULL) != 0) {
-        return -1;
-    }
-
-    printf("AOF同步线程已启动\n");
-    return 0;
-}
-
 // 不直接使用系统调用(第三方接口)
 // 跨平台的时候，只需要修改这个函数即可--> 可迭代
 void* kvs_calloc(size_t num, size_t size) { return calloc(num, size); }
@@ -297,8 +213,8 @@ int kvs_filter_protocol(char** tokens, int count, char* response) {
       if (ret < 0) {
         length = sprintf(response, "ERROR\r\n");
       } else if (ret == 0) {
-        // 记录SET操作到日志
-        kvs_persist_log_operation("SET", key, value);
+        // 记录SET操作到AOF缓冲区
+        appendToAofBuffer(1, key, value); // CMD_SET = 1
         length = sprintf(response, "OK\r\n");
       } else {
         length = sprintf(response, "Key has existed\r\n");
@@ -317,8 +233,8 @@ int kvs_filter_protocol(char** tokens, int count, char* response) {
       if (ret < 0) {
         length = sprintf(response, "ERROR\r\n");
       } else if (ret == 0) {
-        // 记录DEL操作到日志
-        kvs_persist_log_operation("DEL", key, NULL);
+        // 记录DEL操作到AOF缓冲区
+        appendToAofBuffer(3, key, NULL); // CMD_DEL = 3
         length = sprintf(response, "OK\r\n");
       } else {
         length = sprintf(response, "Not Exist\r\n");
@@ -329,8 +245,8 @@ int kvs_filter_protocol(char** tokens, int count, char* response) {
       if (ret < 0) {
         length = sprintf(response, "ERROR\r\n");
       } else if (ret == 0) {
-        // 记录MOD操作到日志
-        kvs_persist_log_operation("MOD", key, value);
+        // 记录MOD操作到AOF缓冲区
+        appendToAofBuffer(2, key, value); // CMD_MOD = 2
         length = sprintf(response, "OK\r\n");
       } else {
         length = sprintf(response, "Not Exist\r\n");
@@ -354,7 +270,7 @@ int kvs_filter_protocol(char** tokens, int count, char* response) {
         if (ret < 0) {
           length = sprintf(response, "ERROR\r\n");
         } else if (ret == 0) {
-          kvs_persist_log_operation("RSET", key, value);
+          appendToAofBuffer(1, key, value); // CMD_SET = 1
           length = sprintf(response, "OK\r\n");
         } else {
           length = sprintf(response, "Key has existed\r\n");
@@ -373,7 +289,7 @@ int kvs_filter_protocol(char** tokens, int count, char* response) {
         if (ret < 0) {
           length = sprintf(response, "ERROR\r\n");
         } else if (ret == 0) {
-          kvs_persist_log_operation("RDEL", key, NULL);
+          appendToAofBuffer(3, key, NULL); // CMD_DEL = 3
           length = sprintf(response, "OK\r\n");
         } else {
           length = sprintf(response, "Not Exist\r\n");
@@ -384,7 +300,7 @@ int kvs_filter_protocol(char** tokens, int count, char* response) {
         if (ret < 0) {
           length = sprintf(response, "ERROR\r\n");
         } else if (ret == 0) {
-          kvs_persist_log_operation("RMOD", key, value);
+          appendToAofBuffer(2, key, value); // CMD_MOD = 2
           length = sprintf(response, "OK\r\n");
         } else {
           length = sprintf(response, "Not Exist\r\n");
@@ -408,7 +324,7 @@ int kvs_filter_protocol(char** tokens, int count, char* response) {
       if (ret < 0) {
         length = sprintf(response, "ERROR\r\n");
       } else if (ret == 0) {
-        kvs_persist_log_operation("HSET", key, value);
+        appendToAofBuffer(1, key, value); // CMD_SET = 1
         length = sprintf(response, "OK\r\n");
       } else {
         length = sprintf(response, "Key has existed\r\n");
@@ -427,7 +343,7 @@ int kvs_filter_protocol(char** tokens, int count, char* response) {
       if (ret < 0) {
         length = sprintf(response, "ERROR\r\n");
       } else if (ret == 0) {
-        kvs_persist_log_operation("HDEL", key, NULL);
+        appendToAofBuffer(3, key, NULL); // CMD_DEL = 3
         length = sprintf(response, "OK\r\n");
       } else {
         length = sprintf(response, "Not Exist\r\n");
@@ -438,7 +354,7 @@ int kvs_filter_protocol(char** tokens, int count, char* response) {
       if (ret < 0) {
         length = sprintf(response, "ERROR\r\n");
       } else if (ret == 0) {
-        kvs_persist_log_operation("HMOD", key, value);
+        appendToAofBuffer(2, key, value); // CMD_MOD = 2
         length = sprintf(response, "OK\r\n");
       } else {
         length = sprintf(response, "Not Exist\r\n");
@@ -456,6 +372,18 @@ int kvs_filter_protocol(char** tokens, int count, char* response) {
       break;
 
 #endif
+
+    // 添加SAVE和BGSAVE命令处理
+    case KVS_CMD_SAVE:
+        // 同步保存快照
+        ksfSave("dump.ksf");
+        length = sprintf(response, "OK\r\n");
+        break;
+    case KVS_CMD_BGSAVE:
+        // 异步保存快照
+        ksfSaveBackgroundFixed();
+        length = sprintf(response, "Background saving started\r\n");
+        break;
 
     default:
       assert(0);
@@ -479,6 +407,28 @@ int get_command_separator_type(char* msg, int position, int msg_len) {
   } else {
     return 0; // 并行执行
   }
+}
+
+/*
+ * 检查命令是否为写操作
+ * @param command 命令名称
+ * @return 1表示写操作，0表示非写操作
+ */
+int is_write_command(const char* command) {
+    if (command == NULL) return 0;
+
+    if (strcmp(command, "SET") == 0 ||
+        strcmp(command, "RSET") == 0 ||
+        strcmp(command, "HSET") == 0 ||
+        strcmp(command, "MOD") == 0 ||
+        strcmp(command, "RMOD") == 0 ||
+        strcmp(command, "HMOD") == 0 ||
+        strcmp(command, "DEL") == 0 ||
+        strcmp(command, "RDEL") == 0 ||
+        strcmp(command, "HDEL") == 0) {
+        return 1;
+    }
+    return 0;
 }
 
 /*
@@ -553,6 +503,13 @@ int kvs_process_multicmd(char* msg, int length, char* response) {
       total_len += sprintf(response + total_len, "ERROR: Command execution failed: %s\r\n", commands[i]);
     } else {
       total_len += sprintf(response + total_len, "%s", single_response);
+    }
+
+    // 检查是否为写操作，如果是则增加计数
+    if (count > 0 && tokens[0] != NULL) {
+        if (is_write_command(tokens[0])) {
+            changes_since_last_save++;
+        }
     }
 
     // 如果是&&操作符，且上一个命令失败，则跳过后续命令
@@ -754,6 +711,9 @@ int main(int argc, char* argv[]) {
   }
 
   init_kvengine();
+
+  // 启动AOF同步后台线程
+  start_aof_fsync_process();
 
 #if (NETWORK_SELECT == NETWORK_REACTOR)
   reactor_start(port, kvs_protocol);  //
