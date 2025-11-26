@@ -13,7 +13,7 @@
 #define EVENT_WRITE		2
 
 extern int kvs_protocol(char *msg, int length, char *response);
-
+extern int before_sleep();
 
 
 struct conn_info {
@@ -170,7 +170,7 @@ int proactor_start(unsigned short port, msg_handler handler) {
 					
 					set_event_send(&ring, result.fd, response, ret, 0);
 				}
-			}  else if (result.event == EVENT_WRITE) {  //
+			}  else if (result.event == EVENT_WRITE) {
 
 				int ret = entries->res;
 				//printf("set_event_send ret: %d, %s\n", ret, buffer);
@@ -182,6 +182,7 @@ int proactor_start(unsigned short port, msg_handler handler) {
 		}
 
 		io_uring_cq_advance(&ring, nready);
+    before_sleep();
 	}
 
 }

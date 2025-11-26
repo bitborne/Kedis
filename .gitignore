@@ -13,6 +13,7 @@
 # === 数据 ===
 *.ksf
 *.aof
+*.dat
 
 # === 构建输出目录 ===
 # 忽略顶层产物目录，但保留源码里的 src/bin/
@@ -23,3 +24,8 @@
 # === 根目录无后缀可执行文件 ===
 /testcase
 /kvstore
+**/.vscode/
+*.excalidraw
+*.default
+*.old
+/prompt.md

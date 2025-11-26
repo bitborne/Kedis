@@ -23,12 +23,33 @@ static int aof_fd = -1;
 static pthread_t fsync_thread;
 static int fsync_running = 0;
 static time_t last_fsync_time = 0;
+static time_t last_write_time = 0;
 
-// 命令码定义
-#define CMD_SET 1
-#define CMD_MOD 2
-#define CMD_DEL 3
-#define CMD_SNAP 4  // 快照记录
+// 阈值：超过此大小的命令将绕过缓冲区直接写入
+#define LARGE_CMD_THRESHOLD (AOF_BUF_SIZE / 2)
+
+/**
+ * 安全写入函数 - 确保所有数据都被写入
+ * @param fd 文件描述符
+ * @param buf 要写入的数据缓冲区
+ * @param count 要写入的字节数
+ * @return 成功返回写入的字节数，失败返回-1
+ */
+static ssize_t write_all(int fd, const void *buf, size_t count) {
+    const char *p = buf;
+    size_t written = 0;
+    while (written < count) {
+        ssize_t n = write(fd, p + written, count - written);
+        if (n <= 0) {
+            if (n == -1 && errno == EINTR) continue;  // 被中断，继续写入
+            return -1;  // 错误
+        }
+        written += n;
+    }
+    last_write_time = time(NULL);
+    return (ssize_t)written;
+}
+
 
 /**
  * 将变长整数编码为VLQ（Variable Length Quantity）格式
@@ -70,16 +91,17 @@ static int decode_vlq(const uint8_t *input, uint64_t *value) {
 
 /**
  * 将命令追加到AOF缓冲区（使用新的二进制格式）
+ * 更新：实现混合写入策略（小命令缓冲+大命令直写）
  * @param type 命令类型: CMD_SET, CMD_MOD, CMD_DEL
  * @param key 键
  * @param value 值
  */
 void appendToAofBuffer(int type, const char* key, const char* value) {
-    if (type != CMD_DEL && (key == NULL || value == NULL)) return;
-    if (type == CMD_DEL && key == NULL) return;
+    if (type != AOF_CMD_DEL && (key == NULL || value == NULL)) return;
+    if (type == AOF_CMD_DEL && key == NULL) return;
 
     int klen = key ? strlen(key) : 0;
-    int vlen = (value && type != CMD_DEL) ? strlen(value) : 0;
+    int vlen = (value && type != AOF_CMD_DEL) ? strlen(value) : 0;
 
     uint8_t vlq[16];
     int key_len_bytes = encode_vlq(klen, vlq);
@@ -87,9 +109,49 @@ void appendToAofBuffer(int type, const char* key, const char* value) {
 
     int total_needed = 1 + key_len_bytes + val_len_bytes + klen + vlen;
 
-    if (aof_len + total_needed >= AOF_BUF_SIZE) {
-        fprintf(stderr, "AOF缓冲区已满，无法追加命令\n");
+    // 检查是否为大命令，如果是则绕过缓冲区直接写入
+    if (total_needed >= LARGE_CMD_THRESHOLD) {
+      printf("大命令直接写入\n");
+        // 先刷新缓冲区，确保命令顺序一致
+        flushAofBuffer();
+
+        // 构造命令数据
+        char cmd_data[AOF_BUF_SIZE];  // 使用足够大的缓冲区来构建整个命令
+        int pos = 0;
+
+        // 添加命令码（1字节）
+        cmd_data[pos++] = (uint8_t)type;
+
+        // 添加键长度（VLQ编码）
+        memcpy(cmd_data + pos, vlq, key_len_bytes);
+        pos += key_len_bytes;
+
+        // 添加值长度（VLQ编码）
+        memcpy(cmd_data + pos, vlq + key_len_bytes, val_len_bytes);
+        pos += val_len_bytes;
+
+        // 添加键内容
+        if (klen > 0) {
+            memcpy(cmd_data + pos, key, klen);
+            pos += klen;
+        }
+
+        // 添加值内容
+        if (vlen > 0) {
+            memcpy(cmd_data + pos, value, vlen);
+            pos += vlen;
+        }
+
+        // 直接写入大命令
+        if (write_all(aof_fd, cmd_data, pos) < 0) {
+            fprintf(stderr, "AOF错误：无法写入大命令: %s\n", strerror(errno));
+        }
         return;
+    }
+
+    // 小命令：尝试追加到缓冲区
+    if (aof_len + total_needed > AOF_BUF_SIZE) {
+        flushAofBuffer(); // 缓冲区满，先flush
     }
 
     // 添加命令码（1字节）
@@ -118,18 +180,17 @@ void appendToAofBuffer(int type, const char* key, const char* value) {
 
 /**
  * 将AOF缓冲区写入文件（在事件循环结束前调用）
+ * 更新：使用write_all确保所有数据都写入，简化逻辑
  */
 int flushAofBuffer() {
     if (aof_len > 0 && aof_fd != -1) {
-        ssize_t nwritten = write(aof_fd, aof_buf, aof_len);
-        if (nwritten == -1) {
+        ssize_t result = write_all(aof_fd, aof_buf, aof_len);
+        if (result == -1) {
             fprintf(stderr, "错误：写入AOF文件失败: %s\n", strerror(errno));
             return -1;
-        } else if (nwritten > 0) {
-            // 更新aof_buf，保留未写入的部分
-            memmove(aof_buf, aof_buf + nwritten, aof_len - nwritten);
-            aof_len -= nwritten;
         }
+        // 成功写入后，重置缓冲区
+        aof_len = 0;
     }
     return 0;
 }
@@ -163,9 +224,9 @@ void* fsync_thread_func(void* arg) {
  */
 int start_aof_fsync_process() {
     // 打开AOF文件
-    aof_fd = open("appendonly.aof", O_WRONLY | O_CREAT | O_APPEND, 0644);
+    aof_fd = open("appendonly.ksf", O_WRONLY | O_CREAT | O_APPEND, 0644);
     if (aof_fd == -1) {
-        fprintf(stderr, "错误：无法打开AOF文件 appendonly.aof\n");
+        fprintf(stderr, "错误：无法打开AOF文件 appendonly.ksf\n");
         return -1;
     }
 
@@ -183,4 +244,9 @@ int start_aof_fsync_process() {
 
     printf("AOF FSYNC后台线程已启动\n");
     return 0;
+}
+
+void before_sleep() {
+    // 刷新AOF缓冲区到文件
+    flushAofBuffer();
 }

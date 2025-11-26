@@ -30,8 +30,15 @@
 #define INCREMENTAL_PERSISTENCE 1
 
 // AOF相关定义
-#define AOF_BUF_SIZE (256*1024)  // 1MB AOF缓冲区
+#define AOF_BUF_SIZE (1024*1024)  // 1MB AOF缓冲区
+// 应该是网络框架的问题, 导致命令解析部分在遇到大文件的情况下会出错
+
 #define AOF_SYNC_INTERVAL 1  // AOF同步间隔（秒）
+
+// AOF命令码定义
+#define AOF_CMD_SET 1
+#define AOF_CMD_MOD 2
+#define AOF_CMD_DEL 3
 
 typedef int (*msg_handler)(char *msg, int length, char *response);
 
@@ -163,31 +170,30 @@ void kvs_hash_save_snapshot(kvs_hash_t *hash, FILE *file);
 
 #endif
 
-// 持久化模式定义
-#define PERSIST_MODE_INCREMENTAL 0
-#define PERSIST_MODE_SNAPSHOT    1
+// // 持久化模式定义
+// #define PERSIST_MODE_INCREMENTAL 0
+// #define PERSIST_MODE_SNAPSHOT    1
 
-// 持久化相关函数声明
-int kvs_persist_init(int mode);  // 初始化持久化功能，mode: 0-增量, 1-全量
-int kvs_persist_log_operation(const char *operation, const char *key, const char *value);  // 记录操作日志
-int kvs_persist_replay_log(void);  // 回放日志
-int kvs_persist_close(void);  // 关闭持久化功能，确保日志写入完成
+// // 持久化相关函数声明
+// int kvs_persist_init(int mode);  // 初始化持久化功能，mode: 0-增量, 1-全量
+// int kvs_persist_log_operation(const char *operation, const char *key, const char *value);  // 记录操作日志
+// int kvs_persist_replay_log(void);  // 回放日志
+// int kvs_persist_close(void);  // 关闭持久化功能，确保日志写入完成
 
-// 全量持久化相关函数声明
-int kvs_snapshot_save(void);  // 保存数据快照
-int kvs_snapshot_load(void);  // 加载数据快照
+// // 全量持久化相关函数声明
+// int kvs_snapshot_save(void);  // 保存数据快照
+// int kvs_snapshot_load(void);  // 加载数据快照
 
 // KSF持久化相关函数声明
 int ksfSave(const char *filename);  // 保存KSF快照
 int ksfSaveBackground(void);  // 后台保存KSF快照
-int ksfSaveBackgroundFixed(void);  // 后台保存KSF快照到固定文件名
 int ksfLoad(const char *filename);  // 加载KSF快照
-char* getLatestKsfFile(void);  // 获取最新的KSF文件
 
 // AOF相关函数声明
 void appendToAofBuffer(int type, const char* key, const char* value);  // 添加到AOF缓冲区
 int flushAofBuffer(void);  // 刷新AOF缓冲区
-int start_aof_fsync_process(void);  // 启动AOF同步进程
+int start_aof_fsync_process(void);  // 启动AOF同步线程
+void before_sleep(void);  // 事件循环前的处理函数
 
 #endif
 

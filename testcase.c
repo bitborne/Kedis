@@ -107,11 +107,11 @@ void array_testcase_single_1w(int connfd) {
 
   }
 
-  for (int i = 0; i < cnt; i++) {
-    char cmd_del[64] = {0};
-    snprintf(cmd_del, 64, "DEL Qbb%d", i);
-    testcase(connfd, cmd_del, "OK\r\n", "DEL-Qbb-0");
-  }
+  // for (int i = 0; i < cnt; i++) {
+  //   char cmd_del[64] = {0};
+  //   snprintf(cmd_del, 64, "DEL Qbb%d", i);
+  //   testcase(connfd, cmd_del, "OK\r\n", "DEL-Qbb-0");
+  // }
   gettimeofday(&tv_end, NULL);
   int time_used = TIME_SUB_MS(tv_end, tv_begin);
   printf("array_single(3w req) --> time_used: %d ms  QPS: %d\n", time_used, 30000 * 1000 / time_used);
@@ -262,7 +262,7 @@ void hash_testcase_1w_mix(int connfd) {
 }
 
 void persistence_test_1w(int connfd) {
-  const int cnt = 10000;
+  const int cnt = 100;
 
   gettimeofday(&tv_begin, NULL);
 

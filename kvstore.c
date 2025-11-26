@@ -80,7 +80,7 @@ const char* command[] = {"SET",  "GET",  "DEL",  "MOD",  "EXIST",
                          "SAVE", "BGSAVE"};  // 添加SAVE和BGSAVE命令
 
 // 全局变量存储持久化模式和自动保存参数
-static int g_persist_mode = PERSIST_MODE_INCREMENTAL;
+// static int g_persist_mode = PERSIST_MODE_INCREMENTAL;
 
 // 自动保存参数：save seconds changes
 static int save_params_seconds = 300;      // 5分钟
@@ -192,7 +192,6 @@ int kvs_split_multicmd(char* msg, char* commands[], int max_commands) {
 
 int kvs_filter_protocol(char** tokens, int count, char* response) {
   if (tokens[0] == NULL || count == 0 || response == NULL) return -1;
-
   int cmd = KVS_CMD_START;
   for (cmd = KVS_CMD_START; cmd < KVS_CMD_COUNT; cmd++) {
     if (strcmp(tokens[0], command[cmd]) == 0) {
@@ -214,7 +213,7 @@ int kvs_filter_protocol(char** tokens, int count, char* response) {
         length = sprintf(response, "ERROR\r\n");
       } else if (ret == 0) {
         // 记录SET操作到AOF缓冲区
-        appendToAofBuffer(1, key, value); // CMD_SET = 1
+        appendToAofBuffer(AOF_CMD_SET, key, value); // CMD_SET = 1
         length = sprintf(response, "OK\r\n");
       } else {
         length = sprintf(response, "Key has existed\r\n");
@@ -234,7 +233,7 @@ int kvs_filter_protocol(char** tokens, int count, char* response) {
         length = sprintf(response, "ERROR\r\n");
       } else if (ret == 0) {
         // 记录DEL操作到AOF缓冲区
-        appendToAofBuffer(3, key, NULL); // CMD_DEL = 3
+        appendToAofBuffer(AOF_CMD_DEL, key, NULL); // AOF_CMD_DEL = 3
         length = sprintf(response, "OK\r\n");
       } else {
         length = sprintf(response, "Not Exist\r\n");
@@ -246,7 +245,7 @@ int kvs_filter_protocol(char** tokens, int count, char* response) {
         length = sprintf(response, "ERROR\r\n");
       } else if (ret == 0) {
         // 记录MOD操作到AOF缓冲区
-        appendToAofBuffer(2, key, value); // CMD_MOD = 2
+        appendToAofBuffer(AOF_CMD_MOD, key, value); // AOF_CMD_MOD = 2
         length = sprintf(response, "OK\r\n");
       } else {
         length = sprintf(response, "Not Exist\r\n");
@@ -270,7 +269,7 @@ int kvs_filter_protocol(char** tokens, int count, char* response) {
         if (ret < 0) {
           length = sprintf(response, "ERROR\r\n");
         } else if (ret == 0) {
-          appendToAofBuffer(1, key, value); // CMD_SET = 1
+          appendToAofBuffer(AOF_CMD_SET, key, value); // CMD_SET = 1
           length = sprintf(response, "OK\r\n");
         } else {
           length = sprintf(response, "Key has existed\r\n");
@@ -289,7 +288,7 @@ int kvs_filter_protocol(char** tokens, int count, char* response) {
         if (ret < 0) {
           length = sprintf(response, "ERROR\r\n");
         } else if (ret == 0) {
-          appendToAofBuffer(3, key, NULL); // CMD_DEL = 3
+          appendToAofBuffer(AOF_CMD_DEL, key, NULL); // CMD_DEL = 3
           length = sprintf(response, "OK\r\n");
         } else {
           length = sprintf(response, "Not Exist\r\n");
@@ -300,7 +299,7 @@ int kvs_filter_protocol(char** tokens, int count, char* response) {
         if (ret < 0) {
           length = sprintf(response, "ERROR\r\n");
         } else if (ret == 0) {
-          appendToAofBuffer(2, key, value); // CMD_MOD = 2
+          appendToAofBuffer(AOF_CMD_MOD, key, value); // CMD_MOD = 2
           length = sprintf(response, "OK\r\n");
         } else {
           length = sprintf(response, "Not Exist\r\n");
@@ -324,7 +323,7 @@ int kvs_filter_protocol(char** tokens, int count, char* response) {
       if (ret < 0) {
         length = sprintf(response, "ERROR\r\n");
       } else if (ret == 0) {
-        appendToAofBuffer(1, key, value); // CMD_SET = 1
+        appendToAofBuffer(AOF_CMD_SET, key, value); // CMD_SET = 1
         length = sprintf(response, "OK\r\n");
       } else {
         length = sprintf(response, "Key has existed\r\n");
@@ -343,7 +342,7 @@ int kvs_filter_protocol(char** tokens, int count, char* response) {
       if (ret < 0) {
         length = sprintf(response, "ERROR\r\n");
       } else if (ret == 0) {
-        appendToAofBuffer(3, key, NULL); // CMD_DEL = 3
+        appendToAofBuffer(AOF_CMD_DEL, key, NULL); // CMD_DEL = 3
         length = sprintf(response, "OK\r\n");
       } else {
         length = sprintf(response, "Not Exist\r\n");
@@ -354,7 +353,7 @@ int kvs_filter_protocol(char** tokens, int count, char* response) {
       if (ret < 0) {
         length = sprintf(response, "ERROR\r\n");
       } else if (ret == 0) {
-        appendToAofBuffer(2, key, value); // CMD_MOD = 2
+        appendToAofBuffer(AOF_CMD_MOD, key, value); // CMD_MOD = 2
         length = sprintf(response, "OK\r\n");
       } else {
         length = sprintf(response, "Not Exist\r\n");
@@ -381,7 +380,7 @@ int kvs_filter_protocol(char** tokens, int count, char* response) {
         break;
     case KVS_CMD_BGSAVE:
         // 异步保存快照
-        ksfSaveBackgroundFixed();
+        ksfSaveBackground();
         length = sprintf(response, "Background saving started\r\n");
         break;
 
@@ -550,7 +549,7 @@ void check_and_perform_autosave() {
         changes_since_last_save = 0; // 重置变化计数
 
         // 执行后台保存
-        ksfSaveBackgroundFixed();
+        ksfSaveBackground();
     }
 }
 
@@ -561,7 +560,7 @@ void check_and_perform_autosave() {
  * @return : length of response
  */
 
- int kvs_protocol(char* rmsg, int length, char* response) {
+int kvs_protocol(char* rmsg, int length, char* response) {
   if (rmsg == NULL || length == 0 || response == NULL) return -1;
 
   // 确保消息以null结尾以便于字符串操作
@@ -601,15 +600,7 @@ void check_and_perform_autosave() {
 
     // 检查是否为写操作（SET、MOD、DEL等），如果是则增加计数
     if (count > 0 && tokens[0] != NULL) {
-        if (strcmp(tokens[0], "SET") == 0 ||
-            strcmp(tokens[0], "RSET") == 0 ||
-            strcmp(tokens[0], "HSET") == 0 ||
-            strcmp(tokens[0], "MOD") == 0 ||
-            strcmp(tokens[0], "RMOD") == 0 ||
-            strcmp(tokens[0], "HMOD") == 0 ||
-            strcmp(tokens[0], "DEL") == 0 ||
-            strcmp(tokens[0], "RDEL") == 0 ||
-            strcmp(tokens[0], "HDEL") == 0) {
+        if (is_write_command(tokens[0])) {
             changes_since_last_save++;
         }
     }
@@ -624,8 +615,8 @@ void check_and_perform_autosave() {
 
 
 int init_kvengine(void) {
-  // 首先初始化持久化功能
-  kvs_persist_init(g_persist_mode);
+  // // 首先初始化持久化功能
+  // kvs_persist_init(g_persist_mode);
 
 #if ENABLE_ARRAY
   memset(&global_array, 0, sizeof(kvs_array_t));
@@ -643,20 +634,23 @@ int init_kvengine(void) {
 #endif
 
   // 在数据结构初始化完成之后，根据模式加载数据
-  if (g_persist_mode == PERSIST_MODE_INCREMENTAL) {
-    kvs_persist_replay_log();
-  } else if (g_persist_mode == PERSIST_MODE_SNAPSHOT) {
-    kvs_snapshot_load();
-  }
+  // if (g_persist_mode == PERSIST_MODE_INCREMENTAL) {
+  //   kvs_persist_replay_log();
+  // } else if (g_persist_mode == PERSIST_MODE_SNAPSHOT) {
+  //   kvs_snapshot_load();
+  // }
 
   return 0;
 }
 
 void dest_kvengine(void) {
   // 根据模式保存数据
-  if (g_persist_mode == PERSIST_MODE_SNAPSHOT) {
-    kvs_snapshot_save();
-  }
+  // if (g_persist_mode == PERSIST_MODE_SNAPSHOT) {
+  //   kvs_snapshot_save();
+  // }
+
+  // 在程序退出前保存快照
+  ksfSave("dump.ksf");
 
 #if ENABLE_ARRAY
   kvs_array_destroy(&global_array);
@@ -668,8 +662,8 @@ void dest_kvengine(void) {
   kvs_hash_destroy(&global_hash);
 #endif
 
-  // 关闭持久化功能
-  kvs_persist_close();
+  // // 关闭持久化功能
+  // kvs_persist_close();
 }
 
 
@@ -685,21 +679,21 @@ int main(int argc, char* argv[]) {
 
   int port = atoi(argv[1]);
 
-  // 解析持久化模式参数
-  if (argc == 3) {
-    if (strcmp(argv[2], "log") == 0) {
-      g_persist_mode = PERSIST_MODE_INCREMENTAL;
-    } else if (strcmp(argv[2], "snap") == 0) {
-      g_persist_mode = PERSIST_MODE_SNAPSHOT;
-    } else {
-      printf("错误：未知的持久化模式 '%s'\n", argv[2]);
-      printf("用法: %s <port> [log|snap]\n", argv[0]);
-      return -1;
-    }
-  } else {
-    // 默认使用增量模式
-    g_persist_mode = PERSIST_MODE_INCREMENTAL;
-  }
+  // // 解析持久化模式参数
+  // if (argc == 3) {
+  //   if (strcmp(argv[2], "log") == 0) {
+  //     g_persist_mode = PERSIST_MODE_INCREMENTAL;
+  //   } else if (strcmp(argv[2], "snap") == 0) {
+  //     g_persist_mode = PERSIST_MODE_SNAPSHOT;
+  //   } else {
+  //     printf("错误：未知的持久化模式 '%s'\n", argv[2]);
+  //     printf("用法: %s <port> [log|snap]\n", argv[0]);
+  //     return -1;
+  //   }
+  // } else {
+  //   // 默认使用增量模式
+  //   g_persist_mode = PERSIST_MODE_INCREMENTAL;
+  // }
 
   // 注册信号处理器，捕获SIGINT (Ctrl+C) 和 SIGTERM
   signal(SIGINT, signal_handler);

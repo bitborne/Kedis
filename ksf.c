@@ -25,6 +25,8 @@ extern kvs_rbtree_t global_rbtree;
 extern kvs_hash_t global_hash;
 #endif
 
+
+
 /**
  * 将变长整数编码为VLQ（Variable Length Quantity）格式
  * @param value 要编码的值
@@ -264,54 +266,7 @@ int ksfSaveBackground() {
     }
 }
 
-/**
- * 获取最新的KSF快照文件
- * @return 最新快照文件名，如果不存在则返回NULL（需要手动释放）
- */
-char* getLatestKsfFile() {
-    DIR *dir;
-    struct dirent *entry;
-    char *latest_file = NULL;
-    time_t latest_time = 0;
 
-    dir = opendir(".");
-    if (dir == NULL) {
-        return NULL;
-    }
-
-    while ((entry = readdir(dir)) != NULL) {
-        if (strncmp(entry->d_name, "dump-", 5) == 0 &&
-            strstr(entry->d_name, ".ksf") != NULL) {
-
-            // 解析文件名中的时间戳
-            int year, month, day, hour, minute, second;
-            if (sscanf(entry->d_name, "dump-%4d%2d%2d-%2d%2d%2d.ksf",
-                      &year, &month, &day, &hour, &minute, &second) == 6) {
-
-                struct tm tm_time = {0};
-                tm_time.tm_year = year - 1900;
-                tm_time.tm_mon = month - 1;
-                tm_time.tm_mday = day;
-                tm_time.tm_hour = hour;
-                tm_time.tm_min = minute;
-                tm_time.tm_sec = second;
-
-                time_t file_time = mktime(&tm_time);
-                if (file_time > latest_time) {
-                    latest_time = file_time;
-                    if (latest_file) {
-                        free(latest_file);
-                    }
-                    latest_file = malloc(strlen(entry->d_name) + 1);
-                    strcpy(latest_file, entry->d_name);
-                }
-            }
-        }
-    }
-
-    closedir(dir);
-    return latest_file;
-}
 
 /**
  * 从KSF文件加载数据
@@ -405,23 +360,4 @@ int ksfLoad(const char *filename) {
     return result;
 }
 
-/**
- * 后台保存KSF快照到固定文件名
- * @return 成功返回0，失败返回-1
- */
-int ksfSaveBackgroundFixed() {
-    pid_t pid = fork();
-    if (pid == 0) {
-        // 在子进程中执行KSF保存到固定文件名
-        int result = ksfSave("dump.ksf"); // 使用固定文件名
-        exit(result == 0 ? 0 : 1); // 子进程退出码表示成功或失败
-    } else if (pid > 0) {
-        // 父进程
-        printf("BGSAVE子进程已启动，PID: %d\n", pid);
-        return 0; // 父进程立即返回
-    } else {
-        // fork失败
-        fprintf(stderr, "错误：fork BGSAVE进程失败\n");
-        return -1;
-    }
-}
+
