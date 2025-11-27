@@ -57,7 +57,7 @@ __thread int current_processing_fd = -1;
 char aof_buf[AOF_BUF_SIZE] = {0};
 int aof_len = 0;
 extern const char* aof_filename;
-const char* snap_filename = "dump.ksf";
+const char* snap_filename = "./data/dump.ksf";
 
 // 不直接使用系统调用(第三方接口)
 // 跨平台的时候，只需要修改这个函数即可--> 可迭代
@@ -78,6 +78,8 @@ static int save_params_seconds = 300;      // 5分钟
 static int save_params_changes = 100;      // 100次变化
 static time_t last_save_time = 0;          // 上次保存时间
 static int changes_since_last_save = 0;    // 自上次保存以来的变化次数
+
+extern replication_state_t replication_info;
 
 /*
  * 解析单条命令的token
@@ -497,7 +499,7 @@ int init_kvengine(void) {
 }
 
 void dest_kvengine(void) {
-  ksfSave("dump.ksf");
+  if (replication_info.is_master) ksfSave(snap_filename);
   kvs_main_destroy(&global_main_engine);
 }
 

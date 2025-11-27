@@ -3,6 +3,8 @@
     "time.h": "c",
     "kvstore.h": "c",
     "stat.h": "c",
-    "*.old": "c"
+    "*.old": "c",
+    "*.inc": "c",
+    "cassert": "c"
   }
 }

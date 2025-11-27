@@ -10,6 +10,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <sys/time.h>
+#include <unistd.h>
 
 #define MAX_MSG 1024
 #define TIME_SUB_MS(tv1, tv2)  ((tv1.tv_sec - tv2.tv_sec) * 1000 + (tv1.tv_usec - tv2.tv_usec) / 1000)
@@ -70,7 +71,8 @@ void testcase(int connfd, char* msg, char* pattern, char* casename) {
 
 }
 
-void array_testcase_mix(int connfd) {
+// base 
+void once_testcase_base(int connfd) {
   testcase(connfd, "SET Qbb Schatten", "OK\r\n", "SET-Qbb-0");
   testcase(connfd, "GET Qbb", "Schatten\r\n", "GET-Qbb-0");
   testcase(connfd, "MOD Qbb Cc", "OK\r\n", "MOD-Qbb-0");
@@ -83,21 +85,46 @@ void array_testcase_mix(int connfd) {
   testcase(connfd, "GET Qbb", "ERROR / Not Exist\r\n", "GET-Qbb-2");
   testcase(connfd, "DEL Qbb", "Not Exist\r\n", "DEL-Qbb-1");
   testcase(connfd, "DEL EveRything", "Not Exist\r\n", "DEL-Qbb-2");
-
   testcase(connfd, "SET Qbb", "ERROR\r\n", "SET-ERROR");
   testcase(connfd, "DEL", "ERROR\r\n", "DEL-ERROR");
   testcase(connfd, "MOD 1", "ERROR\r\n", "MOD-ERROR");
   testcase(connfd, "EXIST", "ERROR\r\n", "EXIST-ERROR");
 }
+void once_testcase_base_1w(int connfd) {
 
-void array_testcase_single_1w(int connfd) {
+  const int cnt = 10000;
+
+  gettimeofday(&tv_begin, NULL);
+  for (int i = 0; i < cnt; i++) {
+    once_testcase_base(connfd);
+  }
+  gettimeofday(&tv_end, NULL);
+  int time_used = TIME_SUB_MS(tv_end, tv_begin);
+  printf("once_testcase_base_1w (160w REQ) --> time_used: %d ms  QPS: %d\n", time_used, 160000 * 1000 / time_used);
+
+}
+
+void set_testcase_single_1w(int connfd) {
   gettimeofday(&tv_begin, NULL);
   const int cnt = 10000;
+
+  // SET 1w
   for (int i = 0; i < cnt; i++) {
     char cmd_set[64] = {0};
     snprintf(cmd_set, 64, "SET Qbb%d Schatten%d", i, i);
     testcase(connfd, cmd_set, "OK\r\n", "SET-Qbb-0");
   }
+  
+  gettimeofday(&tv_end, NULL);
+  int time_used = TIME_SUB_MS(tv_end, tv_begin);
+  printf("array_single(1w req) --> time_used: %d ms  QPS: %d\n", time_used, 10000 * 1000 / time_used);
+
+}
+void get_testcase_single_1w(int connfd) {
+  gettimeofday(&tv_begin, NULL);
+  const int cnt = 10000;
+
+  // GET 1w
   for (int i = 0; i < cnt; i++) {
     char cmd_get[64] = {0};
     char expect_get[64] = {0};
@@ -107,284 +134,178 @@ void array_testcase_single_1w(int connfd) {
 
   }
 
-  // for (int i = 0; i < cnt; i++) {
-  //   char cmd_del[64] = {0};
-  //   snprintf(cmd_del, 64, "DEL Qbb%d", i);
-  //   testcase(connfd, cmd_del, "OK\r\n", "DEL-Qbb-0");
-  // }
   gettimeofday(&tv_end, NULL);
   int time_used = TIME_SUB_MS(tv_end, tv_begin);
-  printf("array_single(3w req) --> time_used: %d ms  QPS: %d\n", time_used, 30000 * 1000 / time_used);
+  printf("array_single(1w req) --> time_used: %d ms  QPS: %d\n", time_used, 10000 * 1000 / time_used);
 
 }
-void rbtree_testcase_single_1w(int connfd) {
-
+void del_testcase_single_1w(int connfd) {
   gettimeofday(&tv_begin, NULL);
   const int cnt = 10000;
-  for (int i = 0; i < cnt; i++) {
-    char cmd_rset[64] = {0};
-    snprintf(cmd_rset, 64, "RSET Qbb%d Schatten%d", i, i);
-    testcase(connfd, cmd_rset, "OK\r\n", "RSET-Qbb-0");
-  }
-  for (int i = 0; i < cnt; i++) {
-    char cmd_rget[64] = {0};
-    char expect_rget[64] = {0};
-    snprintf(cmd_rget, 64, "RGET Qbb%d", i, i);
-    snprintf(expect_rget, 64, "Schatten%d\r\n", i);
-    testcase(connfd, cmd_rget, expect_rget, "RGET-Qbb-0");
 
-  }
 
   for (int i = 0; i < cnt; i++) {
-    char cmd_rdel[64] = {0};
-    snprintf(cmd_rdel, 64, "RDEL Qbb%d", i);
-    testcase(connfd, cmd_rdel, "OK\r\n", "RDEL-Qbb-0");
+    char cmd_del[64] = {0};
+    snprintf(cmd_del, 64, "DEL Qbb%d", i);
+    testcase(connfd, cmd_del, "OK\r\n", "DEL-Qbb-0");
   }
-
   gettimeofday(&tv_end, NULL);
   int time_used = TIME_SUB_MS(tv_end, tv_begin);
-  printf("rbtree_single(3w req) --> time_used: %d ms  QPS: %d\n", time_used, 30000 * 1000 / time_used);
+  printf("array_single(1w req) --> time_used: %d ms  QPS: %d\n", time_used, 10000 * 1000 / time_used);
+
 }
 
-
-
-void hash_testcase_single_1w(int connfd) {
-
-  gettimeofday(&tv_begin, NULL);
-  const int cnt = 10000;
-  for (int i = 0; i < cnt; i++) {
-    char cmd_hset[64] = {0};
-    snprintf(cmd_hset, 64, "HSET Qbb%d Schatten%d", i, i);
-    testcase(connfd, cmd_hset, "OK\r\n", "HSET-Qbb-0");
-  }
-  for (int i = 0; i < cnt; i++) {
-    char cmd_hget[64] = {0};
-    char expect_hget[64] = {0};
-    snprintf(cmd_hget, 64, "HGET Qbb%d", i, i);
-    snprintf(expect_hget, 64, "Schatten%d\r\n", i);
-    testcase(connfd, cmd_hget, expect_hget, "HGET-Qbb-0");
-
-  }
-
-  for (int i = 0; i < cnt; i++) {
-    char cmd_hdel[64] = {0};
-    snprintf(cmd_hdel, 64, "HDEL Qbb%d", i);
-    testcase(connfd, cmd_hdel, "OK\r\n", "HDEL-Qbb-0");
-  }
-
-  gettimeofday(&tv_end, NULL);
-  int time_used = TIME_SUB_MS(tv_end, tv_begin);
-  printf("hash_single(3w req) --> time_used: %d ms  QPS: %d\n", time_used, 30000 * 1000 / time_used);
-}
-
-
-void rbtree_testcase_mix(int connfd) {
-  testcase(connfd, "RSET Qbb Schatten", "OK\r\n", "RSET-Qbb-0");
-  testcase(connfd, "RGET Qbb", "Schatten\r\n", "RGET-Qbb-0");
-  testcase(connfd, "RMOD Qbb Cc", "OK\r\n", "RMOD-Qbb-0");
-  testcase(connfd, "RMOD Bqq Cc", "Not Exist\r\n", "RMOD-Qbb-1");
-  testcase(connfd, "RSET Qbb Schatten", "Key has existed\r\n", "RSET-Qbb-1");
-  testcase(connfd, "REXIST Qbb", "YES, Exist\r\n", "REXIST-Qbb-0");
-  testcase(connfd, "RGET Qbb", "Cc\r\n", "RGET-Qbb-1");
-  testcase(connfd, "RDEL Qbb", "OK\r\n", "RDEL-Qbb-0");
-  testcase(connfd, "REXIST Qbb", "NO, Not Exist\r\n", "REXIST-Qbb-1");
-  testcase(connfd, "RGET Qbb", "ERROR / Not Exist\r\n", "RGET-Qbb-2");
-  testcase(connfd, "RDEL Qbb", "Not Exist\r\n", "RDEL-Qbb-1");
-  testcase(connfd, "RDEL EveRything", "Not Exist\r\n", "RDEL-Qbb-2");
-
-  testcase(connfd, "RSET Qbb", "ERROR\r\n", "RSET-ERROR");
-  testcase(connfd, "RDEL", "ERROR\r\n", "RDEL-ERROR");
-  testcase(connfd, "RMOD 1", "ERROR\r\n", "RMOD-ERROR");
-  testcase(connfd, "REXIST", "ERROR\r\n", "REXIST-ERROR");
-}
-
-void hash_testcase_mix(int connfd) {
-  testcase(connfd, "HSET Qbb Schatten", "OK\r\n", "HSET-Qbb-0");
-  testcase(connfd, "HGET Qbb", "Schatten\r\n", "HGET-Qbb-0");
-  testcase(connfd, "HMOD Qbb Cc", "OK\r\n", "HMOD-Qbb-0");
-  testcase(connfd, "HMOD Bqq Cc", "Not Exist\r\n", "HMOD-Qbb-1");
-  testcase(connfd, "HSET Qbb Schatten", "Key has existed\r\n", "HSET-Qbb-1");
-  testcase(connfd, "HEXIST Qbb", "YES, Exist\r\n", "HEXIST-Qbb-0");
-  testcase(connfd, "HGET Qbb", "Cc\r\n", "HGET-Qbb-1");
-  testcase(connfd, "HDEL Qbb", "OK\r\n", "HDEL-Qbb-0");
-  testcase(connfd, "HEXIST Qbb", "NO, Not Exist\r\n", "HEXIST-Qbb-1");
-  testcase(connfd, "HGET Qbb", "ERROR / Not Exist\r\n", "HGET-Qbb-2");
-  testcase(connfd, "HDEL Qbb", "Not Exist\r\n", "HDEL-Qbb-1");
-  testcase(connfd, "HDEL EveRything", "Not Exist\r\n", "HDEL-Qbb-2");
-  testcase(connfd, "HSET Qbb", "ERROR\r\n", "HSET-ERROR");
-  testcase(connfd, "HDEL", "ERROR\r\n", "HDEL-ERROR");
-  testcase(connfd, "HMOD 1", "ERROR\r\n", "HMOD-ERROR");
-  testcase(connfd, "HEXIST", "ERROR\r\n", "HEXIST-ERROR");
-}
-
-
-void array_testcase_1w_mix(int connfd) {
-
+void persistence_set_del_1w(int connfd) {
   const int cnt = 10000;
 
   gettimeofday(&tv_begin, NULL);
-  for (int i = 0; i < cnt; i++) {
-    array_testcase_mix(connfd);
-  }
-  gettimeofday(&tv_end, NULL);
-  int time_used = TIME_SUB_MS(tv_end, tv_begin);
-  printf("array_testcase_1w (160w REQ) --> time_used: %d ms  QPS: %d\n", time_used, 160000 * 1000 / time_used);
-
-}
-
-void rbtree_testcase_1w_mix(int connfd) {
-
-  const int cnt = 10000;
-
-  gettimeofday(&tv_begin, NULL);
-  for (int i = 0; i < cnt; i++) {
-    rbtree_testcase_mix(connfd);
-  }
-  gettimeofday(&tv_end, NULL);
-  int time_used = TIME_SUB_MS(tv_end, tv_begin);
-  printf("rbtree_testcase_1w (160w REQ) --> time_used: %d ms  QPS: %d\n", time_used, 160000 * 1000 / time_used);
-
-}
-
-
-void hash_testcase_1w_mix(int connfd) {
-
-  const int cnt = 10000;
-
-  gettimeofday(&tv_begin, NULL);
-  for (int i = 0; i < cnt; i++) {
-    hash_testcase_mix(connfd);
-  }
-  gettimeofday(&tv_end, NULL);
-  int time_used = TIME_SUB_MS(tv_end, tv_begin);
-  printf("hash_testcase_1w (160w REQ) --> time_used: %d ms  QPS: %d\n", time_used, 160000 * 1000 / time_used);
-
-}
-
-void persistence_test_1w(int connfd) {
-  const int cnt = 100;
-
-  gettimeofday(&tv_begin, NULL);
-
 
   for (int i = 0; i < cnt; i++) {
-    // array * 60000 - 每次循环执行6个操作
+    // 60000 - 每次循环执行6个操作
     char cmd_set1[64] = {0};
     char cmd_set2[64] = {0};
     char cmd_get[64] = {0};
     char cmd_mod1[64] = {0};
     char cmd_del[64] = {0};
-    char expect_Ok[16] = {0};
     char expect_get1[64] = {0};
     char expect_get2[64] = {0};
-    snprintf(cmd_set1, 64, "SET Array_k%d Array_v%d", 2 * i, 2 * i);
-    snprintf(cmd_set2, 64, "SET Array_k%d Array_v%d", 2 * i + 1, 2 * i + 1);
-    snprintf(cmd_get, 64, "GET Array_k%d", i);
-    snprintf(cmd_mod1, 64, "MOD Array_k%d Array_MOD_v%d", i, i);
-    snprintf(cmd_del, 64, "DEL Array_k%d", i);
+    snprintf(cmd_set1, 64, "SET persistence_k%d persistence_v%d", 2 * i, 2 * i);
+    snprintf(cmd_set2, 64, "SET persistence_k%d persistence_v%d", 2 * i + 1, 2 * i + 1);
+    snprintf(cmd_get, 64, "GET persistence_k%d", i);
+    snprintf(cmd_mod1, 64, "MOD persistence_k%d persistence_MOD_v%d", i, i);
+    snprintf(cmd_del, 64, "DEL persistence_k%d", i);
 
-    strcpy(expect_Ok, "OK\r\n");
-    snprintf(expect_get1, 64, "Array_v%d\r\n", i);
-    snprintf(expect_get2, 64, "Array_MOD_v%d\r\n", i);
+    snprintf(expect_get1, 64, "persistence_v%d\r\n", i);
+    snprintf(expect_get2, 64, "persistence_MOD_v%d\r\n", i);
 
 
-    testcase(connfd, cmd_set1, expect_Ok, "pers_SET1");
-    testcase(connfd, cmd_set2, expect_Ok, "pers_SET2");
+    testcase(connfd, cmd_set1, "OK\r\n", "pers_SET1");
+    testcase(connfd, cmd_set2, "OK\r\n", "pers_SET2");
     testcase(connfd, cmd_get, expect_get1, "pers_GET1");
-    testcase(connfd, cmd_mod1, expect_Ok, "pers_MOD1");
+    testcase(connfd, cmd_mod1, "OK\r\n", "pers_MOD1");
     testcase(connfd, cmd_get, expect_get2, "pers_GET2");
-    testcase(connfd, cmd_del, expect_Ok, "pers_DEL");
-
-    // rbtree * 60000 - 每次循环执行6个操作
-    char r_cmd_set1[64] = {0};
-    char r_cmd_set2[64] = {0};
-    char r_cmd_get[64] = {0};
-    char r_cmd_mod1[64] = {0};
-    char r_cmd_del[64] = {0};
-    char r_expect_get1[64] = {0};
-    char r_expect_get2[64] = {0};
-    snprintf(r_cmd_set1, 64, "RSET R_k%d R_v%d", 2 * i, 2 * i);
-    snprintf(r_cmd_set2, 64, "RSET R_k%d R_v%d", 2 * i + 1, 2 * i + 1);
-    snprintf(r_cmd_get, 64, "RGET R_k%d", i);
-    snprintf(r_cmd_mod1, 64, "RMOD R_k%d R_MOD_v%d", i, i);
-    snprintf(r_cmd_del, 64, "RDEL R_k%d", i);
-
-    snprintf(r_expect_get1, 64, "R_v%d\r\n", i);
-    snprintf(r_expect_get2, 64, "R_MOD_v%d\r\n", i);
-
-    testcase(connfd, r_cmd_set1, expect_Ok, "pers_RSET1");
-    testcase(connfd, r_cmd_set2, expect_Ok, "pers_RSET2");
-    testcase(connfd, r_cmd_get, r_expect_get1, "pers_RGET1");
-    testcase(connfd, r_cmd_mod1, expect_Ok, "pers_RMOD1");
-    testcase(connfd, r_cmd_get, r_expect_get2, "pers_RGET2");
-    testcase(connfd, r_cmd_del, expect_Ok, "pers_RDEL");
-
-    // hash * 60000 - 每次循环执行6个操作
-    char h_cmd_set1[64] = {0};
-    char h_cmd_set2[64] = {0};
-    char h_cmd_get[64] = {0};
-    char h_cmd_mod1[64] = {0};
-    char h_cmd_del[64] = {0};
-    char h_expect_get1[64] = {0};
-    char h_expect_get2[64] = {0};
-    snprintf(h_cmd_set1, 64, "HSET H_k%d H_v%d", 2 * i, 2 * i);
-    snprintf(h_cmd_set2, 64, "HSET H_k%d H_v%d", 2 * i + 1, 2 * i + 1);
-    snprintf(h_cmd_get, 64, "HGET H_k%d", i);
-    snprintf(h_cmd_mod1, 64, "HMOD H_k%d H_MOD_v%d", i, i);
-    snprintf(h_cmd_del, 64, "HDEL H_k%d", i);
-
-    snprintf(h_expect_get1, 64, "H_v%d\r\n", i);
-    snprintf(h_expect_get2, 64, "H_MOD_v%d\r\n", i);
-
-    testcase(connfd, h_cmd_set1, expect_Ok, "pers_HSET1");
-    testcase(connfd, h_cmd_set2, expect_Ok, "pers_HSET2");
-    testcase(connfd, h_cmd_get, h_expect_get1, "pers_HGET1");
-    testcase(connfd, h_cmd_mod1, expect_Ok, "pers_HMOD1");
-    testcase(connfd, h_cmd_get, h_expect_get2, "pers_HGET2");
-    testcase(connfd, h_cmd_del, expect_Ok, "pers_HDEL");
+    testcase(connfd, cmd_del, "OK\r\n", "pers_DEL");
   }
-
+ 
   gettimeofday(&tv_end, NULL);
   int time_used = TIME_SUB_MS(tv_end, tv_begin);
-  // 总请求数：array(60000) + rbtree(60000) + hash(60000) = 180000
-  printf("persistence_test_1w (180000 REQ) --> time_used: %d ms  QPS: %d\n", time_used, 180000 * 1000 / time_used);
+  printf("persistence_test_1w (60000 REQ) --> time_used: %d ms  QPS: %d\n", time_used, 60000 * 1000 / time_used);
 }
 
-void persistence_get_all(int connfd) {
+void persistence_get_rest(int connfd) {
   const int cnt = 10000;
 
   gettimeofday(&tv_begin, NULL);
-
-  // 根据persistence_test_1w函数中的操作，每次循环设置键2*i和2*i+1，然后删除键i
-  // 所以最终会剩下键[10000, 19999]，因为键[0, 9999]被删除了
-  // 每个后端都会剩下10000个键值对
   for (int i = 10000; i < 20000; i++) {
     // GET array后端的键
     char cmd_get_array[64] = {0};
     char expect_get_array[64] = {0};
-    snprintf(cmd_get_array, 64, "GET Array_k%d", i);
-    snprintf(expect_get_array, 64, "Array_v%d\r\n", i);
+    snprintf(cmd_get_array, 64, "GET persistence_k%d", i);
+    snprintf(expect_get_array, 64, "persistence_v%d\r\n", i);
     testcase(connfd, cmd_get_array, expect_get_array, "pers_GET_ARRAY");
+  }
 
-    // GET rbtree后端的键
-    char cmd_get_rbtree[64] = {0};
-    char expect_get_rbtree[64] = {0};
-    snprintf(cmd_get_rbtree, 64, "RGET R_k%d", i);
-    snprintf(expect_get_rbtree, 64, "R_v%d\r\n", i);
-    testcase(connfd, cmd_get_rbtree, expect_get_rbtree, "pers_GET_RBTREE");
 
-    // GET hash后端的键
-    char cmd_get_hash[64] = {0};
-    char expect_get_hash[64] = {0};
-    snprintf(cmd_get_hash, 64, "HGET H_k%d", i);
-    snprintf(expect_get_hash, 64, "H_v%d\r\n", i);
-    testcase(connfd, cmd_get_hash, expect_get_hash, "pers_GET_HASH");
+  gettimeofday(&tv_end, NULL);
+  int time_used = TIME_SUB_MS(tv_end, tv_begin);
+  printf("persistence_get_all (10000 REQ) --> time_used: %d ms  QPS: %d\n", time_used, 10000 * 1000 / time_used);
+}
+
+void persistence_del_rest(int connfd) {
+  const int cnt = 10000;
+
+  gettimeofday(&tv_begin, NULL);
+  for (int i = 10000; i < 20000; i++) {
+    // GET array后端的键
+    char cmd_del_array[64] = {0};
+    snprintf(cmd_del_array, 64, "DEL persistence_k%d", i);
+    testcase(connfd, cmd_del_array, "OK\r\n", "pers_DEL_rest");
   }
 
   gettimeofday(&tv_end, NULL);
   int time_used = TIME_SUB_MS(tv_end, tv_begin);
-  // 总请求数：array(10000) + rbtree(10000) + hash(10000) = 30000
-  printf("persistence_get_all (30000 REQ) --> time_used: %d ms  QPS: %d\n", time_used, 30000 * 1000 / time_used);
+
+  printf("persistence_del_rest (10000 REQ) --> time_used: %d ms  QPS: %d\n", time_used, 10000 * 1000 / time_used);
+}
+
+void slave_testcase(int connfd_master, int connfd_slave) {
+    // 主从复制功能测试
+    printf("Starting Master-Slave replication test...\n");
+
+    // 测试1: 在主节点设置键值
+    testcase(connfd_master, "SET master_key master_value", "OK\r\n", "MASTER-SET-0");
+    printf("Master set key successfully\n");
+
+    // 等待一段时间让命令同步到从节点
+    usleep(100000); // 100ms
+
+    // 测试2: 在主节点获取刚设置的键值
+    testcase(connfd_master, "GET master_key", "master_value\r\n", "MASTER-GET-0");
+    printf("Master get key successfully\n");
+
+    // 测试3: 在从节点获取相同的键值 (应该同步过来)
+    testcase(connfd_slave, "GET master_key", "master_value\r\n", "SLAVE-GET-0");
+    printf("Slave get replicated key successfully\n");
+
+    // 测试4: 在主节点修改键值
+    testcase(connfd_master, "MOD master_key modified_value", "OK\r\n", "MASTER-MOD-0");
+    printf("Master modified key successfully\n");
+
+    // 等待同步
+    usleep(100000); // 100ms
+
+    // 测试5: 在主节点获取修改后的值
+    testcase(connfd_master, "GET master_key", "modified_value\r\n", "MASTER-GET-1");
+    printf("Master get modified value successfully\n");
+
+    // 测试6: 在从节点获取修改后的值 (应已同步)
+    testcase(connfd_slave, "GET master_key", "modified_value\r\n", "SLAVE-GET-1");
+    printf("Slave get modified value successfully\n");
+
+    // 测试7: 在主节点删除键
+    testcase(connfd_master, "DEL master_key", "OK\r\n", "MASTER-DEL-0");
+    printf("Master delete key successfully\n");
+
+    // 等待同步
+    usleep(100000); // 100ms
+
+    // 测试8: 在主节点获取已删除的键
+    testcase(connfd_master, "GET master_key", "ERROR / Not Exist\r\n", "MASTER-GET-2");
+    printf("Master get deleted key (should not exist) successfully\n");
+
+    // 测试9: 在从节点获取已删除的键 (应已同步删除)
+    testcase(connfd_slave, "GET master_key", "ERROR / Not Exist\r\n", "SLAVE-GET-2");
+    printf("Slave get deleted key (should not exist) successfully\n");
+
+    // 测试10: 批量主从同步
+    for (int i = 0; i < 10; i++) {
+        char cmd_set[64] = {0};
+        char expected[64] = {0};
+        snprintf(cmd_set, 64, "SET batch_key_%d batch_value_%d", i, i);
+        testcase(connfd_master, cmd_set, "OK\r\n", "MASTER-BATCH-SET");
+
+        snprintf(expected, 64, "batch_value_%d\r\n", i);
+        // 等待同步
+        usleep(50000); // 50ms
+
+        snprintf(cmd_set, 64, "GET batch_key_%d", i);
+        testcase(connfd_slave, cmd_set, expected, "SLAVE-BATCH-GET");
+    }
+    printf("Batch replication test passed\n");
+
+    // 测试11: 检查主从节点的EXIST结果
+    testcase(connfd_master, "EXIST master_key", "NO, Not Exist\r\n", "MASTER-EXIST-0");
+    testcase(connfd_slave, "EXIST master_key", "NO, Not Exist\r\n", "SLAVE-EXIST-0");
+    testcase(connfd_master, "EXIST batch_key_5", "YES, Exist\r\n", "MASTER-EXIST-1");
+    testcase(connfd_slave, "EXIST batch_key_5", "YES, Exist\r\n", "SLAVE-EXIST-1");
+
+    // 测试12: 在主节点上执行多命令并验证从节点同步
+    testcase(connfd_master, "SET multi_key1 val1 & SET multi_key2 val2", "OK\r\nOK\r\n", "MASTER-MULTICMD-SET");
+    usleep(100000); // 100ms
+    testcase(connfd_slave, "GET multi_key1", "val1\r\n", "SLAVE-GET-MULTI1");
+    testcase(connfd_slave, "GET multi_key2", "val2\r\n", "SLAVE-GET-MULTI2");
+
+    printf("All Master-Slave replication tests passed!\n");
 }
 
 void multicmd_testcase(int connfd) {
@@ -407,71 +328,73 @@ void multicmd_testcase(int connfd) {
   testcase(connfd, "GET par_key1", "par_val1\r\n", "MULTICMD-VERIFY-PAR1-0");
   testcase(connfd, "GET par_key2", "par_val2\r\n", "MULTICMD-VERIFY-PAR2-0");
   testcase(connfd, "GET par_key3", "par_val3\r\n", "MULTICMD-VERIFY-PAR3-0");
+
+  // 并行删除
+  testcase(connfd, "DEL key1 & DEL key2 & DEL key3 & DEL key4 & DEL key5 & "
+                   "DEL par_key1 & DEL par_key2 & DEL par_key3",
+                   "OK\r\nOK\r\nOK\r\nOK\r\nOK\r\nOK\r\nOK\r\nOK\r\n",
+                    "mul_CLEAN");
+
   printf("passed\n");
 }
 
-void persistence_load_test(int connfd) {
-  // 先设置一些数据
-  testcase(connfd, "SET test_key test_value", "OK\r\n", "PERS_LOAD_SET");
-  testcase(connfd, "RSET rbtree_key rbtree_value", "OK\r\n", "PERS_LOAD_RSET");
-  testcase(connfd, "HSET hash_key hash_value", "OK\r\n", "PERS_LOAD_HSET");
-
-  // 保存快照
-  testcase(connfd, "SAVE", "OK\r\n", "PERS_LOAD_SAVE");
-
-  // 退出服务器进程并重启使用快照模式
-  printf("请手动验证加载功能：\n");
-  printf("1. 关闭当前服务器\n");
-  printf("2. 使用 'snap' 参数重启服务器：./server <port> snap\n");
-  printf("3. 重启后执行以下命令验证数据是否加载成功：\n");
-  printf("   - GET test_key (should return 'test_value')\n");
-  printf("   - RGET rbtree_key (should return 'rbtree_value')\n");
-  printf("   - HGET hash_key (should return 'hash_value')\n");
-
-  // 也可以测试AOF加载
-  printf("\n测试AOF加载：\n");
-  printf("1. 关闭当前服务器\n");
-  printf("2. 使用 'aof' 参数重启服务器：./server <port> aof\n");
-  printf("3. 重启后执行以下命令验证数据是否加载成功：\n");
-  printf("   - GET test_key (should return 'test_value')\n");
-  printf("   - RGET rbtree_key (should return 'rbtree_value')\n");
-  printf("   - HGET hash_key (should return 'hash_value')\n");
-  printf("passed\n");
-}
 
 
 int main(int argc, char* argv[]) {
 
-  if (argc != 4) {
-    perror("arg error\n");
+  if (argc != 4 && argc != 6) {
+    printf("Arg error\n");
     return -1;
   }
 
   char* ip = argv[1];
   unsigned short port = atoi(argv[2]);
+  char* mode = argv[3];
 
-  int connfd = connect_server(ip, port);
+  int connfd_master = connect_server(ip, port);
 
-  int mode = atoi(argv[3]);
-  if (mode == 0) {
-    // array_testcase_1w_mix(connfd);
-    array_testcase_single_1w(connfd);
-  } else if (mode == 1) {
-    // rbtree_testcase_1w_mix(connfd);
-    rbtree_testcase_single_1w(connfd);
-  } else if (mode == 2) {
-    hash_testcase_single_1w(connfd);
-  } else if (mode == 3) {
-    persistence_test_1w(connfd);
-  } else if (mode == 4) {
-    persistence_get_all(connfd);
-  } else if (mode == 5) {
-    multicmd_testcase(connfd);
+  if (argc == 6) {
+    if (strcmp(mode, "SM") != 0) {
+      perror("arg error\n");
+      return -1;
+    }
+    char* ip_slave = argv[4];
+    unsigned short port_slave = atoi(argv[5]);
+    int connfd_slave = connect_server(ip_slave, port_slave);
+
+    // SM(主从) test
+    slave_testcase(connfd_master, connfd_slave);
+  }
+  
+  else if (!strcmp(mode, "pers1")) {
+    persistence_set_del_1w(connfd_master);
+  } else if (!strcmp(mode, "pers2")) {
+    persistence_get_rest(connfd_master);
+  } else if (!strcmp(mode, "pers_clean")) {
+    persistence_del_rest(connfd_master);
   }
 
 
+  // base -> 最简单的测试
+  else if (!strcmp(mode, "base")) {
+    once_testcase_base_1w(connfd_master);
+  }
+
+  else if (!strcmp(mode, "set1w")) {
+    set_testcase_single_1w(connfd_master);
+  } else if (!strcmp(mode, "get1w")) {
+    get_testcase_single_1w(connfd_master);
+    
+  } else if (!strcmp(mode, "del1w")) {
+    del_testcase_single_1w(connfd_master);
+  }
+
+  // 多命令并行
+  else if (!strcmp(mode, "mul")) {
+    multicmd_testcase(connfd_master);
+  }
   else {
-    printf("ARG: ERROR\n");
+    printf("ARG_parse: ERROR\n");
     return -1;
   }
   return 0;

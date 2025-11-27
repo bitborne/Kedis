@@ -40,7 +40,7 @@ extern int aof_len;
 
 // AOF文件描述符
 static int aof_fd = -1;
-const char* aof_filename = "appendonly.ksf";
+const char* aof_filename = "./data/appendonly.ksf";
 
 // 后台fsync线程相关
 static pthread_t fsync_thread;

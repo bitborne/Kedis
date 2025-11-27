@@ -11,10 +11,8 @@
 *.app
 
 # === 数据 ===
-*.ksf
-*.aof
-*.dat
-
+**/data/
+**/doc/
 # === 构建输出目录 ===
 # 忽略顶层产物目录，但保留源码里的 src/bin/
 /build/
@@ -27,6 +25,3 @@
 **/.vscode/
 *.excalidraw
 *.default
-*.old
-/prompt.md
-/blog*.md

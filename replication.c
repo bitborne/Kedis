@@ -54,7 +54,7 @@ int handle_sync_command(int fd) {
     printf("[Master] SYNC command received from fd %d\n", fd);
 
     // 1. Create Snapshot
-    const char *snap_file = "dump-sync.ksf";
+    const char *snap_file = "./data/dump-sync.ksf";
     // Note: ksfSave uses data structures, we are inside kvs_protocol which holds global lock.
     // So it is safe to call ksfSave.
     
@@ -216,7 +216,7 @@ int init_slave_replication(const char* master_host, int master_port) {
     // Set master fd
     slave_info.master_fd = fd;
     
-    // Send SYNC
+    // Send SYNC --> 初始化的时候执行一下SYNC命令
     if (send_all(fd, "SYNC\r\n", 6) < 0) return -1;
     
     // Expect "SIZE <len>\r\n"
@@ -239,9 +239,11 @@ int init_slave_replication(const char* master_host, int master_port) {
     printf("[Slave] Receiving Snapshot (%ld bytes)...\n", size);
     
     // Save to temp file
-    FILE *fp = fopen("slave_dump.ksf", "wb");
+    const char* tmp_snapile_path = "./data/slave_dump.ksf";
+    FILE *fp = fopen(tmp_snapile_path, "wb");
     if (!fp) return -1;
     
+    // recv -> fwrite to slaev_dump.ksf
     char chunk[4096];
     long received = 0;
     while (received < size) {
@@ -259,7 +261,7 @@ int init_slave_replication(const char* master_host, int master_port) {
     }
     
     printf("[Slave] Snapshot received. Loading...\n");
-    ksfLoad("slave_dump.ksf");
+    ksfLoad(tmp_snapile_path);
     
     // Set Role
     replication_info.is_master = 0;
