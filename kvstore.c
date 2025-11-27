@@ -1,4 +1,5 @@
 #include "kvstore.h"
+#include "memory_pool.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -18,6 +19,9 @@
 #ifdef HAVE_JEMALLOC
 #include <jemalloc/jemalloc.h>
 #endif
+
+// 全局内存池实例
+static memory_pool_t* g_mem_pool = NULL;
 
 #if (NETWORK_SELECT == NETWORK_REACTOR)
 #include "server.h"  // only for reactor.c
@@ -68,26 +72,49 @@ const char* snap_filename = "./data/dump.ksf";
 // 跨平台的时候，只需要修改这个函数即可--> 可迭代
 void* kvs_calloc(size_t num, size_t size) {
 #ifdef HAVE_JEMALLOC
-    return je_calloc(num, size);
+  return je_calloc(num, size);
 #else
-    return calloc(num, size);
-#endif
+    size_t total_size = num * size;
+    void *ptr = kvs_malloc(total_size);
+    if (ptr) {
+        memset(ptr, 0, total_size);
+    }
+    return ptr;
+#endif 
 }
 
 void* kvs_malloc(size_t size) {
-#ifdef HAVE_JEMALLOC
+  #ifdef HAVE_JEMALLOC
     return je_malloc(size);
-#else
+  #else
+    // 如果内存池已初始化且请求大小适合内存池，则使用内存池
+    if (g_mem_pool && size <= g_mem_pool->block_size) {
+        return mem_pool_alloc(g_mem_pool);
+    }
+    // 否则使用标准malloc
     return malloc(size);
-#endif
+  #endif
+
 }
 
 void kvs_free(void* ptr) {
-#ifdef HAVE_JEMALLOC
+    // 检查指针是否属于内存池管理范围
+  #ifdef HAVE_JEMALLOC
     je_free(ptr);
-#else
+  #else
+    if (g_mem_pool && ptr) {
+        char *start = (char*)g_mem_pool->chunk + sizeof(mem_block_t);
+        char *end = start + g_mem_pool->max_blocks * (sizeof(mem_block_t) + g_mem_pool->block_size);
+        char *ptr_char = (char*)ptr;
+
+        if (ptr_char >= start && ptr_char < end) {
+            mem_pool_free(g_mem_pool, ptr);
+            return;
+        }
+    }
+    // 不在内存池范围内的指针使用标准free
     free(ptr);
-#endif
+  #endif
 }
 // 定义了头文件中 command 变量的声明
 const char* command[] = {"SET",  "GET",  "DEL",  "MOD",  "EXIST",
@@ -516,6 +543,9 @@ int kvs_protocol(char* rmsg, int length, char* response) {
 
 
 int init_kvengine(void) {
+  // 初始化内存池，针对KV存储的典型数据大小进行优化
+  g_mem_pool = mem_pool_init(BLOCK_SIZE);
+
   memset(&global_main_engine, 0, sizeof(global_main_engine));
   kvs_main_create(&global_main_engine);
   return 0;
@@ -524,6 +554,12 @@ int init_kvengine(void) {
 void dest_kvengine(void) {
   if (replication_info.is_master) ksfSave(snap_filename);
   kvs_main_destroy(&global_main_engine);
+
+  // 释放内存池
+  if (g_mem_pool) {
+    mem_pool_destroy(g_mem_pool);
+    g_mem_pool = NULL;
+  }
 }
 
 

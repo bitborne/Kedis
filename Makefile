@@ -2,7 +2,7 @@
 CC = gcc
 FLAGS = -I ./NtyCo/core/ -L ./NtyCo/ -lntyco -lpthread -luring -ldl
 JEMALLOC_FLAGS = -DHAVE_JEMALLOC -ljemalloc
-SRCS = kvstore.c ntyco.c proactor.c kvs_array.c kvs_rbtree.c kvs_hash.c ksf.c aof.c replication.c
+SRCS = kvstore.c ntyco.c proactor.c kvs_array.c kvs_rbtree.c kvs_hash.c ksf.c aof.c replication.c memory_pool.c
 TESTCASE_SRCS = testcase.c
 TARGET = kvstore
 SUBDIR = ./NtyCo/
