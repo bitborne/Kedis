@@ -14,6 +14,11 @@
 #include <pthread.h>
 #include <semaphore.h>
 
+// jemalloc头文件
+#ifdef HAVE_JEMALLOC
+#include <jemalloc/jemalloc.h>
+#endif
+
 #if (NETWORK_SELECT == NETWORK_REACTOR)
 #include "server.h"  // only for reactor.c
 #endif
@@ -61,11 +66,29 @@ const char* snap_filename = "./data/dump.ksf";
 
 // 不直接使用系统调用(第三方接口)
 // 跨平台的时候，只需要修改这个函数即可--> 可迭代
-void* kvs_calloc(size_t num, size_t size) { return calloc(num, size); }
+void* kvs_calloc(size_t num, size_t size) {
+#ifdef HAVE_JEMALLOC
+    return je_calloc(num, size);
+#else
+    return calloc(num, size);
+#endif
+}
 
-void* kvs_malloc(size_t size) { return malloc(size); }
+void* kvs_malloc(size_t size) {
+#ifdef HAVE_JEMALLOC
+    return je_malloc(size);
+#else
+    return malloc(size);
+#endif
+}
 
-void kvs_free(void* ptr) { free(ptr); }
+void kvs_free(void* ptr) {
+#ifdef HAVE_JEMALLOC
+    je_free(ptr);
+#else
+    free(ptr);
+#endif
+}
 // 定义了头文件中 command 变量的声明
 const char* command[] = {"SET",  "GET",  "DEL",  "MOD",  "EXIST",
                          "SAVE", "BGSAVE", "SYNC"};  // 添加SAVE和BGSAVE命令
@@ -102,7 +125,7 @@ int kvs_split_token(char* msg, char* tokens[]) {
     tokens[idx++] = token;
     token = strtok(NULL, " ");
   }
-  return idx; 
+  return idx;
 }
 
 /*
@@ -544,7 +567,7 @@ int main(int argc, char* argv[]) {
   }
 
   init_kvengine();
-  
+
   if (master_ip != NULL) {
       // SLAVE MODE
       printf("Starting as SLAVE. Syncing with Master %s:%d...\n", master_ip, master_port);
