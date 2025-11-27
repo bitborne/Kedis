@@ -13,50 +13,23 @@
 #include <stdint.h>
 
 // 重新声明全局变量
-#if ENABLE_ARRAY
+#if ENABLE_RBTREE
+extern kvs_rbtree_t global_rbtree;
+#elif ENABLE_HASH
+extern kvs_hash_t global_hash;
+#elif ENABLE_ARRAY
 extern kvs_array_t global_array;
 #endif
 
-#if ENABLE_RBTREE
-extern kvs_rbtree_t global_rbtree;
-#endif
-
-#if ENABLE_HASH
-extern kvs_hash_t global_hash;
-#endif
 
 // 根据优先级选择使用的数据结构：红黑树 > 哈希 > 数组
 // 以下是当前使用的数据结构的统一接口定义
 #if ENABLE_RBTREE
-  #define KVS_ENGINE_RBTREE
   extern kvs_rbtree_t global_main_engine;
-  #define kvs_main_set(inst, key, value) kvs_rbtree_set(inst, key, value)
-  #define kvs_main_get(inst, key) kvs_rbtree_get(inst, key)
-  #define kvs_main_del(inst, key) kvs_rbtree_del(inst, key)
-  #define kvs_main_mod(inst, key, value) kvs_rbtree_mod(inst, key, value)
-  #define kvs_main_exist(inst, key) kvs_rbtree_exist(inst, key)
-  #define kvs_main_create(inst) kvs_rbtree_create(inst)
-  #define kvs_main_destroy(inst) kvs_rbtree_destroy(inst)
 #elif ENABLE_HASH
-  #define KVS_ENGINE_HASH
   extern kvs_hash_t global_main_engine;
-  #define kvs_main_set(inst, key, value) kvs_hash_set(inst, key, value)
-  #define kvs_main_get(inst, key) kvs_hash_get(inst, key)
-  #define kvs_main_del(inst, key) kvs_hash_del(inst, key)
-  #define kvs_main_mod(inst, key, value) kvs_hash_mod(inst, key, value)
-  #define kvs_main_exist(inst, key) kvs_hash_exist(inst, key)
-  #define kvs_main_create(inst) kvs_hash_create(inst)
-  #define kvs_main_destroy(inst) kvs_hash_destroy(inst)
 #elif ENABLE_ARRAY
-  #define KVS_ENGINE_ARRAY
   extern kvs_array_t global_main_engine;
-  #define kvs_main_set(inst, key, value) kvs_array_set(inst, key, value)
-  #define kvs_main_get(inst, key) kvs_array_get(inst, key)
-  #define kvs_main_del(inst, key) kvs_array_del(inst, key)
-  #define kvs_main_mod(inst, key, value) kvs_array_mod(inst, key, value)
-  #define kvs_main_exist(inst, key) kvs_array_exist(inst, key)
-  #define kvs_main_create(inst) kvs_array_create(inst)
-  #define kvs_main_destroy(inst) kvs_array_destroy(inst)
 #else
   #error "至少需要启用一种数据结构"
 #endif

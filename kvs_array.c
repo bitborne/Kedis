@@ -1,5 +1,5 @@
 #include "kvstore.h"
-#if ENABLE_ARRAY
+#if ENABLE_ARRAY && !ENABLE_RBTREE && !ENBALE_HASH
 #include <math.h>
 // 使用 singleton 单例模式
 kvs_array_t global_array = {0};

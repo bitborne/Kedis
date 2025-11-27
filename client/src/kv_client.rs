@@ -25,7 +25,7 @@ impl KVClient {
     /// 连接到KV服务器
     fn connect(&self) -> Result<TcpStream, Box<dyn std::error::Error>> {
         let address = format!("{}:{}", self.host, self.port);
-        let mut stream = TcpStream::connect(address)?;
+        let stream = TcpStream::connect(address)?;
         stream.set_read_timeout(Some(Duration::from_secs(5)))?;
         stream.set_write_timeout(Some(Duration::from_secs(5)))?;
         Ok(stream)

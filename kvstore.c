@@ -29,6 +29,7 @@ enum {
 
   KVS_CMD_SAVE,
   KVS_CMD_BGSAVE,
+  KVS_CMD_SYNC,
 
   KVS_CMD_COUNT
 };
@@ -36,38 +37,18 @@ enum {
 #define ECHO_LOGIC 0
 #define KV_LOGIC 1
 
+// Global Lock and Context
+pthread_mutex_t global_kvs_lock = PTHREAD_MUTEX_INITIALIZER;
+__thread int current_processing_fd = -1;
+
 // 根据优先级选择使用的数据结构：红黑树 > 哈希 > 数组
 // 以下是当前使用的数据结构的统一接口定义
 #if ENABLE_RBTREE
-  #define KVS_ENGINE_RBTREE
   kvs_rbtree_t global_main_engine;
-  #define kvs_main_set(inst, key, value) kvs_rbtree_set(inst, key, value)
-  #define kvs_main_get(inst, key) kvs_rbtree_get(inst, key)
-  #define kvs_main_del(inst, key) kvs_rbtree_del(inst, key)
-  #define kvs_main_mod(inst, key, value) kvs_rbtree_mod(inst, key, value)
-  #define kvs_main_exist(inst, key) kvs_rbtree_exist(inst, key)
-  #define kvs_main_create(inst) kvs_rbtree_create(inst)
-  #define kvs_main_destroy(inst) kvs_rbtree_destroy(inst)
 #elif ENABLE_HASH
-  #define KVS_ENGINE_HASH
   kvs_hash_t global_main_engine;
-  #define kvs_main_set(inst, key, value) kvs_hash_set(inst, key, value)
-  #define kvs_main_get(inst, key) kvs_hash_get(inst, key)
-  #define kvs_main_del(inst, key) kvs_hash_del(inst, key)
-  #define kvs_main_mod(inst, key, value) kvs_hash_mod(inst, key, value)
-  #define kvs_main_exist(inst, key) kvs_hash_exist(inst, key)
-  #define kvs_main_create(inst) kvs_hash_create(inst)
-  #define kvs_main_destroy(inst) kvs_hash_destroy(inst)
 #elif ENABLE_ARRAY
-  #define KVS_ENGINE_ARRAY
   kvs_array_t global_main_engine;
-  #define kvs_main_set(inst, key, value) kvs_array_set(inst, key, value)
-  #define kvs_main_get(inst, key) kvs_array_get(inst, key)
-  #define kvs_main_del(inst, key) kvs_array_del(inst, key)
-  #define kvs_main_mod(inst, key, value) kvs_array_mod(inst, key, value)
-  #define kvs_main_exist(inst, key) kvs_array_exist(inst, key)
-  #define kvs_main_create(inst) kvs_array_create(inst)
-  #define kvs_main_destroy(inst) kvs_array_destroy(inst)
 #else
   #error "至少需要启用一种数据结构"
 #endif
@@ -87,9 +68,7 @@ void* kvs_malloc(size_t size) { return malloc(size); }
 void kvs_free(void* ptr) { free(ptr); }
 // 定义了头文件中 command 变量的声明
 const char* command[] = {"SET",  "GET",  "DEL",  "MOD",  "EXIST",
-                         "RSET", "RGET", "RDEL", "RMOD", "REXIST",
-                         "HSET", "HGET", "HDEL", "HMOD", "HEXIST",
-                         "SAVE", "BGSAVE"};  // 添加SAVE和BGSAVE命令
+                         "SAVE", "BGSAVE", "SYNC"};  // 添加SAVE和BGSAVE命令
 
 // 全局变量存储持久化模式和自动保存参数
 static int load_mode = INIT_LOAD_SNAP;
@@ -100,16 +79,12 @@ static int save_params_changes = 100;      // 100次变化
 static time_t last_save_time = 0;          // 上次保存时间
 static int changes_since_last_save = 0;    // 自上次保存以来的变化次数
 
-
-
 /*
  * 解析单条命令的token
  */
 int kvs_split_token(char* msg, char* tokens[]) {
   if (msg == NULL || tokens == NULL) return -1;
 
-  // 处理行尾换行符 --> 否则导致 strcmp 失效 --> kvs_array_get/del
-  // 等`token只有两个`且`key尾带\n` 的操作失效
   int len = strlen(msg);
   if (len > 0 && msg[len - 1] == '\n') {
     if (len > 1 && msg[len - 2] == '\r') {
@@ -121,13 +96,11 @@ int kvs_split_token(char* msg, char* tokens[]) {
 
   char* token = strtok(msg, " ");  // 拆出来一个token 返回首地址
   int idx = 0;
-  // 将tokens[i]指针 赋值为上面的首地址
   while (token != NULL) {
     tokens[idx++] = token;
-    // printf("idx: %d -> %s\n", idx - 1, token); // DEBUG
     token = strtok(NULL, " ");
   }
-  return idx;  // 每拆出来一个token，idx++ ==> 返回值为token的个数
+  return idx; 
 }
 
 /*
@@ -186,7 +159,6 @@ int kvs_split_multicmd(char* msg, char* commands[], int max_commands) {
   if (start < msg + len && cmd_count < max_commands) {
     commands[cmd_count] = kvs_malloc(strlen(start) + 1);
     if (commands[cmd_count] == NULL) {
-      // 释放已分配的内存
       for (int i = 0; i < cmd_count; i++) {
         kvs_free(commands[i]);
       }
@@ -197,117 +169,6 @@ int kvs_split_multicmd(char* msg, char* commands[], int max_commands) {
   }
 
   return cmd_count;
-}
-
-// SET Key Value
-// tokens[0] : SET
-// tokens[1] : Key
-// tokens[2] : Value
-
-int kvs_filter_protocol(char** tokens, int count, char* response) {
-  if (tokens[0] == NULL || count == 0 || response == NULL) return -1;
-  int cmd = KVS_CMD_START;
-  for (cmd = KVS_CMD_START; cmd < KVS_CMD_COUNT; cmd++) {
-    if (strcmp(tokens[0], command[cmd]) == 0) {
-      break;
-    }
-  }
-
-  int length = 0;
-  int ret = 0;
-  char* key = tokens[1];
-  char* value = tokens[2];
-
-  switch (cmd) {
-    case KVS_CMD_SET:  // --> OK
-      ret = kvs_main_set(&global_main_engine, key, value);
-
-      if (ret < 0) {
-        length = sprintf(response, "ERROR\r\n");
-      } else if (ret == 0) {
-        // 记录SET操作到AOF缓冲区
-        appendToAofBuffer(AOF_CMD_SET, key, value); // CMD_SET = 1
-        length = sprintf(response, "OK\r\n");
-      } else {
-        length = sprintf(response, "Key has existed\r\n");
-      }
-      break;
-    case KVS_CMD_GET:  // --> Value
-      char* gotValue = kvs_main_get(&global_main_engine, key);
-      if (gotValue == NULL) {
-        length = sprintf(response, "ERROR / Not Exist\r\n");
-      } else {
-        length = sprintf(response, "%s\r\n", gotValue);
-      }
-      break;
-    case KVS_CMD_DEL:  // -> OK
-      ret = kvs_main_del(&global_main_engine, key);
-      if (ret < 0) {
-        length = sprintf(response, "ERROR\r\n");
-      } else if (ret == 0) {
-        // 记录DEL操作到AOF缓冲区
-        appendToAofBuffer(AOF_CMD_DEL, key, NULL); // AOF_CMD_DEL = 3
-        length = sprintf(response, "OK\r\n");
-      } else {
-        length = sprintf(response, "Not Exist\r\n");
-      }
-      break;
-    case KVS_CMD_MOD:  // -> OK
-      ret = kvs_main_mod(&global_main_engine, key, value);
-      if (ret < 0) {
-        length = sprintf(response, "ERROR\r\n");
-      } else if (ret == 0) {
-        // 记录MOD操作到AOF缓冲区
-        appendToAofBuffer(AOF_CMD_MOD, key, value); // AOF_CMD_MOD = 2
-        length = sprintf(response, "OK\r\n");
-      } else {
-        length = sprintf(response, "Not Exist\r\n");
-      }
-      break;
-    case KVS_CMD_EXIST:  // -> Yes / No
-      ret = kvs_main_exist(&global_main_engine, key);
-      if (ret > 0) {
-        length = sprintf(response, "YES, Exist\r\n");
-      } else if (ret == 0) {
-        length = sprintf(response, "NO, Not Exist\r\n");
-      } else {
-        length = sprintf(response, "ERROR\r\n");
-      }
-      break;
-
-    // 添加SAVE和BGSAVE命令处理
-    case KVS_CMD_SAVE:
-        // 同步保存快照
-        ksfSave(snap_filename);
-        length = sprintf(response, "OK\r\n");
-        break;
-    case KVS_CMD_BGSAVE:
-        // 异步保存快照
-        ksfSaveBackground();
-        length = sprintf(response, "Background saving started\r\n");
-        break;
-    default:
-      assert(0);
-  }
-
-  return length;
-}
-
-/*
- * 分析命令分隔符的类型
- * 返回 0 表示 & (并行执行)
- * 返回 1 表示 && (顺序执行，前一个成功才执行下一个)
- */
-int get_command_separator_type(char* msg, int position, int msg_len) {
-  if (position >= msg_len - 1) {
-    return 0; // 默认为并行执行
-  }
-
-  if (msg[position] == '&' && msg[position + 1] == '&') {
-    return 1; // 顺序执行
-  } else {
-    return 0; // 并行执行
-  }
 }
 
 /*
@@ -330,6 +191,132 @@ int is_write_command(const char* command) {
         return 1;
     }
     return 0;
+}
+
+int kvs_filter_protocol(char** tokens, int count, char* response) {
+  if (tokens[0] == NULL || count == 0 || response == NULL) return -1;
+  int cmd = KVS_CMD_START;
+  for (cmd = KVS_CMD_START; cmd < KVS_CMD_COUNT; cmd++) {
+    if (strcmp(tokens[0], command[cmd]) == 0) {
+      break;
+    }
+  }
+
+  // SLAVE READ-ONLY CHECK
+  if (!replication_info.is_master) {
+      if (is_write_command(tokens[0])) {
+          if (current_processing_fd != slave_info.master_fd) {
+               sprintf(response, "READONLY You can't write against a read only replica\r\n");
+               return strlen(response);
+          }
+      }
+  }
+
+  int length = 0;
+  int ret = 0;
+  char* key = tokens[1];
+  char* value = tokens[2];
+
+  switch (cmd) {
+    case KVS_CMD_SET:  // --> OK
+      ret = kvs_main_set(&global_main_engine, key, value);
+
+      if (ret < 0) {
+        length = sprintf(response, "ERROR\r\n");
+      } else if (ret == 0) {
+        // Only Master persists and propagates
+        if (replication_info.is_master) {
+            appendToAofBuffer(AOF_CMD_SET, key, value); // CMD_SET = 1
+        }
+        length = sprintf(response, "OK\r\n");
+      } else {
+        length = sprintf(response, "Key has existed\r\n");
+      }
+      break;
+    case KVS_CMD_GET:  // --> Value
+      char* gotValue = kvs_main_get(&global_main_engine, key);
+      if (gotValue == NULL) {
+        length = sprintf(response, "ERROR / Not Exist\r\n");
+      } else {
+        length = sprintf(response, "%s\r\n", gotValue);
+      }
+      break;
+    case KVS_CMD_DEL:  // -> OK
+      ret = kvs_main_del(&global_main_engine, key);
+      if (ret < 0) {
+        length = sprintf(response, "ERROR\r\n");
+      } else if (ret == 0) {
+        if (replication_info.is_master) {
+            appendToAofBuffer(AOF_CMD_DEL, key, NULL); // AOF_CMD_DEL = 3
+        }
+        length = sprintf(response, "OK\r\n");
+      } else {
+        length = sprintf(response, "Not Exist\r\n");
+      }
+      break;
+    case KVS_CMD_MOD:  // -> OK
+      ret = kvs_main_mod(&global_main_engine, key, value);
+      if (ret < 0) {
+        length = sprintf(response, "ERROR\r\n");
+      } else if (ret == 0) {
+        if (replication_info.is_master) {
+            appendToAofBuffer(AOF_CMD_MOD, key, value); // AOF_CMD_MOD = 2
+        }
+        length = sprintf(response, "OK\r\n");
+      } else {
+        length = sprintf(response, "Not Exist\r\n");
+      }
+      break;
+    case KVS_CMD_EXIST:  // -> Yes / No
+      ret = kvs_main_exist(&global_main_engine, key);
+      if (ret > 0) {
+        length = sprintf(response, "YES, Exist\r\n");
+      } else if (ret == 0) {
+        length = sprintf(response, "NO, Not Exist\r\n");
+      } else {
+        length = sprintf(response, "ERROR\r\n");
+      }
+      break;
+
+    case KVS_CMD_SAVE:
+        // 同步保存快照
+        ksfSave(snap_filename);
+        length = sprintf(response, "OK\r\n");
+        break;
+    case KVS_CMD_BGSAVE:
+        // 异步保存快照
+        ksfSaveBackground();
+        length = sprintf(response, "Background saving started\r\n");
+        break;
+    case KVS_CMD_SYNC:
+        if (handle_sync_command(current_processing_fd) == 0) {
+            return 0; // Response sent by handler
+        } else {
+            length = sprintf(response, "ERROR SYNC\r\n");
+        }
+        break;
+    default:
+      length = sprintf(response, "UNKNOWN COMMAND\r\n");
+  }
+
+  return length;
+}
+
+/*
+ * 分析命令分隔符的类型
+ * 返回 0 表示 & (并行执行)
+ * 返回 1 表示 && (顺序执行，前一个成功才执行下一个)
+ */
+int get_command_separator_type(char* msg, int position, int msg_len) {
+  if (position >= msg_len - 1) {
+    return 0; // 默认为并行执行
+  }
+
+  if (msg[position] == '&' && msg[position + 1] == '&') {
+    return 1; // 顺序执行
+  } else {
+    return 0; // 并行执行
+  }
 }
 
 /*
@@ -455,61 +442,48 @@ void check_and_perform_autosave() {
     }
 }
 
-/*
- * msg: request message
- * length: length of request message
- * response: need to send
- * @return : length of response
- */
-
 int kvs_protocol(char* rmsg, int length, char* response) {
-  if (rmsg == NULL || length == 0 || response == NULL) return -1;
+  pthread_mutex_lock(&global_kvs_lock); // LOCK
 
-  // 确保消息以null结尾以便于字符串操作
+  if (rmsg == NULL || length == 0 || response == NULL) {
+      pthread_mutex_unlock(&global_kvs_lock);
+      return -1;
+  }
+
   if (length < MAX_MULTICMD_LENGTH) {
     rmsg[length] = '\0';
   } else {
-    // 如果缓冲区满，确保最后字节是null终止符
     rmsg[MAX_MULTICMD_LENGTH - 1] = '\0';
   }
 
-  // printf("recv: %dbytes:\n%s\n", strlen(rmsg), rmsg);
-
 #if ECHO_LOGIC  // echo
-  printf("copy from rmsg: %s\n", rmsg);
   memcpy(response, rmsg, length);
+  pthread_mutex_unlock(&global_kvs_lock);
   return strlen(response);
 #elif KV_LOGIC  // 真正的 KV 存储业务逻辑
-  // 检查是否包含多命令操作符
   if (strchr(rmsg, '&') != NULL) {
-    // 如果存在&操作符，处理多命令
     int ret = kvs_process_multicmd(rmsg, length, response);
-
-    // 在多命令处理中，如果有写操作，也需要检查是否需要自动保存
     check_and_perform_autosave();
+    pthread_mutex_unlock(&global_kvs_lock);
     return ret;
   } else {
-    // 单命令处理
     char* tokens[KVS_MAX_TOKENS] = {0};
-
-    // 分割token
     int count = kvs_split_token(rmsg, tokens);
-    if (count == -1) return -2;
+    if (count == -1) {
+        pthread_mutex_unlock(&global_kvs_lock);
+        return -2;
+    }
 
-    //  *协议分类器* : 解析 rmsg
     int ret = kvs_filter_protocol(tokens, count, response);
-    // 返回值相当于 strlen(response)
 
-    // 检查是否为写操作（SET、MOD、DEL等），如果是则增加计数
     if (count > 0 && tokens[0] != NULL) {
         if (is_write_command(tokens[0])) {
             changes_since_last_save++;
         }
     }
 
-    // 检查是否需要自动保存
     check_and_perform_autosave();
-
+    pthread_mutex_unlock(&global_kvs_lock); // UNLOCK
     return ret;
   }
 #endif
@@ -517,37 +491,14 @@ int kvs_protocol(char* rmsg, int length, char* response) {
 
 
 int init_kvengine(void) {
-  // // 首先初始化持久化功能
-  // kvs_persist_init(g_persist_mode);
-
-  // 只初始化主引擎（根据优先级选择的数据结构）
   memset(&global_main_engine, 0, sizeof(global_main_engine));
   kvs_main_create(&global_main_engine);
-
-  // 在数据结构初始化完成之后，根据模式加载数据
-  // if (g_persist_mode == PERSIST_MODE_INCREMENTAL) {
-  //   kvs_persist_replay_log();
-  // } else if (g_persist_mode == PERSIST_MODE_SNAPSHOT) {
-  //   kvs_snapshot_load();
-  // }
-
   return 0;
 }
 
 void dest_kvengine(void) {
-  // 根据模式保存数据
-  // if (g_persist_mode == PERSIST_MODE_SNAPSHOT) {
-  //   kvs_snapshot_save();
-  // }
-
-  // 在程序退出前保存快照
   ksfSave("dump.ksf");
-
-  // 销毁主引擎
   kvs_main_destroy(&global_main_engine);
-
-  // // 关闭持久化功能
-  // kvs_persist_close();
 }
 
 
@@ -559,44 +510,56 @@ void signal_handler(int sig) {
 }
 
 int main(int argc, char* argv[]) {
-  if (argc < 2 || argc > 3) return -1;
-
-  int port = atoi(argv[1]);
-
-  // 解析持久化模式参数
-  if (argc == 3) {
-    if (strcmp(argv[2], "aof") == 0) {
-      load_mode = INIT_LOAD_AOF;
-    } else if (strcmp(argv[2], "snap") == 0) {
-      load_mode = INIT_LOAD_SNAP;
-    } else {
-      printf("错误：未知的持久化模式 '%s'\n", argv[2]);
-      printf("用法: %s <port> [aof|snap]\n", argv[0]);
+  if (argc < 2) {
+      printf("Usage: %s <port> [aof|snap] [--slaveof ip port]\n", argv[0]);
       return -1;
-    }
   }
 
-  // 注册信号处理器，捕获SIGINT (Ctrl+C) 和 SIGTERM
+  int port = atoi(argv[1]);
+  char *master_ip = NULL;
+  int master_port = 0;
+
+  // Arg parsing
+  for (int i=2; i<argc; i++) {
+      if (strcmp(argv[i], "--slaveof") == 0) {
+          if (i+2 < argc) {
+              master_ip = argv[i+1];
+              master_port = atoi(argv[i+2]);
+              i += 2;
+          }
+      } else if (strcmp(argv[i], "aof") == 0) {
+          load_mode = INIT_LOAD_AOF;
+      } else if (strcmp(argv[i], "snap") == 0) {
+          load_mode = INIT_LOAD_SNAP;
+      }
+  }
+
   signal(SIGINT, signal_handler);
   signal(SIGTERM, signal_handler);
 
-  // 注册退出函数，确保在程序正常退出时保存数据（仅在非信号退出时使用）
   if (atexit(dest_kvengine) != 0) {
       printf("警告：无法注册退出函数\n");
   }
 
   init_kvengine();
-
-
-  if (load_mode == INIT_LOAD_AOF) {
-    aofLoad(aof_filename);
-  } else if (load_mode == INIT_LOAD_SNAP) {
-    ksfLoad(snap_filename);
+  
+  if (master_ip != NULL) {
+      // SLAVE MODE
+      printf("Starting as SLAVE. Syncing with Master %s:%d...\n", master_ip, master_port);
+      if (init_slave_replication(master_ip, master_port) != 0) {
+          fprintf(stderr, "Failed to sync with master. Exiting.\n");
+          return -1;
+      }
+  } else {
+      // MASTER MODE
+      if (load_mode == INIT_LOAD_AOF) {
+        aofLoad(aof_filename);
+      } else if (load_mode == INIT_LOAD_SNAP) {
+        ksfLoad(snap_filename);
+      }
   }
-  // 启动AOF同步后台线程
+
   start_aof_fsync_process();
-
-
 
 #if (NETWORK_SELECT == NETWORK_REACTOR)
   reactor_start(port, kvs_protocol);  //

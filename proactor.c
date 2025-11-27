@@ -14,8 +14,9 @@
 
 extern int kvs_protocol(char *msg, int length, char *response);
 extern int before_sleep();
-
-
+// 
+extern __thread int current_processing_fd;
+//
 struct conn_info {
 	int fd;
 	int event;
@@ -166,6 +167,9 @@ int proactor_start(unsigned short port, msg_handler handler) {
 				} else if (ret > 0) {
 					
 					//int kvs_protocol(char *msg, int length, char *response);
+          //
+          current_processing_fd = result.fd;
+          //
 					ret = kvs_handler(buffer, ret, response);
 					
 					set_event_send(&ring, result.fd, response, ret, 0);

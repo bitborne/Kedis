@@ -1,5 +1,5 @@
 #include "kvstore.h"
-#if ENABLE_HASH
+#if ENABLE_HASH && !ENABLE_RBTREE
 
 #include <stdio.h>
 #include <string.h>
