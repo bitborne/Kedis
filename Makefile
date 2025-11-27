@@ -1,6 +1,7 @@
 
 CC = gcc
 FLAGS = -I ./NtyCo/core/ -L ./NtyCo/ -lntyco -lpthread -luring -ldl
+JEMALLOC_FLAGS = -DHAVE_JEMALLOC -ljemalloc
 SRCS = kvstore.c ntyco.c proactor.c kvs_array.c kvs_rbtree.c kvs_hash.c ksf.c aof.c replication.c
 TESTCASE_SRCS = testcase.c
 TARGET = kvstore
@@ -18,8 +19,8 @@ $(SUBDIR): ECHO
 ECHO:
 	@echo $(SUBDIR)
 
-$(TARGET): $(OBJS) 
-	$(CC) -o $@ $^ $(FLAGS)
+$(TARGET): $(OBJS)
+	$(CC) -o $@ $^ $(FLAGS) $(JEMALLOC_FLAGS)
 
 $(TESTCASE): $(TESTCASE_SRCS)
 	$(CC) -o $@ $^
@@ -27,7 +28,7 @@ $(TESTCASE): $(TESTCASE_SRCS)
 %.o: %.c
 	$(CC) $(FLAGS) -c $^ -o $@
 
-clean: 
+clean:
 	rm -rf $(OBJS) $(TARGET) $(TESTCASE)
 
 

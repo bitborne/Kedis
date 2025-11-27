@@ -309,7 +309,7 @@ int aofLoad(const char* filename) {
     }
 
     // 分配缓冲区读取整个文件
-    char* buffer = (char*)malloc(file_size);
+    char* buffer = (char*)kvs_malloc(file_size);
     if (!buffer) {
         fprintf(stderr, "无法分配内存来加载AOF文件\n");
         fclose(file);
@@ -350,7 +350,7 @@ int aofLoad(const char* filename) {
         if (pos + key_len > file_size) break;
         char* key = NULL;
         if (key_len > 0) {
-            key = (char*)malloc(key_len + 1);
+            key = (char*)kvs_malloc(key_len + 1);
             if (!key) {
                 fprintf(stderr, "无法分配内存来存储键\n");
                 kvs_free(buffer);
@@ -369,7 +369,7 @@ int aofLoad(const char* filename) {
                 kvs_free(buffer);
                 return -1;
             }
-            value = (char*)malloc(val_len + 1);
+            value = (char*)kvs_malloc(val_len + 1);
             if (!value) {
                 fprintf(stderr, "无法分配内存来存储值\n");
                 if (key) kvs_free(key);
