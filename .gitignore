@@ -27,3 +27,5 @@ openspec/
 .qwen/
 *.md
 !README.md
+massif*
+*.csv

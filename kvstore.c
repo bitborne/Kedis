@@ -72,7 +72,7 @@ const char* snap_filename = "./data/dump.ksf";
 // 跨平台的时候，只需要修改这个函数即可--> 可迭代
 void* kvs_calloc(size_t num, size_t size) {
 #ifdef HAVE_JEMALLOC
-  return je_calloc(num, size);
+  return calloc(num, size);
 #else
     size_t total_size = num * size;
     void *ptr = kvs_malloc(total_size);
@@ -85,7 +85,7 @@ void* kvs_calloc(size_t num, size_t size) {
 
 void* kvs_malloc(size_t size) {
   #ifdef HAVE_JEMALLOC
-    return je_malloc(size);
+    return malloc(size);
   #else
     // 如果内存池已初始化且请求大小适合内存池，则使用内存池
     if (g_mem_pool && size <= g_mem_pool->block_size) {
@@ -100,7 +100,7 @@ void* kvs_malloc(size_t size) {
 void kvs_free(void* ptr) {
     // 检查指针是否属于内存池管理范围
   #ifdef HAVE_JEMALLOC
-    je_free(ptr);
+    free(ptr);
   #else
     if (g_mem_pool && ptr) {
         char *start = (char*)g_mem_pool->chunk + sizeof(mem_block_t);

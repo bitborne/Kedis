@@ -8,7 +8,7 @@
 
 // 内存块大小定义，针对KV存储常见数据大小优化
 #define BLOCK_SIZE 256    // 默认块大小
-#define CHUNK_SIZE (1024 * 1024)  // 1MB的内存块，包含多个分配单元
+#define CHUNK_SIZE (256 * 1024 * 1024)  // 1MB的内存块，包含多个分配单元
 
 // 内存池块结构
 typedef struct mem_block {

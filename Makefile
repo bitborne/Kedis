@@ -26,7 +26,7 @@ $(TESTCASE): $(TESTCASE_SRCS)
 	$(CC) -o $@ $^
 
 %.o: %.c
-	$(CC) $(FLAGS) -c $^ -o $@
+	$(CC) $(FLAGS) $(JEMALLOC_FLAGS) -c $^ -o $@
 
 clean:
 	rm -rf $(OBJS) $(TARGET) $(TESTCASE)
