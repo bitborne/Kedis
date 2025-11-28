@@ -92,7 +92,7 @@ int handle_sync_command(int fd) {
     printf("[Master] Snapshot sent to slave.\n");
 
     // 5. Add to slave list
-    replication_client_t *slave = malloc(sizeof(replication_client_t));
+    replication_client_t *slave = kvs_calloc(1, sizeof(replication_client_t));
     slave->fd = fd;
     slave->state = REPL_STATE_CONNECTED;
     
@@ -267,7 +267,7 @@ int init_slave_replication(const char* master_host, int master_port) {
     replication_info.is_master = 0;
     
     // Start listener thread
-    int *arg = malloc(sizeof(int));
+    int *arg = kvs_malloc(sizeof(int));
     *arg = fd;
     pthread_t tid;
     pthread_create(&tid, NULL, slave_listen_thread, arg);
