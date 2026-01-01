@@ -19,6 +19,9 @@
 
 #define KVS_MAX_TOKENS		128
 
+// 多引擎模式开关：0=单引擎模式（按优先级选择），1=多引擎模式（同时启用所有引擎）
+#define ENABLE_MULTI_ENGINE	1
+
 #define ENABLE_ARRAY		1
 #define ENABLE_RBTREE		1
 #define ENABLE_HASH			1
@@ -53,20 +56,19 @@ void* kvs_calloc(size_t num, size_t size);
 void *kvs_malloc(size_t size);
 void kvs_free(void *ptr);
 
+typedef struct {
+  char buf[AOF_BUF_SIZE];
+  int len;
+} aof_buf;
+
+
+// 红黑树引擎定义
 #if ENABLE_RBTREE
 
   #define RED				1
   #define BLACK 			2
 
   #define ENABLE_KEY_CHAR		1
-
-  #define kvs_main_set(inst, key, value) kvs_rbtree_set(inst, key, value)
-  #define kvs_main_get(inst, key) kvs_rbtree_get(inst, key)
-  #define kvs_main_del(inst, key) kvs_rbtree_del(inst, key)
-  #define kvs_main_mod(inst, key, value) kvs_rbtree_mod(inst, key, value)
-  #define kvs_main_exist(inst, key) kvs_rbtree_exist(inst, key)
-  #define kvs_main_create(inst) kvs_rbtree_create(inst)
-  #define kvs_main_destroy(inst) kvs_rbtree_destroy(inst)
 
   #if ENABLE_KEY_CHAR
   typedef char* KEY_TYPE;
@@ -99,24 +101,16 @@ void kvs_free(void *ptr);
   int kvs_rbtree_mod(kvs_rbtree_t *inst, char *key, char *value);
   int kvs_rbtree_exist(kvs_rbtree_t *inst, char *key);
 
+#endif
 
-
-
-#elif ENABLE_HASH
+// 哈希表引擎定义
+#if ENABLE_HASH
 
   #define MAX_KEY_LEN	128
   #define MAX_VALUE_LEN	512
   #define MAX_TABLE_SIZE	1024
 
   #define HASH_ENABLE_KEY_POINTER	1
-
-  #define kvs_main_set(inst, key, value) kvs_hash_set(inst, key, value)
-  #define kvs_main_get(inst, key) kvs_hash_get(inst, key)
-  #define kvs_main_del(inst, key) kvs_hash_del(inst, key)
-  #define kvs_main_mod(inst, key, value) kvs_hash_mod(inst, key, value)
-  #define kvs_main_exist(inst, key) kvs_hash_exist(inst, key)
-  #define kvs_main_create(inst) kvs_hash_create(inst)
-  #define kvs_main_destroy(inst) kvs_hash_destroy(inst)
 
   typedef struct hashnode_s {
   #if HASH_ENABLE_KEY_POINTER
@@ -151,19 +145,11 @@ void kvs_free(void *ptr);
   int kvs_hash_del(kvs_hash_t *hash, char *key);
   int kvs_hash_exist(kvs_hash_t *hash, char *key);
 
+#endif
 
-
-#elif ENABLE_ARRAY
+// 数组引擎定义
+#if ENABLE_ARRAY
   #define KVS_ARRAY_SIZE 16384
-
-  #define kvs_main_set(inst, key, value) kvs_array_set(inst, key, value)
-  #define kvs_main_get(inst, key) kvs_array_get(inst, key)
-  #define kvs_main_del(inst, key) kvs_array_del(inst, key)
-  #define kvs_main_mod(inst, key, value) kvs_array_mod(inst, key, value)
-  #define kvs_main_exist(inst, key) kvs_array_exist(inst, key)
-  #define kvs_main_create(inst) kvs_array_create(inst)
-  #define kvs_main_destroy(inst) kvs_array_destroy(inst)
-
 
   // 元素
   typedef struct kvs_array_item {
@@ -188,6 +174,40 @@ void kvs_free(void *ptr);
 
 #endif
 
+// 单引擎模式的统一接口定义（仅在非多引擎模式下使用）
+#if !ENABLE_MULTI_ENGINE
+  #if ENABLE_RBTREE
+    #define kvs_main_set(inst, key, value) kvs_rbtree_set(inst, key, value)
+    #define kvs_main_get(inst, key) kvs_rbtree_get(inst, key)
+    #define kvs_main_del(inst, key) kvs_rbtree_del(inst, key)
+    #define kvs_main_mod(inst, key, value) kvs_rbtree_mod(inst, key, value)
+    #define kvs_main_exist(inst, key) kvs_rbtree_exist(inst, key)
+    #define kvs_main_create(inst) kvs_rbtree_create(inst)
+    #define kvs_main_destroy(inst) kvs_rbtree_destroy(inst)
+    typedef kvs_rbtree_t kvs_main_engine_t;
+  #elif ENABLE_HASH
+    #define kvs_main_set(inst, key, value) kvs_hash_set(inst, key, value)
+    #define kvs_main_get(inst, key) kvs_hash_get(inst, key)
+    #define kvs_main_del(inst, key) kvs_hash_del(inst, key)
+    #define kvs_main_mod(inst, key, value) kvs_hash_mod(inst, key, value)
+    #define kvs_main_exist(inst, key) kvs_hash_exist(inst, key)
+    #define kvs_main_create(inst) kvs_hash_create(inst)
+    #define kvs_main_destroy(inst) kvs_hash_destroy(inst)
+    typedef kvs_hash_t kvs_main_engine_t;
+  #elif ENABLE_ARRAY
+    #define kvs_main_set(inst, key, value) kvs_array_set(inst, key, value)
+    #define kvs_main_get(inst, key) kvs_array_get(inst, key)
+    #define kvs_main_del(inst, key) kvs_array_del(inst, key)
+    #define kvs_main_mod(inst, key, value) kvs_array_mod(inst, key, value)
+    #define kvs_main_exist(inst, key) kvs_array_exist(inst, key)
+    #define kvs_main_create(inst) kvs_array_create(inst)
+    #define kvs_main_destroy(inst) kvs_array_destroy(inst)
+    typedef kvs_array_t kvs_main_engine_t;
+  #else
+    #error "至少需要启用一种数据结构"
+  #endif
+#endif
+
 
 
 
@@ -196,12 +216,24 @@ int ksfSave(const char *filename);  // 保存KSF快照
 int ksfSaveBackground(void);  // 后台保存KSF快照
 int ksfLoad(const char *filename);  // 加载KSF快照
 
+// 多引擎模式下的KSF引擎保存函数
+#if ENABLE_MULTI_ENGINE
+int ksfSaveAll(void);  // 保存所有引擎的KSF快照
+int ksfLoadAll(void);  // 加载所有引擎的KSF快照
+#endif
+
 // AOF相关函数声明
 void appendToAofBuffer(int type, const char* key, const char* value);  // 添加到AOF缓冲区
 int flushAofBuffer(void);  // 刷新AOF缓冲区
 int start_aof_fsync_process(void);  // 启动AOF同步线程
 void before_sleep(void);  // 事件循环前的处理函数
-int aofLoad(const char* filename);
+int aofLoad(const char* filename);  // 加载AOF文件
+
+// 多引擎模式下的AOF函数
+#if ENABLE_MULTI_ENGINE
+int aofLoadAll(void);  // 加载所有引擎的AOF文件
+void appendToAofBufferToEngine(int engine_type, int type, const char* key, const char* value);  // 向指定引擎的AOF文件写入命令
+#endif
 
 // 复制相关函数声明
 int handle_sync_command(int fd);

@@ -1,7 +1,7 @@
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
-use percent_encoding::{utf8_percent_encode, percent_decode_str, AsciiSet, NON_ALPHANUMERIC};
+use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 
 /// 定义需要编码的字符集（除了字母数字外的大部分字符）
 pub const ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC
@@ -91,7 +91,7 @@ impl KVClient {
         let command = format!("SET {} {}\n", key, encoded_value);
         self.send_command(&command)
     }
-
+/*
     /// 获取键的值
     pub fn get(&self, key: &str) -> Result<String, Box<dyn std::error::Error>> {
         let command = format!("GET {}\n", key);
@@ -150,4 +150,6 @@ impl KVClient {
 
         self.set(&title, &content)
     }
+    */
 }
+
