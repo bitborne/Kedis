@@ -7,7 +7,8 @@
 #include <assert.h>
 #include <stddef.h>
 #include <stdint.h>
-
+#include <sys/mman.h>
+#include <unistd.h>
 
 #define NETWORK_REACTOR 	0
 #define NETWORK_PROACTOR	1
@@ -59,7 +60,7 @@ void kvs_free(void *ptr);
 typedef struct {
   char buf[AOF_BUF_SIZE];
   int len;
-} aof_buf;
+} aof_buf_t;
 
 
 // 红黑树引擎定义
@@ -208,8 +209,8 @@ typedef struct {
   #endif
 #endif
 
-
-
+// mmap 持久化落盘的核心函数
+int mmap_append(int fd, const char* filename, char *data, size_t n);
 
 // KSF持久化相关函数声明
 int ksfSave(const char *filename);  // 保存KSF快照

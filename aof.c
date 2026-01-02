@@ -1,4 +1,6 @@
 #include "kvstore.h"
+
+#include <sys/mman.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -56,10 +58,10 @@
 // AOF缓冲区和长度
 #if ENABLE_MULTI_ENGINE
 
-extern aof_buf aofBuffer[3];
+extern aof_buf_t aofBuffer[3];
 
 #else
-extern aof_buf aofBuffer;
+extern aof_buf_t aofBuffer;
 #endif
 
 // AOF文件描述符 - 多引擎模式下每个引擎有独立的文件描述符

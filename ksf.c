@@ -1,3 +1,6 @@
+#include "kvstore.h"
+
+#include <sys/mman.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -11,7 +14,6 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "kvstore.h"
 
 // 多引擎模式下的文件名定义
 #if ENABLE_MULTI_ENGINE
@@ -244,7 +246,8 @@ int ksfWriteArray(int fd) {
  */
 static int ksfSaveToFile(const char* filename, int (*write_func)(int)) {
   char temp_filename[256];
-  snprintf(temp_filename, sizeof(temp_filename), "temp-%d.ksf", getpid());
+  // 临时文件创建在data目录下，确保与目标文件在同一目录
+  snprintf(temp_filename, sizeof(temp_filename), "./data/temp-%d.ksf", getpid());
 
   int fd = open(temp_filename, O_WRONLY | O_CREAT | O_TRUNC, 0644);
   if (fd == -1) {

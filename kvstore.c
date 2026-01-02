@@ -100,10 +100,10 @@ kvs_array_t global_main_engine;
 // AOF缓冲区和长度
 #if ENABLE_MULTI_ENGINE
 
-aof_buf aofBuffer[3] = {0};
+aof_buf_t aofBuffer[3] = {0};
 
 #else
-aof_buf aofBuffer = {0};
+aof_buf_t aofBuffer = {0};
 #endif
 
 extern const char* aof_filename;
@@ -280,7 +280,8 @@ int is_write_command(const char* command) {
       strcmp(command, "HSET") == 0 || strcmp(command, "MOD") == 0 ||
       strcmp(command, "RMOD") == 0 || strcmp(command, "HMOD") == 0 ||
       strcmp(command, "DEL") == 0 || strcmp(command, "RDEL") == 0 ||
-      strcmp(command, "HDEL") == 0) {
+      strcmp(command, "HDEL") == 0 || strcmp(command, "ASET") == 0 ||
+      strcmp(command, "AMOD") == 0 || strcmp(command, "ADEL") == 0) {
     return 1;
   }
   return 0;

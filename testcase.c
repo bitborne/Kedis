@@ -338,7 +338,92 @@ void multicmd_testcase(int connfd) {
   printf("passed\n");
 }
 
+void array_testcase_single_1w(int connfd) {
+  gettimeofday(&tv_begin, NULL);
+  const int cnt = 10000;
+  for (int i = 0; i < cnt; i++) {
+    char cmd_set[64] = {0};
+    snprintf(cmd_set, 64, "ASET Qbb%d Schatten%d", i, i);
+    testcase(connfd, cmd_set, "OK\r\n", "ASET-Qbb-0");
+  }
+  for (int i = 0; i < cnt; i++) {
+    char cmd_get[64] = {0};
+    char expect_get[64] = {0};
+    snprintf(cmd_get, 64, "AGET Qbb%d", i, i);
+    snprintf(expect_get, 64, "Schatten%d\r\n", i);
+    testcase(connfd, cmd_get, expect_get, "AGET-Qbb-0");
 
+  }
+    
+  for (int i = 0; i < cnt; i++) {
+    char cmd_del[64] = {0};
+    snprintf(cmd_del, 64, "ADEL Qbb%d", i);
+    testcase(connfd, cmd_del, "OK\r\n", "ADEL-Qbb-0");
+  }
+  gettimeofday(&tv_end, NULL);
+  int time_used = TIME_SUB_MS(tv_end, tv_begin);
+  printf("array_single(3w req) --> time_used: %d ms  QPS: %d\n", time_used, 30000 * 1000 / time_used);
+
+}
+void rbtree_testcase_single_1w(int connfd) {
+
+  gettimeofday(&tv_begin, NULL);
+  const int cnt = 10000;
+  for (int i = 0; i < cnt; i++) {
+    char cmd_rset[64] = {0};
+    snprintf(cmd_rset, 64, "RSET Qbb%d Schatten%d", i, i);
+    testcase(connfd, cmd_rset, "OK\r\n", "RSET-Qbb-0");
+  }
+  for (int i = 0; i < cnt; i++) {
+    char cmd_rget[64] = {0};
+    char expect_rget[64] = {0};
+    snprintf(cmd_rget, 64, "RGET Qbb%d", i, i);
+    snprintf(expect_rget, 64, "Schatten%d\r\n", i);
+    testcase(connfd, cmd_rget, expect_rget, "RGET-Qbb-0");
+
+  }
+    
+  for (int i = 0; i < cnt; i++) {
+    char cmd_rdel[64] = {0};
+    snprintf(cmd_rdel, 64, "RDEL Qbb%d", i);
+    testcase(connfd, cmd_rdel, "OK\r\n", "RDEL-Qbb-0");
+  }
+
+  gettimeofday(&tv_end, NULL);
+  int time_used = TIME_SUB_MS(tv_end, tv_begin);
+  printf("rbtree_single(3w req) --> time_used: %d ms  QPS: %d\n", time_used, 30000 * 1000 / time_used);
+}
+
+
+
+void hash_testcase_single_1w(int connfd) {
+
+  gettimeofday(&tv_begin, NULL);
+  const int cnt = 10000;
+  for (int i = 0; i < cnt; i++) {
+    char cmd_hset[64] = {0};
+    snprintf(cmd_hset, 64, "HSET Qbb%d Schatten%d", i, i);
+    testcase(connfd, cmd_hset, "OK\r\n", "HSET-Qbb-0");
+  }
+  for (int i = 0; i < cnt; i++) {
+    char cmd_hget[64] = {0};
+    char expect_hget[64] = {0};
+    snprintf(cmd_hget, 64, "HGET Qbb%d", i, i);
+    snprintf(expect_hget, 64, "Schatten%d\r\n", i);
+    testcase(connfd, cmd_hget, expect_hget, "HGET-Qbb-0");
+
+  }
+    
+  for (int i = 0; i < cnt; i++) {
+    char cmd_hdel[64] = {0};
+    snprintf(cmd_hdel, 64, "HDEL Qbb%d", i);
+    testcase(connfd, cmd_hdel, "OK\r\n", "HDEL-Qbb-0");
+  }
+
+  gettimeofday(&tv_end, NULL);
+  int time_used = TIME_SUB_MS(tv_end, tv_begin);
+  printf("hash_single(3w req) --> time_used: %d ms  QPS: %d\n", time_used, 30000 * 1000 / time_used);
+}
 
 int main(int argc, char* argv[]) {
 
@@ -393,6 +478,10 @@ int main(int argc, char* argv[]) {
   else if (!strcmp(mode, "mul")) {
     multicmd_testcase(connfd_master);
   }
+
+  else if (!strcmp(mode, "A")) array_testcase_single_1w(connfd_master);
+  else if (!strcmp(mode, "H")) hash_testcase_single_1w(connfd_master);
+  else if (!strcmp(mode, "R")) rbtree_testcase_single_1w(connfd_master);
   else {
     printf("ARG_parse: ERROR\n");
     return -1;
