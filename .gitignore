@@ -31,4 +31,4 @@ massif*
 *.csv
 ksf.c.backup
 mul_test
-display/
+.iflow
