@@ -29,3 +29,6 @@ openspec/
 !README.md
 massif*
 *.csv
+ksf.c.backup
+mul_test
+display/
