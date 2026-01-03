@@ -32,4 +32,5 @@ massif*
 ksf.c.backup
 mul_test
 .iflow
-mmap_demo.c
+demo*.c
+*.txt
