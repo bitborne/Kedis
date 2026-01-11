@@ -15,9 +15,7 @@ typedef char* KEY_TYPE;
 #else
 typedef int KEY_TYPE;
 #endif
-// 1:49:05
-// TODO^ 这里继续完成红黑树的 CRUD 与 SET MOD DEL GET 等的对接
-// 以及`不完整类型`的错误？？？
+
 
 typedef struct _rbtree_node {
   unsigned char color;
