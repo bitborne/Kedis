@@ -53,18 +53,164 @@ int recv_msg(int connfd, char* result, int length) {
   return res;
 }
 
+/*
+ * RESP 编码函数：将自定义文本协议转换为 RESP 协议格式
+ * 输入: "SET key value"
+ * 输出: "*3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$5\r\nvalue\r\n"
+ * 注意：返回的字符串需要调用者释放内存
+ */
+char* encode_to_resp(const char* cmd) {
+  if (cmd == NULL || strlen(cmd) == 0) {
+    return NULL;
+  }
+
+  // 复制命令以便修改（strtok 会修改原字符串）
+  char* cmd_copy = strdup(cmd);
+  if (cmd_copy == NULL) {
+    return NULL;
+  }
+
+  // 解析参数
+  char* args[64];  // 最多支持 64 个参数
+  int argc = 0;
+  char* token = strtok(cmd_copy, " ");
+
+  while (token != NULL && argc < 64) {
+    args[argc++] = token;
+    token = strtok(NULL, " ");
+  }
+
+  if (argc == 0) {
+    free(cmd_copy);
+    return NULL;
+  }
+
+  // 计算 RESP 格式所需的总长度
+  int total_len = 0;
+  total_len += snprintf(NULL, 0, "*%d\r\n", argc);  // *argc\r\n
+  for (int i = 0; i < argc; i++) {
+    int arg_len = strlen(args[i]);
+    total_len += snprintf(NULL, 0, "$%d\r\n%s\r\n", arg_len, args[i]);  // $len\r\narg\r\n
+  }
+
+  // 分配内存
+  char* resp = (char*)malloc(total_len + 2);  // +2 确保有足够空间
+  if (resp == NULL) {
+    free(cmd_copy);
+    return NULL;
+  }
+
+  // 生成 RESP 格式
+  int offset = 0;
+  offset += snprintf(resp + offset, total_len - offset + 1, "*%d\r\n", argc);
+  for (int i = 0; i < argc; i++) {
+    int arg_len = strlen(args[i]);
+    int written = snprintf(resp + offset, total_len - offset + 1, "$%d\r\n%s\r\n", arg_len, args[i]);
+    // printf("[DEBUG] snprintf: arg=%s, arg_len=%d, written=%d, offset=%d, total_len=%d, remaining=%d\n", 
+          //  args[i], arg_len, written, offset, total_len, total_len - offset);
+    offset += written;
+  }
+  resp[offset] = '\0';  // 确保字符串终止
+  // printf("[DEBUG] Final: offset=%d, total_len=%d, strlen(resp)=%zu\n", offset, total_len, strlen(resp));
+  // printf("[DEBUG] RESP content (hex): ");
+  // for (int i = 0; i < strlen(resp); i++) {
+  //   printf("%02x ", (unsigned char)resp[i]);
+  // }
+  // printf("\n");
+
+  free(cmd_copy);
+  return resp;
+}
+
+/*
+ * 响应格式转换：将 kvs_protocol 响应转换为 RESP 响应格式
+ * 用于更新测试用例中的期望响应格式
+ */
+const char* convert_response_to_resp(const char* pattern) {
+  if (pattern == NULL) return NULL;
+
+  // OK\r\n -> +OK\r\n
+  if (strcmp(pattern, "OK\r\n") == 0) {
+    return "+OK\r\n";
+  }
+
+  // ERROR\r\n -> -ERROR\r\n
+  if (strcmp(pattern, "ERROR\r\n") == 0) {
+    return "-ERROR\r\n";
+  }
+
+  // YES, Exist\r\n -> :1\r\n
+  if (strcmp(pattern, "YES, Exist\r\n") == 0) {
+    return ":1\r\n";
+  }
+
+  // NO, Not Exist\r\n -> :0\r\n
+  if (strcmp(pattern, "NO, Not Exist\r\n") == 0) {
+    return ":0\r\n";
+  }
+
+  // Key has existed\r\n -> -Key has existed\r\n
+  if (strcmp(pattern, "Key has existed\r\n") == 0) {
+    return "-Key has existed\r\n";
+  }
+
+  // Not Exist\r\n -> -Not Exist\r\n
+  if (strcmp(pattern, "Not Exist\r\n") == 0) {
+    return "-Not Exist\r\n";
+  }
+
+  // ERROR / Not Exist\r\n -> -ERROR / Not Exist\r\n
+  if (strcmp(pattern, "ERROR / Not Exist\r\n") == 0) {
+    return "-ERROR / Not Exist\r\n";
+  }
+
+  // 其他情况：假设是值响应，转换为 bulk string 格式
+  // 例如 "Schatten\r\n" -> "$8\r\nSchatten\r\n"
+  int len = strlen(pattern);
+  if (len >= 2 && pattern[len - 1] == '\n' && pattern[len - 2] == '\r') {
+    // 去掉末尾的 \r\n
+    static char resp_pattern[256];
+    int value_len = len - 2;
+    snprintf(resp_pattern, sizeof(resp_pattern), "$%d\r\n%.*s\r\n", value_len, value_len, pattern);
+    return resp_pattern;
+  }
+
+  // 默认返回原值
+  return pattern;
+}
+
 void testcase(int connfd, char* msg, char* pattern, char* casename) {
   if (msg == NULL || pattern == NULL || casename == NULL) return;
 
-  send_msg(connfd, msg, strlen(msg));
+  // 将命令转换为 RESP 格式
+  char* resp_msg = encode_to_resp(msg);
+  if (resp_msg == NULL) {
+    printf("[ERROR] --> %s: Failed to encode command to RESP\n", casename);
+    exit(1);
+  }
+
+  // 调试：打印 RESP 命令的十六进制表示
+  // printf("[DEBUG] Sending RESP (%zu bytes): ", strlen(resp_msg));
+  // for (size_t i = 0; i < strlen(resp_msg); i++) {
+  //   if (resp_msg[i] == '\r') printf("\\r");
+  //   else if (resp_msg[i] == '\n') printf("\\n");
+  //   else printf("%c", resp_msg[i]);
+  // }
+  // printf("\n");
+
+  send_msg(connfd, resp_msg, strlen(resp_msg));
+  free(resp_msg);  // 释放编码后的命令
 
   char result[MAX_MSG] = {0};
   recv_msg(connfd, result, MAX_MSG);
 
-  if (!strcmp(result, pattern)) {
+  // 将期望响应转换为 RESP 格式
+  const char* resp_pattern = convert_response_to_resp(pattern);
+
+  if (!strcmp(result, resp_pattern)) {
     // printf("[PASS] --> %s\n", casename);
   } else {
-    printf("[FALSE] --> %s: \n==> '%s' != '%s'\n", casename, result, pattern);
+    printf("[FALSE] --> %s: \n==> '%s' != '%s'\n", casename, result, resp_pattern);
     printf("msg is : %s\n", msg);
     exit(1);
   }
