@@ -326,20 +326,15 @@ static int resp_feed(struct conn* c) {
 
         if (c->seg_used == (size_t)c->bulk_len) {
           // 数据读完了，期待 \r\n
-          // printf("[DEBUG] Checking \\r\\n: done=%zu, len=%zu, data[done]='%c'(%d), data[done+1]='%c'(%d)\n", 
-                //  done, len, data[done], data[done], data[done+1], data[done+1]);
           if (done + 2 > len) {
             // 还没收到 \r\n，等待
-            // printf("[DEBUG] \\r\\n not received yet, waiting...\n");
             return done;
           }
 
           if (data[done] != '\r' || data[done + 1] != '\n') {
-            // printf("[DEBUG] \\r\\n format error!\n");
             return -1;
           }
           done += 2;
-          // printf("[DEBUG] \\r\\n found, done now=%zu\n", done);
 
           // 参数完整，存入 argv
           c->argv[c->argc++] = (robj){c->seg_buf, c->bulk_len};
@@ -512,7 +507,6 @@ int proactor_start(unsigned short port, msg_handler handler) {
     if (c == (struct conn*)-1) {
       if (res >= 0) {  // 新连接成功
         struct conn* nc = conn_pool_alloc(&g_conn_pool);
-        // printf("[DEBUG] New connection accepted: fd=%d\n", res);
         if (!nc) {
           close(res);
           fprintf(stderr, "Max conns reached, rejecting connection\n");
@@ -559,19 +553,16 @@ int proactor_start(unsigned short port, msg_handler handler) {
           conn_pool_free(&g_conn_pool, c);
           break;
         } else if (res > 0) {
-          // printf("[DEBUG] Received %d bytes on fd=%d: %s\n", res, c->fd, c->frame);
           c->r_len += res;  // 更新有效数据长度
         }
 
         int n = resp_feed(c);  // 喂给 RESP 状态机
-        // printf("[DEBUG] resp_feed returned: %d\n", n);
 
         if (n < 0) {
           conn_free(c);
           conn_pool_free(&g_conn_pool, c);  // 协议错误
         } else if (n == PARSE_OK) {         // 整条命令完整
           current_processing_fd = c->fd;
-          printf("-->1 \n");
           processCommand(c);
           current_processing_fd = -1;
 

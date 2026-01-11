@@ -246,8 +246,38 @@ int ksfWriteArray(int fd) {
  */
 static int ksfSaveToFile(const char* filename, int (*write_func)(int)) {
   char temp_filename[256];
-  // 临时文件创建在data目录下，确保与目标文件在同一目录
-  snprintf(temp_filename, sizeof(temp_filename), "./data/temp-%d.ksf", getpid());
+
+  // 从目标文件名中提取引擎标识（如 "dump_array.ksf" -> "array"）
+  // 用于在多引擎模式下避免多个引擎使用相同的临时文件名
+  const char* base_name = strrchr(filename, '/');
+  if (base_name == NULL) {
+    base_name = filename;
+  } else {
+    base_name++;  // 跳过 '/'
+  }
+
+  // 提取 "dump_xxx.ksf" 中的 "xxx" 部分
+  char engine_name[32] = {0};
+  if (strncmp(base_name, "dump_", 5) == 0) {
+    const char* start = base_name + 5;
+    const char* end = strstr(start, ".ksf");
+    if (end != NULL) {
+      size_t len = end - start;
+      if (len < sizeof(engine_name)) {
+        strncpy(engine_name, start, len);
+        engine_name[len] = '\0';
+      }
+    }
+  }
+
+  // 如果没有提取到引擎名称，使用 "default"
+  if (engine_name[0] == '\0') {
+    strncpy(engine_name, "default", sizeof(engine_name) - 1);
+  }
+
+  // 临时文件名格式：./data/temp-{engine_name}-{pid}.ksf
+  // 这样每个引擎都有独立的临时文件，避免冲突
+  snprintf(temp_filename, sizeof(temp_filename), "./data/temp-%s-%d.ksf", engine_name, getpid());
 
   int fd = open(temp_filename, O_WRONLY | O_CREAT | O_TRUNC, 0644);
   if (fd == -1) {
