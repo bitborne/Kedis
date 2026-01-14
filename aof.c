@@ -25,6 +25,9 @@
   #if ENABLE_ARRAY
   extern kvs_array_t array_engine;
   #endif
+  #if ENABLE_SKIPLIST
+  extern kvs_skiplist_t skiplist_engine;
+  #endif
 #else
   // 根据优先级选择使用的数据结构：红黑树 > 哈希 > 数组
   // 以下是当前使用的数据结构的统一接口定义
@@ -50,6 +53,9 @@
   #if ENABLE_RBTREE
   const char* aof_filename_rbtree = "./data/appendonly_rbtree.ksf";
   #endif
+  #if ENABLE_SKIPLIST
+  const char* aof_filename_skiplist = "./data/appendonly_skiplist.ksf";
+  #endif
 #else
   const char* aof_filename = "./data/appendonly.ksf";
 #endif
@@ -58,7 +64,7 @@
 // AOF缓冲区和长度
 #if ENABLE_MULTI_ENGINE
 
-extern aof_buf_t aofBuffer[3];
+extern aof_buf_t aofBuffer[4];
 
 #else
 extern aof_buf_t aofBuffer;
@@ -74,6 +80,9 @@ extern aof_buf_t aofBuffer;
   #endif
   #if ENABLE_RBTREE
   static int aof_fd_rbtree = -1;
+  #endif
+  #if ENABLE_SKIPLIST
+  static int aof_fd_skiplist = -1;
   #endif
 #else
   static int aof_fd = -1;
@@ -393,6 +402,15 @@ int start_aof_fsync_process() {
     }
     printf("Rbtree引擎AOF文件已打开: %s\n", aof_filename_rbtree);
     #endif
+
+    #if ENABLE_SKIPLIST
+    aof_fd_skiplist = open(aof_filename_skiplist, O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (aof_fd_skiplist == -1) {
+        fprintf(stderr, "错误：无法打开AOF文件 %s\n", aof_filename_skiplist);
+        return -1;
+    }
+    printf("Skiplist引擎AOF文件已打开: %s\n", aof_filename_skiplist);
+    #endif
 #else
     // 单引擎模式：只打开一个AOF文件
     aof_fd = open(aof_filename, O_WRONLY | O_CREAT | O_APPEND, 0644);
@@ -421,6 +439,9 @@ int start_aof_fsync_process() {
         #if ENABLE_RBTREE
         if (aof_fd_rbtree != -1) close(aof_fd_rbtree);
         #endif
+        #if ENABLE_SKIPLIST
+        if (aof_fd_skiplist != -1) close(aof_fd_skiplist);
+        #endif
 #else
         if (aof_fd != -1) close(aof_fd);
 #endif
@@ -444,6 +465,9 @@ void before_sleep() {
     #if ENABLE_RBTREE
     flushAofBufferToEngine(2);
     #endif
+    #if ENABLE_SKIPLIST
+    flushAofBufferToEngine(3);
+    #endif
 #else
     flushAofBuffer();
 #endif
@@ -452,7 +476,7 @@ void before_sleep() {
 /**
  * 从AOF文件加载数据到指定引擎
  * @param filename 文件名
- * @param engine_type 引擎类型: 0=array, 1=hash, 2=rbtree
+ * @param engine_type 引擎类型: 0=array, 1=hash, 2=rbtree, 3=skiplist
  * @return 成功返回0，失败返回-1
  */
 static int aofLoadToEngine(const char* filename, int engine_type) {
@@ -566,6 +590,10 @@ static int aofLoadToEngine(const char* filename, int engine_type) {
                     #if ENABLE_RBTREE
                     kvs_rbtree_set(&rbtree_engine, key, value);
                     #endif
+                } else if (engine_type == 3) {
+                    #if ENABLE_SKIPLIST
+                    kvs_skiplist_set(&skiplist_engine, key, value);
+                    #endif
                 }
 #else
                 kvs_main_set(&global_main_engine, key, value);
@@ -586,6 +614,10 @@ static int aofLoadToEngine(const char* filename, int engine_type) {
                     #if ENABLE_RBTREE
                     kvs_rbtree_mod(&rbtree_engine, key, value);
                     #endif
+                } else if (engine_type == 3) {
+                    #if ENABLE_SKIPLIST
+                    kvs_skiplist_mod(&skiplist_engine, key, value);
+                    #endif
                 }
 #else
                 kvs_main_mod(&global_main_engine, key, value);
@@ -605,6 +637,10 @@ static int aofLoadToEngine(const char* filename, int engine_type) {
                 } else if (engine_type == 2) {
                     #if ENABLE_RBTREE
                     kvs_rbtree_del(&rbtree_engine, key);
+                    #endif
+                } else if (engine_type == 3) {
+                    #if ENABLE_SKIPLIST
+                    kvs_skiplist_del(&skiplist_engine, key);
                     #endif
                 }
 #else
@@ -649,6 +685,11 @@ int aofLoadAll() {
         return -1;
     }
     #endif
+    #if ENABLE_SKIPLIST
+    if (aofLoadToEngine(aof_filename_skiplist, 3) != 0) {
+        return -1;
+    }
+    #endif
     return 0;
 #else
     // 单引擎模式：只加载一个AOF文件
@@ -658,7 +699,7 @@ int aofLoadAll() {
 
 /**
  * 向指定引擎的AOF文件写入命令（用于多引擎模式）
- * @param engine_type 引擎类型: 0=array, 1=hash, 2=rbtree
+ * @param engine_type 引擎类型: 0=array, 1=hash, 2=rbtree, 3=skiplist
  * @param type 命令类型
  * @param key 键
  * @param value 值

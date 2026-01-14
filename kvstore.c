@@ -58,6 +58,13 @@ enum {
   KVS_CMD_RMOD,
   KVS_CMD_REXIST,
 
+  // 多引擎模式 - Skiplist 引擎命令
+  KVS_CMD_SSET,
+  KVS_CMD_SGET,
+  KVS_CMD_SDEL,
+  KVS_CMD_SMOD,
+  KVS_CMD_SEXIST,
+
   // 通用命令（两种模式都支持）
   KVS_CMD_SAVE,
   KVS_CMD_BGSAVE,
@@ -83,6 +90,9 @@ kvs_hash_t hash_engine;
 #endif
 #if ENABLE_ARRAY
 kvs_array_t array_engine;
+#endif
+#if ENABLE_SKIPLIST
+kvs_skiplist_t skiplist_engine;
 #endif
 #else
 // 单引擎模式：根据优先级选择使用的数据结构：红黑树 > 哈希 > 数组
@@ -163,7 +173,8 @@ const char*
         {"SET",  "GET",    "DEL",    "MOD",    "EXIST", "ASET",
          "AGET", "ADEL",   "AMOD",   "AEXIST", "HSET",  "HGET",
          "HDEL", "HMOD",   "HEXIST", "RSET",   "RGET",  "RDEL",
-         "RMOD", "REXIST", "SAVE",   "BGSAVE", "SYNC"};  // 添加SAVE和BGSAVE命令
+         "RMOD", "REXIST", "SSET",   "SGET",   "SDEL",  "SMOD",
+         "SEXIST", "SAVE", "BGSAVE", "SYNC"};  // 添加SAVE和BGSAVE命令
 
 // 全局变量存储持久化模式和自动保存参数
 static int load_mode = INIT_LOAD_SNAP;
@@ -490,7 +501,63 @@ int kvs_filter_protocol(char** tokens, int count, char* response) {
         length = sprintf(response, "ERROR\r\n");
       }
       break;
-
+    case KVS_CMD_SSET:
+      ret = kvs_skiplist_set(&skiplist_engine, key, value);
+      if (ret < 0) {
+        length = sprintf(response, "ERROR\r\n");
+      } else if (ret == 0) {
+        if (replication_info.is_master) {
+          appendToAofBufferToEngine(3, AOF_CMD_SET, key, value);
+        }
+        length = sprintf(response, "OK\r\n");
+      } else {
+        length = sprintf(response, "Key has existed\r\n");
+      }
+      break;
+    case KVS_CMD_SGET:
+      gotValue = kvs_skiplist_get(&skiplist_engine, key);
+      if (gotValue == NULL) {
+        length = sprintf(response, "ERROR / Not Exist\r\n");
+      } else {
+        length = sprintf(response, "%s\r\n", gotValue);
+      }
+      break;
+    case KVS_CMD_SDEL:
+      ret = kvs_skiplist_del(&skiplist_engine, key);
+      if (ret < 0) {
+        length = sprintf(response, "ERROR\r\n");
+      } else if (ret == 0) {
+        if (replication_info.is_master) {
+          appendToAofBufferToEngine(3, AOF_CMD_DEL, key, NULL);
+        }
+        length = sprintf(response, "OK\r\n");
+      } else {
+        length = sprintf(response, "Not Exist\r\n");
+      }
+      break;
+    case KVS_CMD_SMOD:
+      ret = kvs_skiplist_mod(&skiplist_engine, key, value);
+      if (ret < 0) {
+        length = sprintf(response, "ERROR\r\n");
+      } else if (ret == 0) {
+        if (replication_info.is_master) {
+          appendToAofBufferToEngine(3, AOF_CMD_MOD, key, value);
+        }
+        length = sprintf(response, "OK\r\n");
+      } else {
+        length = sprintf(response, "Not Exist\r\n");
+      }
+      break;
+    case KVS_CMD_SEXIST:
+      ret = kvs_skiplist_exist(&skiplist_engine, key);
+      if (ret > 0) {
+        length = sprintf(response, "YES, Exist\r\n");
+      } else if (ret == 0) {
+        length = sprintf(response, "NO, Not Exist\r\n");
+      } else {
+        length = sprintf(response, "ERROR\r\n");
+      }
+      break;
 #else
     case KVS_CMD_SET:  // --> OK
       ret = kvs_main_set(&global_main_engine, key, value);
@@ -793,6 +860,10 @@ int init_kvengine(void) {
   memset(&array_engine, 0, sizeof(array_engine));
   kvs_array_create(&array_engine);
 #endif
+#if ENABLE_SKIPLIST
+  memset(&skiplist_engine, 0, sizeof(skiplist_engine));
+  kvs_skiplist_create(&skiplist_engine);
+#endif
 #else
   // 单引擎模式：只初始化一个引擎
   memset(&global_main_engine, 0, sizeof(global_main_engine));
@@ -813,6 +884,9 @@ void dest_kvengine(void) {
 #endif
 #if ENABLE_ARRAY
   kvs_array_destroy(&array_engine);
+#endif
+#if ENABLE_SKIPLIST
+  kvs_skiplist_destroy(&skiplist_engine);
 #endif
 #else
   if (replication_info.is_master) ksfSave(snap_filename);

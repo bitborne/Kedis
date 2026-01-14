@@ -8,6 +8,8 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <sys/mman.h>
+#include <sys/time.h>
+#include <pthread.h>
 #include <unistd.h>
 
 #define NETWORK_REACTOR 	0
@@ -26,6 +28,7 @@
 #define ENABLE_ARRAY		1
 #define ENABLE_RBTREE		1
 #define ENABLE_HASH			1
+#define ENABLE_SKIPLIST		1
 
 #define BUFFER_SIZE 1024
 #define MAX_MULTICMD_LENGTH 8192  // 增加最大多命令长度
@@ -209,6 +212,34 @@ typedef struct {
 
 #endif
 
+// Skiplist引擎定义
+#if ENABLE_SKIPLIST
+
+  #define SKIPLIST_MAX_LEVEL 6
+
+  typedef struct skiplist_node_s {
+    char *key;
+    char *value;
+    struct skiplist_node_s **forward;
+  } skiplist_node_t;
+
+  typedef struct skiplist_s {
+    int level;
+    skiplist_node_t *header;
+  } skiplist_t;
+
+  typedef struct skiplist_s kvs_skiplist_t;
+
+  int kvs_skiplist_create(kvs_skiplist_t *inst);
+  void kvs_skiplist_destroy(kvs_skiplist_t *inst);
+  int kvs_skiplist_set(kvs_skiplist_t *inst, char *key, char *value);
+  char* kvs_skiplist_get(kvs_skiplist_t *inst, char *key);
+  int kvs_skiplist_del(kvs_skiplist_t *inst, char *key);
+  int kvs_skiplist_mod(kvs_skiplist_t *inst, char *key, char *value);
+  int kvs_skiplist_exist(kvs_skiplist_t *inst, char *key);
+
+#endif
+
 // 单引擎模式的统一接口定义（仅在非多引擎模式下使用）
 #if !ENABLE_MULTI_ENGINE
   #if ENABLE_RBTREE
@@ -238,6 +269,15 @@ typedef struct {
     #define kvs_main_create(inst) kvs_array_create(inst)
     #define kvs_main_destroy(inst) kvs_array_destroy(inst)
     typedef kvs_array_t kvs_main_engine_t;
+  #elif ENABLE_SKIPLIST
+    #define kvs_main_set(inst, key, value) kvs_skiplist_set(inst, key, value)
+    #define kvs_main_get(inst, key) kvs_skiplist_get(inst, key)
+    #define kvs_main_del(inst, key) kvs_skiplist_del(inst, key)
+    #define kvs_main_mod(inst, key, value) kvs_skiplist_mod(inst, key, value)
+    #define kvs_main_exist(inst, key) kvs_skiplist_exist(inst, key)
+    #define kvs_main_create(inst) kvs_skiplist_create(inst)
+    #define kvs_main_destroy(inst) kvs_skiplist_destroy(inst)
+    typedef kvs_skiplist_t kvs_main_engine_t;
   #else
     #error "至少需要启用一种数据结构"
   #endif

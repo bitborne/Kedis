@@ -11,7 +11,7 @@ static int kvs_hash_need_expand(hashtable_t *hash);
 
 #define ROTL32(x, r) ((x << r) | (x >> (32 - r)))
 
-static uint32_t fmix32(uint32_t h) {
+static inline uint32_t fmix32(uint32_t h) {
 	h ^= h >> 16;
 	h *= 0x85ebca6b;
 	h ^= h >> 13;
@@ -306,7 +306,7 @@ int kvs_hash_mod(kvs_hash_t *hash, char *key, char *value) {
 	return 0;
 }
 
-int kvs_hash_count(kvs_hash_t *hash) {
+inline int kvs_hash_count(kvs_hash_t *hash) {
 	return hash->count;
 }
 
@@ -508,7 +508,7 @@ void kvs_hash_print_stats(hashtable_t *hash) {
 	}
 }
 
-static int kvs_hash_need_expand(hashtable_t *hash) {
+static inline int kvs_hash_need_expand(hashtable_t *hash) {
 	if (!hash) return 0;
 	return (float)hash->count / hash->max_slots > hash->load_factor;
 }
@@ -590,7 +590,7 @@ void kvs_hash_finish_rehash(hashtable_t *hash) {
 	printf("[REHASH] Rehash completed. New size: %d slots\n", hash->max_slots);
 }
 
-int kvs_hash_is_rehashing(hashtable_t *hash) {
+inline int kvs_hash_is_rehashing(hashtable_t *hash) {
 	if (!hash) return 0;
 	return hash->rehash_state == REHASH_STATE_ACTIVE;
 }
