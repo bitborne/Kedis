@@ -339,7 +339,9 @@ int is_write_command(const char* command) {
       strcmp(command, "RMOD") == 0 || strcmp(command, "HMOD") == 0 ||
       strcmp(command, "DEL") == 0 || strcmp(command, "RDEL") == 0 ||
       strcmp(command, "HDEL") == 0 || strcmp(command, "ASET") == 0 ||
-      strcmp(command, "AMOD") == 0 || strcmp(command, "ADEL") == 0) {
+      strcmp(command, "AMOD") == 0 || strcmp(command, "ADEL") == 0 || 
+      strcmp(command, "SSET") == 0 || strcmp(command, "SMOD") == 0 || 
+      strcmp(command, "SDEL") == 0) {
     return 1;
   }
   return 0;
