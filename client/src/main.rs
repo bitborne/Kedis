@@ -25,47 +25,51 @@ struct Cli {
     #[arg(short = 'f', long)]
     file: Option<String>,
 
-    /// 博客文件路径，用于插入博客
-    #[arg(short = 'b', long)]
-    blog: Option<String>,
-
     /// 启用交互模式
     #[arg(short = 'i', long)]
     interactive: bool,
 
-    /// 选择使用的引擎 (array, hash, rbtree, skiplist)
-    #[arg(short = 'e', long, default_value = "array")]
-    engine: String,
+    /// 列出所有支持的命令
+    #[arg(short = 'l', long)]
+    list_commands: bool,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
-    let client = KVClient::new(cli.host, cli.port, cli.engine);
+    let client = KVClient::new(cli.host, cli.port);
+
+    // 列出所有支持的命令
+    if cli.list_commands {
+        println!("支持的命令列表:");
+        for cmd in KVClient::get_valid_commands() {
+            println!("  - {}", cmd);
+        }
+        println!("\n基本命令: SET, GET, DEL, MOD, EXIST");
+        println!("Array引擎: ASET, AGET, ADEL, AMOD, AEXIST");
+        println!("Hash引擎: HSET, HGET, HDEL, HMOD, HEXIST");
+        println!("RBTRee引擎: RSET, RGET, RDEL, RMOD, REXIST");
+        println!("Skiplist引擎: SSET, SGET, SDEL, SMOD, SEXIST");
+        println!("管理命令: SAVE, BGSAVE, SYNC");
+        return Ok(());
+    }
 
     // 根据参数选择执行模式
-    // 如果提供了命令、文件或博客参数，则非交互模式
-    // 否则进入交互模式（默认）
-    if cli.command.is_some() || cli.file.is_some() || cli.blog.is_some() {
+    if cli.command.is_some() || cli.file.is_some() {
         // 非交互模式
-        match (&cli.command, &cli.file, &cli.blog) {
-            (Some(cmd), _, _) => {
-                // 执行单个命令
-                let result = client.send_resp_command(cmd)?;
+        match (&cli.command, &cli.file) {
+            (Some(cmd), _) => {
+                // 执行命令（支持多命令）
+                let result = client.execute_multi_commands(cmd)?;
                 println!("{}", result);
             }
-            (_, Some(file_path), _) => {
+            (_, Some(file_path)) => {
                 // 从文件读取并执行命令
                 let mut file = std::fs::File::open(file_path)?;
                 let mut commands = String::new();
                 file.read_to_string(&mut commands)?;
-                let result = client.send_resp_command(&commands)?;
+                let result = client.execute_multi_commands(&commands)?;
                 println!("{}", result);
-            }
-            (_, _, Some(blog_path)) => {
-                // 从文件插入博客
-                let result = client.insert_blog_from_file(blog_path)?;
-                println!("博客插入结果: {}", result);
             }
             _ => {
                 eprintln!("请提供命令或使用 -h 查看帮助");
@@ -88,15 +92,16 @@ fn run_interactive_mode(client: KVClient) -> Result<(), Box<dyn std::error::Erro
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
 
-    println!("已连接到KV存储服务器 {}:{} (使用 {} 引擎)", client.host, client.port, client.engine);
+    println!("已连接到KV存储服务器 {}:{}", client.host, client.port);
     println!("输入命令或使用以下特殊命令:");
     println!("  quit/exit - 退出交互模式");
-    println!("  blog <file_path> - 插入博客文件");
+    println!("  help - 显示帮助信息");
+    println!("支持多命令格式: <cmd1> <arg1> <arg2> <cmd2> <arg1> <cmd3> <arg1>");
+    println!("例如: SET key1 value1 GET key1 SET key2 value2 GET key2");
     println!("支持引号包裹的 key/value 以包含特殊字符:");
     println!("  例如: SET \"key with spaces\" \"value with spaces\"");
     println!("       SET \"key\\nwith\\nnewlines\" \"value\\ttabs\"");
     println!("       GET \"key with spaces\"");
-    println!("      blog /path/to/blog.md");
     println!("");
 
     let stdin = std::io::stdin();
@@ -118,72 +123,22 @@ fn run_interactive_mode(client: KVClient) -> Result<(), Box<dyn std::error::Erro
             break;
         }
 
-        // 检查是否是插入博客命令
-        if input.starts_with("blog ") {
-            let parts: Vec<&str> = input.splitn(2, ' ').collect();
-            if parts.len() == 2 {
-                let file_path = parts[1];
-
-                // 扩展路径中的 ~ 为用户的主目录
-                let expanded_path = if file_path.starts_with("~/") {
-                    let home_dir = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-                    format!("{}/{}", home_dir, &file_path[2..])
-                } else {
-                    file_path.to_string()
-                };
-
-                // 读取博客文件内容
-                match std::fs::read_to_string(&expanded_path) {
-                    Ok(content) => {
-                        match std::path::Path::new(&expanded_path)
-                            .file_stem()
-                            .ok_or("无法从文件路径获取文件名")
-                            .and_then(|os_str| os_str.to_str().ok_or("文件名包含无效字符")) {
-
-                            Ok(title_str) => {
-                                // 使用 RESP 协议发送 SET 命令
-                                let command = format!("SET \"{}\" \"{}\"", title_str, content.replace('"', "\\\""));
-                                match client.send_resp_command_with_connection(&command, &mut stream) {
-                                    Ok(response) => {
-                                        println!("博客插入结果: {}", response);
-                                    }
-                                    Err(e) => {
-                                        eprintln!("服务器错误: {}", e);
-                                        // 尝试重新建立连接
-                                        let address = format!("{}:{}", client.host, client.port);
-                                        match TcpStream::connect(address) {
-                                            Ok(new_stream) => {
-                                                stream = new_stream;
-                                                if let Err(_) = stream.set_read_timeout(Some(Duration::from_secs(5))) {
-                                                    eprintln!("警告: 设置读取超时失败");
-                                                }
-                                                if let Err(_) = stream.set_write_timeout(Some(Duration::from_secs(5))) {
-                                                    eprintln!("警告: 设置写入超时失败");
-                                                }
-                                            },
-                                            Err(e) => {
-                                                eprintln!("重新连接失败: {}", e);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                eprintln!("文件名错误: {}", e);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("路径错误: {}", e);
-                    }
-                }
-
-                continue;
+        // 显示帮助
+        if input == "help" {
+            println!("支持的命令:");
+            for cmd in KVClient::get_valid_commands() {
+                println!("  - {}", cmd);
             }
+            println!("\n特殊命令:");
+            println!("  quit/exit - 退出");
+            println!("  help - 显示此帮助");
+            continue;
         }
 
-        // 使用 RESP 协议发送命令
-        let response = client.send_resp_command_with_connection(input, &mut stream)?;
+        
+
+        // 执行命令（支持多命令）
+        let response = client.execute_multi_commands_with_connection(input, &mut stream)?;
 
         // 直接尝试解码响应，无论是错误信息还是值，都会被正确处理
         if let Ok(decoded_response) = percent_encoding::percent_decode_str(&response).decode_utf8() {
@@ -197,3 +152,5 @@ fn run_interactive_mode(client: KVClient) -> Result<(), Box<dyn std::error::Erro
     println!("Bye!");
     Ok(())
 }
+
+
