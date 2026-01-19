@@ -2,7 +2,7 @@ mod kv_client;
 
 use clap::Parser;
 use kv_client::KVClient;
-use std::io::{Read, Write, BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
 
@@ -32,12 +32,16 @@ struct Cli {
     /// 启用交互模式
     #[arg(short = 'i', long)]
     interactive: bool,
+
+    /// 选择使用的引擎 (array, hash, rbtree, skiplist)
+    #[arg(short = 'e', long, default_value = "array")]
+    engine: String,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
-    let client = KVClient::new(cli.host, cli.port);
+    let client = KVClient::new(cli.host, cli.port, cli.engine);
 
     // 根据参数选择执行模式
     // 如果提供了命令、文件或博客参数，则非交互模式
@@ -47,7 +51,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         match (&cli.command, &cli.file, &cli.blog) {
             (Some(cmd), _, _) => {
                 // 执行单个命令
-                let result = client.send_command(cmd)?;
+                let result = client.send_resp_command(cmd)?;
                 println!("{}", result);
             }
             (_, Some(file_path), _) => {
@@ -55,7 +59,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut file = std::fs::File::open(file_path)?;
                 let mut commands = String::new();
                 file.read_to_string(&mut commands)?;
-                let result = client.send_command(&commands)?;
+                let result = client.send_resp_command(&commands)?;
                 println!("{}", result);
             }
             (_, _, Some(blog_path)) => {
@@ -84,12 +88,14 @@ fn run_interactive_mode(client: KVClient) -> Result<(), Box<dyn std::error::Erro
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
 
-    println!("已连接到KV存储服务器 {}:{}", client.host, client.port);
+    println!("已连接到KV存储服务器 {}:{} (使用 {} 引擎)", client.host, client.port, client.engine);
     println!("输入命令或使用以下特殊命令:");
     println!("  quit/exit - 退出交互模式");
     println!("  blog <file_path> - 插入博客文件");
-    println!("例如: SET mykey myvalue");
-    println!("      GET mykey");
+    println!("支持引号包裹的 key/value 以包含特殊字符:");
+    println!("  例如: SET \"key with spaces\" \"value with spaces\"");
+    println!("       SET \"key\\nwith\\nnewlines\" \"value\\ttabs\"");
+    println!("       GET \"key with spaces\"");
     println!("      blog /path/to/blog.md");
     println!("");
 
@@ -135,11 +141,9 @@ fn run_interactive_mode(client: KVClient) -> Result<(), Box<dyn std::error::Erro
                             .and_then(|os_str| os_str.to_str().ok_or("文件名包含无效字符")) {
 
                             Ok(title_str) => {
-                                // 对值进行编码，然后发送SET命令
-                                let encoded_value = percent_encoding::utf8_percent_encode(&content, &kv_client::ENCODE_SET).to_string();
-                                let command = format!("SET {} {}\n", title_str, encoded_value);
-
-                                match client.send_command_with_connection(&command, &mut stream) {
+                                // 使用 RESP 协议发送 SET 命令
+                                let command = format!("SET \"{}\" \"{}\"", title_str, content.replace('"', "\\\""));
+                                match client.send_resp_command_with_connection(&command, &mut stream) {
                                     Ok(response) => {
                                         println!("博客插入结果: {}", response);
                                     }
@@ -178,8 +182,8 @@ fn run_interactive_mode(client: KVClient) -> Result<(), Box<dyn std::error::Erro
             }
         }
 
-        // 发送命令到服务器
-        let response = client.send_command_with_connection(input, &mut stream)?;
+        // 使用 RESP 协议发送命令
+        let response = client.send_resp_command_with_connection(input, &mut stream)?;
 
         // 直接尝试解码响应，无论是错误信息还是值，都会被正确处理
         if let Ok(decoded_response) = percent_encoding::percent_decode_str(&response).decode_utf8() {

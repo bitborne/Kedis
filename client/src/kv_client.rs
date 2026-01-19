@@ -1,25 +1,93 @@
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
-use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 
-/// 定义需要编码的字符集（除了字母数字外的大部分字符）
-pub const ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC
-    .remove(b'-')
-    .remove(b'_')
-    .remove(b'.')
-    .remove(b'~');
+/// 将命令字符串编码为 RESP 协议格式
+/// 支持引号包裹的参数和转义字符（\r, \n, \t, \, "）
+/// 根据引擎选择命令前缀（ASET/AGET/ADEL 等）
+pub fn encode_to_resp(cmd: &str, engine: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let mut args: Vec<String> = Vec::new();
+    let mut chars = cmd.chars().peekable();
+    let mut current_arg = String::new();
+    let mut in_quotes = false;
+    let mut escape = false;
+
+    while let Some(c) = chars.next() {
+        if escape {
+            // 处理转义字符
+            match c {
+                'r' => current_arg.push('\r'),
+                'n' => current_arg.push('\n'),
+                't' => current_arg.push('\t'),
+                '\\' => current_arg.push('\\'),
+                '"' => current_arg.push('"'),
+                _ => {
+                    current_arg.push('\\');
+                    current_arg.push(c);
+                }
+            }
+            escape = false;
+        } else if c == '\\' {
+            escape = true;
+        } else if c == '"' {
+            in_quotes = !in_quotes;
+        } else if c == ' ' && !in_quotes {
+            // 空格分隔参数（不在引号内）
+            if !current_arg.is_empty() {
+                args.push(current_arg.clone());
+                current_arg.clear();
+            }
+        } else {
+            current_arg.push(c);
+        }
+    }
+
+    // 添加最后一个参数
+    if !current_arg.is_empty() {
+        args.push(current_arg);
+    }
+
+    // 如果有参数，根据引擎选择命令前缀
+    if !args.is_empty() {
+        let prefix = match engine.to_lowercase().as_str() {
+            "array" => "A",
+            "hash" => "H",
+            "rbtree" => "R",
+            "skiplist" | "skip" => "S",
+            _ => "A", // 默认使用 Array 引擎
+        };
+
+        // 转换命令名称
+        args[0] = match args[0].to_uppercase().as_str() {
+            "SET" => format!("{}SET", prefix),
+            "GET" => format!("{}GET", prefix),
+            "DEL" => format!("{}DEL", prefix),
+            "MOD" => format!("{}MOD", prefix),
+            "EXIST" => format!("{}EXIST", prefix),
+            _ => args[0].clone(),
+        };
+    }
+
+    // 构建 RESP 协议
+    let mut resp = format!("*{}\r\n", args.len());
+    for arg in &args {
+        resp.push_str(&format!("${}\r\n{}\r\n", arg.len(), arg));
+    }
+
+    Ok(resp)
+}
 
 /// KV存储客户端结构体
 pub struct KVClient {
     pub host: String,
     pub port: u16,
+    pub engine: String,
 }
 
 impl KVClient {
     /// 创建新的KV客户端
-    pub fn new(host: String, port: u16) -> Self {
-        Self { host, port }
+    pub fn new(host: String, port: u16, engine: String) -> Self {
+        Self { host, port, engine }
     }
 
     /// 连接到KV服务器
@@ -84,12 +152,31 @@ impl KVClient {
         Ok(response_str.to_string())
     }
 
-    /// 设置键值对 - 使用URL编码处理特殊字符
-    pub fn set(&self, key: &str, value: &str) -> Result<String, Box<dyn std::error::Error>> {
-        // 只对值进行编码以处理特殊字符和空格
-        let encoded_value = utf8_percent_encode(value, ENCODE_SET).to_string();
-        let command = format!("SET {} {}\n", key, encoded_value);
-        self.send_command(&command)
+    /// 发送 RESP 格式的命令
+    pub fn send_resp_command(&self, command: &str) -> Result<String, Box<dyn std::error::Error>> {
+        let resp_data = encode_to_resp(command, &self.engine)?;
+        self.send_command(&resp_data)
+    }
+
+    /// 发送 RESP 格式的命令，使用已建立的连接
+    pub fn send_resp_command_with_connection(&self, command: &str, stream: &mut TcpStream) -> Result<String, Box<dyn std::error::Error>> {
+        let resp_data = encode_to_resp(command, &self.engine)?;
+        self.send_command_with_connection(&resp_data, stream)
+    }
+
+    /// 从文件读取内容并插入作为博客
+    pub fn insert_blog_from_file(&self, file_path: &str) -> Result<String, Box<dyn std::error::Error>> {
+        let content = std::fs::read_to_string(file_path)?;
+        let title = std::path::Path::new(file_path)
+            .file_stem()
+            .ok_or("无法从文件路径获取文件名")?
+            .to_str()
+            .ok_or("文件名包含无效字符")?
+            .to_string();
+
+        // 使用 RESP 协议发送 SET 命令
+        let command = format!("SET \"{}\" \"{}\"", title, content.replace('"', "\\\""));
+        self.send_resp_command(&command)
     }
 /*
     /// 获取键的值

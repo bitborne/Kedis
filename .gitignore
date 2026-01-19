@@ -35,3 +35,6 @@ mul_test
 demo*
 *.txt
 *.backup
+*.old
+client/test_resp.rs
+client/test_resp

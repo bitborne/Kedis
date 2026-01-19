@@ -204,12 +204,57 @@ int kvs_split_token(char* msg, char* tokens[]) {
     }
   }
 
-  char* token = strtok(msg, " ");  // 拆出来一个token 返回首地址
   int idx = 0;
-  while (token != NULL) {
-    tokens[idx++] = token;
-    token = strtok(NULL, " ");
+  char* p = msg;
+  
+  while (*p && idx < KVS_MAX_TOKENS) {
+    // 跳过空格
+    while (*p == ' ') p++;
+    if (*p == '\0') break;
+    
+    // 检查是否是引号包裹
+    if (*p == '"') {
+      p++;  // 跳过开始的引号
+      tokens[idx++] = p;  // 参数开始
+      
+      // 查找结束引号
+      while (*p && *p != '"') {
+        // 处理转义字符
+        if (*p == '\\' && *(p + 1)) {
+          p++;
+          if (*p == 'r') {
+            *p = '\r';
+          } else if (*p == 'n') {
+            *p = '\n';
+          } else if (*p == 't') {
+            *p = '\t';
+          } else if (*p == '\\') {
+            *p = '\\';
+          } else if (*p == '"') {
+            *p = '"';
+          }
+        }
+        p++;
+      }
+      
+      if (*p == '"') {
+        *p = '\0';  // 终止参数
+        p++;  // 跳过结束引号
+      }
+    } else {
+      // 普通参数（无引号）
+      tokens[idx++] = p;
+      
+      // 查找下一个空格或结束
+      while (*p && *p != ' ') p++;
+      
+      if (*p) {
+        *p = '\0';  // 临时终止
+        p++;
+      }
+    }
   }
+
   return idx;
 }
 
@@ -729,10 +774,26 @@ int kvs_process_multicmd(char* msg, int length, char* response) {
     strcpy(temp_buffer, commands[i]);
 
     // 分割token
-    char* tokens[KVS_MAX_TOKENS] = {0};
-    int count = kvs_split_token(temp_buffer, tokens);
-    if (count == -1) {
-      total_len += sprintf(response + total_len,
+      char* tokens[KVS_MAX_TOKENS] = {0};
+      int count = kvs_split_token(temp_buffer, tokens);
+      
+      // 调试：打印 token 数量和内容
+      if (strstr(commands[i], "key with spaces") != NULL) {
+        fprintf(stderr, "[DEBUG] Command: %s\n", commands[i]);
+        fprintf(stderr, "[DEBUG] Token count: %d\n", count);
+        for (int j = 0; j < count; j++) {
+          fprintf(stderr, "[DEBUG] Token[%d]: ", j);
+          for (size_t k = 0; k < strlen(tokens[j]); k++) {
+            if (tokens[j][k] == '\r') fprintf(stderr, "\\r");
+            else if (tokens[j][k] == '\n') fprintf(stderr, "\\n");
+            else if (tokens[j][k] == ' ') fprintf(stderr, "[SPACE]");
+            else fprintf(stderr, "%c", tokens[j][k]);
+          }
+          fprintf(stderr, "\n");
+        }
+      }
+      
+      if (count == -1) {      total_len += sprintf(response + total_len,
                            "ERROR: Token parsing failed for command: %s\r\n",
                            commands[i]);
       continue;
