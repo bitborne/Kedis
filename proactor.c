@@ -377,16 +377,39 @@ static int resp_to_kvs(struct conn* c, char* kvs_msg, int max_len) {
 
   int offset = 0;
   for (int i = 0; i < c->argc; i++) {
-    if (offset + c->argv[i].len + 1 > max_len) {
+    // 检查参数是否包含空格
+    int has_space = 0;
+    for (size_t j = 0; j < c->argv[i].len; j++) {
+      if (((char*)c->argv[i].ptr)[j] == ' ') {
+        has_space = 1;
+        break;
+      }
+    }
+    
+    // 计算需要的空间：引号（2）+ 参数长度 + 空格（1）或 终止符（1）
+    int needed_space = c->argv[i].len + (has_space ? 2 : 0) + 1;
+    if (offset + needed_space > max_len) {
       return -1;  // 缓冲区不足
     }
+
+    // 如果包含空格，添加引号包裹
+    if (has_space) {
+      kvs_msg[offset++] = '"';
+    }
+    
     memcpy(kvs_msg + offset, c->argv[i].ptr, c->argv[i].len);
     offset += c->argv[i].len;
+    
+    if (has_space) {
+      kvs_msg[offset++] = '"';
+    }
+    
     if (i < c->argc - 1) {
       kvs_msg[offset++] = ' ';  // 参数间用空格分隔
     }
   }
   kvs_msg[offset] = '\0';
+
   return offset;
 }
 
