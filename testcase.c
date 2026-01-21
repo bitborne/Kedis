@@ -88,14 +88,37 @@ int send_msg(int connfd, const char* msg, int length) {
     return res;
 }
 
-// 动态接收消息，支持大包
+// 动态接收消息，支持大包和超时检测
 char* recv_msg_dynamic(int connfd, int* length) {
     char buffer[MAX_MSG];
     int total_received = 0;
     char* result = NULL;
     int result_size = 0;
     
+    // 设置超时时间为 5 秒
+    struct timeval timeout;
+    timeout.tv_sec = 5;
+    timeout.tv_usec = 0;
+    
     while (1) {
+        // 使用 select() 检测 socket 是否可读，实现超时
+        fd_set readfds;
+        FD_ZERO(&readfds);
+        FD_SET(connfd, &readfds);
+        
+        int select_result = select(connfd + 1, &readfds, NULL, NULL, &timeout);
+        if (select_result < 0) {
+            perror("select");
+            if (result) free(result);
+            return NULL;
+        } else if (select_result == 0) {
+            // 超时
+            fprintf(stderr, "[TIMEOUT] No response received within 5 seconds\n");
+            if (result) free(result);
+            return NULL;
+        }
+        
+        // Socket 可读，接收数据
         int res = recv(connfd, buffer, MAX_MSG, 0);
         if (res < 0) {
             perror("recv");
@@ -105,6 +128,10 @@ char* recv_msg_dynamic(int connfd, int* length) {
         if (res == 0) {
             break;  // 连接关闭
         }
+        
+        // 重置超时时间
+        timeout.tv_sec = 5;
+        timeout.tv_usec = 0;
         
         // 扩展结果缓冲区
         char* new_result = realloc(result, result_size + res + 1);

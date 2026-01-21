@@ -39,8 +39,6 @@ int kvs_request(struct conn *c) {
 
 int kvs_response(struct conn *c) {
 
-	
-
 }
 
 

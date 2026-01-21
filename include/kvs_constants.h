@@ -39,4 +39,6 @@
 #define INIT_LOAD_AOF 0
 #define INIT_LOAD_SNAP 1
 
+#define TO_RESP 1
+
 #endif // __KVS_CONSTANTS_H__
