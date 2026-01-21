@@ -39,3 +39,9 @@ demo*
 client/test_resp.rs
 client/test_resp
 tests/test_constants
+test_1mb_packet
+test_4mb_packet
+test_4mb_simple
+test_large_packet
+test_large_packet_30k
+test_streaming_recv

@@ -39,6 +39,7 @@
 #define INIT_LOAD_AOF 0
 #define INIT_LOAD_SNAP 1
 
-#define TO_RESP 1
+// 流式发送阈值：超过此大小使用流式发送
+#define STREAMING_THRESHOLD (1024 * 1024)  // 1MB
 
 #endif // __KVS_CONSTANTS_H__
