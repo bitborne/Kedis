@@ -254,12 +254,44 @@ static void add_reply_bulk(struct conn* c, const char* str) {
         add_reply_str(c, "$-1\r\n"); // Null Bulk String
         return;
     }
-    char buf[32];
+    
+    // 计算数据的长度
     size_t len = strlen(str);
-    sprintf(buf, "$%lu\r\n", len);
-    add_reply_str(c, buf);
-    add_reply_str(c, str);
-    add_reply_str(c, "\r\n");
+    
+    // 计算响应数据的总长度
+    // 格式：$<len>\r\n<data>\r\n
+    // 长度：1 ($) + 数字位数 + 2 (\r\n) + len + 2 (\r\n)
+    char buf[32];
+    int header_len = sprintf(buf, "$%zu\r\n", len);
+    size_t total_len = header_len + len + 2;
+    
+    // fprintf(stderr, "[DEBUG] add_reply_bulk: fd=%d, len=%zu, total_len=%zu, RESP_BUF_SIZE=%d\n",
+            // c->fd, len, total_len, RESP_BUF_SIZE);
+    
+    // 检查 wbuf 是否足够
+    if (total_len > RESP_BUF_SIZE) {
+        // wbuf 不够，切换到流式发送模式
+        
+        // fprintf(stderr, "[DEBUG] Switching to streaming send: fd=%d\n", c->fd);
+        
+        // 先发送 header（$<len>\r\n）
+        memcpy(c->wbuf, buf, header_len);
+        c->wlen = header_len;
+        
+        // 设置流式发送状态
+        c->streaming_send = 1;           // 进入流式发送模式
+        c->streaming_data = str;         // 指向实际数据（不复制）
+        c->streaming_len = len;          // 数据长度
+        c->streaming_sent = 0;           // 已发送 0 字节
+        
+        // fprintf(stderr, "[DEBUG] Streaming send state set: fd=%d, streaming_send=%d, streaming_len=%zu\n",
+                // c->fd, c->streaming_send, c->streaming_len);
+    } else {
+        // wbuf 足够，正常发送
+        add_reply_str(c, buf);
+        add_reply_str(c, str);
+        add_reply_str(c, "\r\n");
+    }
 }
 
 // 为了兼容旧的 "YES, Exist" 返回格式，这里做个简单映射，也可以直接返回 RESP Integer

@@ -203,8 +203,12 @@ void appendToAofBuffer(int type, const char* key, const char* value) {
         // 先刷新缓冲区，确保命令顺序一致
         flushAofBuffer();
 
-        // 构造命令数据
-        char cmd_data[AOF_BUF_SIZE];  // 使用足够大的缓冲区来构建整个命令
+        // 构造命令数据（使用堆上分配，避免栈溢出）
+        char* cmd_data = kvs_malloc(total_needed);  // 在堆上分配缓冲区
+        if (!cmd_data) {
+            fprintf(stderr, "AOF错误：无法分配大命令缓冲区\n");
+            return;
+        }
         int pos = 0;
 
         // 添加命令码（1字节）
@@ -234,6 +238,9 @@ void appendToAofBuffer(int type, const char* key, const char* value) {
         if (write_all(aof_fd, cmd_data, pos) < 0) {
             fprintf(stderr, "AOF错误：无法写入大命令: %s\n", strerror(errno));
         }
+        
+        // 释放堆上分配的缓冲区
+        kvs_free(cmd_data);
         return;
     }
 
@@ -748,8 +755,12 @@ void appendToAofBufferToEngine(int engine_type, int type, const char* key, const
         // 先刷新缓冲区，确保命令顺序一致
         flushAofBufferToEngine(engine_type);
 
-        // 构造命令数据
-        char cmd_data[AOF_BUF_SIZE];  // 使用足够大的缓冲区来构建整个命令
+        // 构造命令数据（使用堆上分配，避免栈溢出）
+        char* cmd_data = kvs_malloc(total_needed);  // 在堆上分配缓冲区
+        if (!cmd_data) {
+            fprintf(stderr, "AOF错误：无法分配大命令缓冲区\n");
+            return;
+        }
         int pos = 0;
 
         // 添加命令码（1字节）
@@ -802,6 +813,9 @@ void appendToAofBufferToEngine(int engine_type, int type, const char* key, const
         if (target_fd != -1 && write_all(target_fd, cmd_data, pos) < 0) {
             fprintf(stderr, "AOF错误：无法写入大命令: %s\n", strerror(errno));
         }
+        
+        // 释放堆上分配的缓冲区
+        kvs_free(cmd_data);
         return;
     }
 

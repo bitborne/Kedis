@@ -32,6 +32,12 @@ void kvs_resp_reset(struct conn* c) {
   c->streaming_recv = 0;           // 退出流式模式，回到正常模式
   c->remaining_bulk_len = 0;       // 重置剩余 bulk data 长度
   c->need_crlf = 0;                // 重置 \r\n 标记
+  
+  // 重置流式发送状态
+  c->streaming_send = 0;           // 退出流式发送模式，回到正常模式
+  c->streaming_data = NULL;        // 重置数据源指针（不负责释放）
+  c->streaming_len = 0;            // 重置数据总长度
+  c->streaming_sent = 0;           // 重置已发送的字节数
 }
 
 void kvs_resp_free_resources(struct conn* c) {

@@ -61,6 +61,14 @@ struct conn {
   /* ---- 写回 ---- */
   char* wbuf;       // 回包缓冲（+OK\r\n 或 $len\r\n...）
   int wlen, wdone;  // 总长度 & 已发长度
+
+  /* ---- 流式发送状态 ---- */
+  int streaming_send;          // 标记是否正在进行流式发送（0: 正常模式，1: 流式模式）
+                                // 正常模式：数据先进入 wbuf，再一次性发送
+                                // 流式模式：数据直接从数据源分多次发送
+  const char* streaming_data;  // 流式发送的数据源指针（指向实际数据，不复制）
+  size_t streaming_len;        // 流式发送的数据总长度
+  size_t streaming_sent;       // 流式发送已发送的字节数
 };
 
 // 消息处理回调函数定义

@@ -151,8 +151,27 @@ static void post_recv_frame(struct io_uring* ring, struct conn* c) {
 
 /* ---------------- 提交异步 send：回 RESP 包 ---------------- */
 static void post_send_resp(struct io_uring* ring, struct conn* c) {
+  // 获取一个 SQE（提交队列条目）
   struct io_uring_sqe* sqe = sqe_prep(ring, c);
-  io_uring_prep_send(sqe, c->fd, c->wbuf + c->wdone, c->wlen - c->wdone, 0);
+  
+  // 检查是否处于流式发送模式
+  if (c->streaming_send) {
+    // 流式发送模式：发送 streaming_data 中的数据
+    
+    // 计算这次发送的字节数
+    size_t want = c->streaming_len - c->streaming_sent;
+    size_t cp = (want < IOP_SIZE) ? want : IOP_SIZE;
+    
+    // 从 streaming_data + streaming_sent 的位置开始发送
+    io_uring_prep_send(sqe, c->fd, 
+                       c->streaming_data + c->streaming_sent, 
+                       cp, 0);
+  } else {
+    // 正常模式：发送 wbuf 中的数据
+    io_uring_prep_send(sqe, c->fd, 
+                       c->wbuf + c->wdone, 
+                       c->wlen - c->wdone, 0);
+  }
 }
 
 
@@ -402,8 +421,14 @@ int proactor_start(unsigned short port, msg_handler handler) {
               processCommand(c);
               current_processing_fd = -1;
               
-              // 清空解析状态
-              kvs_resp_reset(c);
+              // 检查是否处于流式发送模式
+              if (c->streaming_send) {
+                // 流式发送模式：不清空解析状态，因为 streaming_data 指向 argv 中的数据
+                // fprintf(stderr, "[DEBUG] Streaming mode detected, skip kvs_resp_reset\n");
+              } else {
+                // 正常模式：清空解析状态
+                kvs_resp_reset(c);
+              }
               
               // 切换到发送状态
               c->state = ST_SEND;
@@ -422,37 +447,108 @@ int proactor_start(unsigned short port, msg_handler handler) {
       }
 
       // 发我们准备好的数据过去
-      case ST_SEND:
-        c->wdone += res;
-        if (c->wdone == c->wlen) {  // 发完
-          c->state = ST_RECV;
-
-          // 如果有剩余数据，尝试解析下一条
-          if (c->r_len > 0) {
-            int n = kvs_resp_feed(c);
-            if (n == PARSE_OK) {
-              current_processing_fd = c->fd;
-              c->wlen = 0; // 重置写缓冲区长度
-              processCommand(c);
-              current_processing_fd = -1;
-              kvs_resp_reset(c);
-              c->state = ST_SEND;
-              c->wdone = 0;
-              post_send_resp(&g_ring, c);
-            } else if (n < 0) {
-              conn_free(c);
-              conn_pool_free(&g_conn_pool, c);
-            } else {
-              // 依然不够
-              post_recv_frame(&g_ring, c);
-            }
+      case ST_SEND: {
+        // 检查是否处于流式发送模式
+        if (c->streaming_send) {
+          // 流式发送模式
+          
+          // fprintf(stderr, "[DEBUG] Streaming send: fd=%d, res=%d, sent=%zu/%zu\n", 
+                  // c->fd, res, c->streaming_sent, c->streaming_len);
+          
+          // 更新已发送的字节数
+          c->streaming_sent += res;
+          
+          // 检查是否发送完成
+          if (c->streaming_sent == c->streaming_len) {
+            // 数据发送完成，现在发送 \r\n
+            
+            // fprintf(stderr, "[DEBUG] Streaming send complete, sending CRLF: fd=%d\n", c->fd);
+            
+            // 将 \r\n 写入 wbuf
+            memcpy(c->wbuf, "\r\n", 2);
+            c->wlen = 2;
+            c->wdone = 0;
+            
+            // 退出流式发送模式（但是 streaming_data 仍然指向 argv 中的数据）
+            c->streaming_send = 0;
+            
+            // 投递发送 \r\n 的请求
+            post_send_resp(&g_ring, c);
           } else {
-            post_recv_frame(&g_ring, c);  // 准备下一条命令
+            // 还需要发送更多数据
+            post_send_resp(&g_ring, c);
           }
         } else {
-          post_send_resp(&g_ring, c);
+          // 正常模式
+          
+          // 更新已发送的字节数
+          c->wdone += res;
+          
+          // 检查是否发送完成
+          if (c->wdone == c->wlen) {
+            // 发送完成
+            
+            // 检查是否刚刚完成了流式发送（通过检查 streaming_len > 0）
+            if (c->streaming_len > 0) {
+              // 刚刚完成了流式发送，需要重置连接状态
+              // 但不能调用 kvs_resp_reset，因为它会释放 argv 中的数据
+              // 而 streaming_data 指向 argv 中的数据（可能已经被引擎管理）
+              
+              // fprintf(stderr, "[DEBUG] Resetting connection state after streaming send: fd=%d\n", c->fd);
+              
+              // 重置 argv（不释放内存，只清空指针）
+              for (int i = 0; i < c->argc; i++) {
+                c->argv[i].ptr = NULL;
+                c->argv[i].len = 0;
+              }
+              
+              // 重置连接状态
+              c->argc = 0;
+              c->multibulk_len = 0;
+              c->bulk_len = 0;
+              c->seg_used = 0;
+              c->resp_state = ST_RESP_HDR;
+              
+              // 重置流式发送状态
+              c->streaming_data = NULL;
+              c->streaming_len = 0;
+              c->streaming_sent = 0;
+            } else {
+              // 正常发送完成，调用 kvs_resp_reset
+              kvs_resp_reset(c);
+            }
+            
+            c->state = ST_RECV;
+            
+            // 如果有剩余数据，尝试解析下一条
+            if (c->r_len > 0) {
+              int n = kvs_resp_feed(c);
+              if (n == PARSE_OK) {
+                current_processing_fd = c->fd;
+                c->wlen = 0; // 重置写缓冲区长度
+                processCommand(c);
+                current_processing_fd = -1;
+                kvs_resp_reset(c);
+                c->state = ST_SEND;
+                c->wdone = 0;
+                post_send_resp(&g_ring, c);
+              } else if (n < 0) {
+                conn_free(c);
+                conn_pool_free(&g_conn_pool, c);
+              } else {
+                // 依然不够
+                post_recv_frame(&g_ring, c);
+              }
+            } else {
+              post_recv_frame(&g_ring, c);  // 准备下一条命令
+            }
+          } else {
+            // 还需要发送更多数据
+            post_send_resp(&g_ring, c);
+          }
         }
         break;
+      }
       case ST_CLOSE:
         conn_free(c);
         conn_pool_free(&g_conn_pool, c);
