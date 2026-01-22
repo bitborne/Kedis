@@ -663,6 +663,28 @@ void test_large_data(int connfd, const engine_ops_t* engine) {
     if (large_key_1m) free(large_key_1m);
     if (large_value_1m) free(large_value_1m);
     
+    // 测试 4MB value
+    printf("    Testing 4MB value...\n");
+    char* large_key_4m = generate_random_string(32, NULL);
+    char* large_value_4m = generate_random_string(4 * 1024 * 1024, NULL);
+    
+    if (large_key_4m && large_value_4m) {
+        snprintf(cmd, MAX_LARGE_MSG, "%s %s %s", engine->set_cmd, large_key_4m, large_value_4m);
+        testcase(connfd, cmd, "OK\r\n", "Large: 4MB value SET");
+        
+        snprintf(cmd, MAX_LARGE_MSG, "%s %s", engine->get_cmd, large_key_4m);
+        testcase(connfd, cmd, NULL, "Large: 4MB value GET");
+        
+        // 清理
+        snprintf(del_cmd, MAX_LARGE_MSG, "%s %s", engine->del_cmd, large_key_4m);
+        testcase(connfd, del_cmd, "OK\r\n", "Large: 4MB value DEL");
+    } else {
+        printf("    [SKIP] Failed to allocate 4MB buffer\n");
+    }
+    
+    if (large_key_4m) free(large_key_4m);
+    if (large_value_4m) free(large_value_4m);
+    
     free(cmd);
     free(expected);
     free(del_cmd);
