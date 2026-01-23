@@ -16,6 +16,9 @@ int aofLoadAll(void);  // 加载所有引擎的AOF文件
 void appendToAofBufferToEngine(int engine_type, int type, const char* key, const char* value);  // 向指定引擎的AOF文件写入命令
 #endif
 
+// mmap 优化版本
+int aofLoadAll_mmap(void);  // 使用 mmap 加载所有 AOF 文件
+
 // mmap 持久化落盘的核心函数 (也在AOF中使用)
 int mmap_append(int fd, const char* filename, char *data, size_t n);
 

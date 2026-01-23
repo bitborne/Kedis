@@ -66,6 +66,93 @@
 #endif
 
 /**
+ * mmap 文件映射上下文结构体
+ * 用于管理 mmap 映射的生命周期和资源
+ */
+typedef struct {
+    char*   mmap_addr;      // mmap() 返回的映射起始地址，指向映射区域的开始
+    size_t  mmap_size;      // mmap() 实际映射的大小（向上取整到页大小倍数）
+    int     fd;             // 打开的文件描述符，用于后续的 munmap() 和 close()
+    size_t  file_size;      // 文件的实际字节大小（可能小于 mmap_size）
+    const char* filename;   // 文件名字符串指针，用于打印错误信息
+} mmap_context_t;
+
+/**
+ * 打开文件并使用 mmap 映射到内存
+ * @param filename 要打开的文件路径
+ * @param ctx 输出参数，用于存储 mmap 映射的上下文信息
+ * @return 成功返回 0，失败返回 -1
+ */
+static int mmap_open_file(const char* filename, mmap_context_t* ctx) {
+    // 使用 open() 打开文件（只读模式）
+    ctx->fd = open(filename, O_RDONLY);
+    if (ctx->fd == -1) {
+        // 文件不存在是正常的，返回成功
+        if (errno == ENOENT) {
+            return 0;
+        }
+        fprintf(stderr, "错误：无法打开文件 %s: %s\n", filename, strerror(errno));
+        return -1;
+    }
+
+    // 使用 fstat() 获取文件大小
+    struct stat stat_buf;
+    if (fstat(ctx->fd, &stat_buf) == -1) {
+        fprintf(stderr, "错误：无法获取文件状态 %s: %s\n", filename, strerror(errno));
+        close(ctx->fd);
+        return -1;
+    }
+
+    ctx->file_size = stat_buf.st_size;
+    ctx->filename = filename;
+
+    // 检查文件是否为空
+    if (ctx->file_size == 0) {
+        printf("文件为空: %s\n", filename);
+        close(ctx->fd);
+        return 0;
+    }
+
+    // 计算映射大小（向上取整到页大小倍数）
+    long page_size = sysconf(_SC_PAGESIZE);
+    ctx->mmap_size = ((ctx->file_size + page_size - 1) / page_size) * page_size;
+
+    // 执行 mmap 映射
+    ctx->mmap_addr = mmap(NULL, ctx->mmap_size, PROT_READ, MAP_PRIVATE, ctx->fd, 0);
+    if (ctx->mmap_addr == MAP_FAILED) {
+        fprintf(stderr, "错误：mmap 失败 %s: %s\n", filename, strerror(errno));
+        close(ctx->fd);
+        return -1;
+    }
+
+    printf("mmap 映射成功: %s (大小: %zu 字节)\n", filename, ctx->file_size);
+    return 0;
+}
+
+/**
+ * 关闭 mmap 映射并释放资源
+ * @param ctx mmap 上下文，包含映射信息
+ */
+static void mmap_close_file(mmap_context_t* ctx) {
+    // 取消映射
+    if (ctx->mmap_addr != NULL && ctx->mmap_size > 0) {
+        munmap(ctx->mmap_addr, ctx->mmap_size);
+        ctx->mmap_addr = NULL;
+        ctx->mmap_size = 0;
+    }
+
+    // 关闭文件描述符
+    if (ctx->fd != -1) {
+        close(ctx->fd);
+        ctx->fd = -1;
+    }
+
+    // 清零其他字段
+    ctx->file_size = 0;
+    ctx->filename = NULL;
+}
+
+/**
  * 将变长整数编码为VLQ（Variable Length Quantity）格式
  * @param value 要编码的值
  * @param output 存储编码结果的缓冲区
@@ -616,6 +703,141 @@ int ksfLoad(const char* filename) {
   // 多引擎模式不应该调用这个函数
   fprintf(stderr, "错误：多引擎模式下请使用 ksfLoadAll()\n");
   return -1;
+#endif
+}
+
+/**
+ * 使用 mmap 从 KSF 文件加载数据到指定引擎
+ * @param filename KSF 文件名
+ * @param engine_type 引擎类型: 0=array, 1=hash, 2=rbtree, 3=skiplist
+ * @return 成功返回 0，失败返回 -1
+ */
+static int ksfLoadToEngine_mmap(const char* filename, int engine_type) {
+    printf("开始加载 KSF 快照文件（mmap 方式）: %s\n", filename);
+
+    // 初始化 mmap 上下文
+    mmap_context_t ctx = {0};
+
+    // 使用 mmap 打开文件
+    if (mmap_open_file(filename, &ctx) != 0) {
+        return -1;
+    }
+
+    // 检查文件是否为空
+    if (ctx.mmap_addr == NULL || ctx.file_size == 0) {
+        return 0;
+    }
+
+    // 解析 KSF 内容
+    size_t pos = 0;
+    char* data = ctx.mmap_addr;
+    int kv_count = 0;
+
+    while (pos < ctx.file_size) {
+        // 解码键长度（VLQ 格式）
+        if (pos >= ctx.file_size) break;
+        uint64_t key_len;
+        int key_len_bytes = decode_vlq((const uint8_t*)(data + pos), &key_len);
+        pos += key_len_bytes;
+
+        // 解码值长度（VLQ 格式）
+        if (pos >= ctx.file_size) break;
+        uint64_t val_len;
+        int val_len_bytes = decode_vlq((const uint8_t*)(data + pos), &val_len);
+        pos += val_len_bytes;
+
+        // 检查边界
+        if (pos + key_len + val_len > ctx.file_size) {
+            fprintf(stderr, "错误：KSF 文件格式错误（超出文件边界）\n");
+            mmap_close_file(&ctx);
+            return -1;
+        }
+
+        // 获取 key 和 value 的指针
+        const char* key_ptr = (key_len > 0) ? (data + pos) : NULL;
+        pos += key_len;
+
+        const char* val_ptr = (val_len > 0) ? (data + pos) : NULL;
+        pos += val_len;
+
+        // 创建临时字符串
+        char temp_key[4096] = {0};
+        char temp_val[65536] = {0};
+
+        if (key_len > 0 && key_len < sizeof(temp_key)) {
+            memcpy(temp_key, key_ptr, key_len);
+        }
+
+        if (val_len > 0 && val_len < sizeof(temp_val)) {
+            memcpy(temp_val, val_ptr, val_len);
+        }
+
+        // 根据引擎类型执行 SET 操作
+#if ENABLE_MULTI_ENGINE
+        if (engine_type == 0) {
+            #if ENABLE_ARRAY
+            kvs_array_set(&array_engine, temp_key, temp_val);
+            #endif
+        } else if (engine_type == 1) {
+            #if ENABLE_HASH
+            kvs_hash_set(&hash_engine, temp_key, temp_val);
+            #endif
+        } else if (engine_type == 2) {
+            #if ENABLE_RBTREE
+            kvs_rbtree_set(&rbtree_engine, temp_key, temp_val);
+            #endif
+        } else if (engine_type == 3) {
+            #if ENABLE_SKIPLIST
+            kvs_skiplist_set(&skiplist_engine, temp_key, temp_val);
+            #endif
+        }
+#else
+        kvs_main_set(&global_main_engine, temp_key, temp_val);
+#endif
+
+        kv_count++;
+    }
+
+    // 关闭 mmap 映射
+    mmap_close_file(&ctx);
+
+    printf("KSF 快照文件加载完成: %s (共 %d 条记录)\n", filename, kv_count);
+    return 0;
+}
+
+/**
+ * 加载所有引擎的 KSF 快照（使用 mmap 优化）
+ * @return 成功返回 0，失败返回 -1
+ */
+int ksfLoadAll_mmap() {
+#if ENABLE_MULTI_ENGINE
+    #if ENABLE_ARRAY
+    if (ksfLoadToEngine_mmap(ksf_filename_array, 0) != 0) {
+        return -1;
+    }
+    #endif
+
+    #if ENABLE_HASH
+    if (ksfLoadToEngine_mmap(ksf_filename_hash, 1) != 0) {
+        return -1;
+    }
+    #endif
+
+    #if ENABLE_RBTREE
+    if (ksfLoadToEngine_mmap(ksf_filename_rbtree, 2) != 0) {
+        return -1;
+    }
+    #endif
+
+    #if ENABLE_SKIPLIST
+    if (ksfLoadToEngine_mmap(ksf_filename_skiplist, 3) != 0) {
+        return -1;
+    }
+    #endif
+
+    return 0;
+#else
+    return ksfLoadToEngine_mmap(ksf_filename_default, -1);
 #endif
 }
 

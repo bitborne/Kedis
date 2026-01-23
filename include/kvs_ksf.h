@@ -14,4 +14,7 @@ int ksfSaveAll(void);  // 保存所有引擎的KSF快照
 int ksfLoadAll(void);  // 加载所有引擎的KSF快照
 #endif
 
+// mmap 优化版本
+int ksfLoadAll_mmap(void);  // 使用 mmap 加载所有 KSF 快照
+
 #endif // __KVS_KSF_H__
