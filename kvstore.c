@@ -787,13 +787,21 @@ int main(int argc, char* argv[]) {
     // MASTER MODE
     if (load_mode == INIT_LOAD_AOF) {
 #if ENABLE_MULTI_ENGINE
+    #if ENABLE_MMAP
+      aofLoadAll_mmap();
+    #else
       aofLoadAll();
+    #endif
 #else
       aofLoad(aof_filename);
 #endif
     } else if (load_mode == INIT_LOAD_SNAP) {
 #if ENABLE_MULTI_ENGINE
+      #if ENABLE_MMAP
+      ksfLoadAll_mmap();
+      #else
       ksfLoadAll();
+      #endif
 #else
       ksfLoad(snap_filename);
 #endif

@@ -36,5 +36,7 @@
 #define INIT_LOAD_AOF 0
 #define INIT_LOAD_SNAP 1
 
+// 是否使用mmap加载数据文件(ksf, 快照)
+#define ENABLE_MMAP 1
 
 #endif // __KVS_CONSTANTS_H__

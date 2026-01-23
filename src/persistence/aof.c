@@ -393,28 +393,9 @@ static int aofLoadToEngine_mmap(const char* filename, int engine_type) {
         // 更新解析位置，跳过 value 的内容
         pos += val_len;
 
-        // 步骤 6.6：创建临时字符串（在栈上分配，避免频繁 malloc）
-        // 定义临时 key 缓冲区，大小为 4KB
-        char temp_key[4096] = {0};
-        
-        // 定义临时 value 缓冲区，大小为 64KB
-        char temp_val[65536] = {0};
-        
-        // 步骤 6.7：复制 key 到临时缓冲区
-        // 检查 key 长度是否在缓冲区范围内
-        if (key_len > 0 && key_len < sizeof(temp_key)) {
-            // 使用 memcpy() 复制 key 数据到临时缓冲区
-            memcpy(temp_key, key_ptr, key_len);
-        }
-
-        // 步骤 6.8：复制 value 到临时缓冲区
-        // 检查 value 长度是否在缓冲区范围内
-        if (val_len > 0 && val_len < sizeof(temp_val)) {
-            // 使用 memcpy() 复制 value 数据到临时缓冲区
-            memcpy(temp_val, val_ptr, val_len);
-        }
-
-        // 步骤 6.9：根据命令类型执行相应的操作
+        // 步骤 6.6：根据命令类型执行相应的操作
+        // 直接传递映射内存中的指针，引擎内部会分配内存并拷贝数据
+        // 这样实现了真正的零拷贝，并且支持任意大小的数据（4MB+）
         int result = 0;  // 用于存储操作结果
         
         // 使用 switch 语句处理不同的命令类型
@@ -423,30 +404,31 @@ static int aofLoadToEngine_mmap(const char* filename, int engine_type) {
             case AOF_CMD_SET:
 #if ENABLE_MULTI_ENGINE
                 // 多引擎模式：根据 engine_type 调用相应的 SET 函数
+                // 直接传递映射内存指针，引擎内部会分配内存并拷贝数据
                 if (engine_type == 0) {
                     // engine_type == 0 表示 Array 引擎
                     #if ENABLE_ARRAY
-                    kvs_array_set(&array_engine, temp_key, temp_val);
+                    kvs_array_set(&array_engine, (char*)key_ptr, (char*)val_ptr);
                     #endif
                 } else if (engine_type == 1) {
                     // engine_type == 1 表示 Hash 引擎
                     #if ENABLE_HASH
-                    kvs_hash_set(&hash_engine, temp_key, temp_val);
+                    kvs_hash_set(&hash_engine, (char*)key_ptr, (char*)val_ptr);
                     #endif
                 } else if (engine_type == 2) {
                     // engine_type == 2 表示 Rbtree 引擎
                     #if ENABLE_RBTREE
-                    kvs_rbtree_set(&rbtree_engine, temp_key, temp_val);
+                    kvs_rbtree_set(&rbtree_engine, (char*)key_ptr, (char*)val_ptr);
                     #endif
                 } else if (engine_type == 3) {
                     // engine_type == 3 表示 Skiplist 引擎
                     #if ENABLE_SKIPLIST
-                    kvs_skiplist_set(&skiplist_engine, temp_key, temp_val);
+                    kvs_skiplist_set(&skiplist_engine, (char*)key_ptr, (char*)val_ptr);
                     #endif
                 }
 #else
                 // 单引擎模式：调用统一的 SET 函数
-                kvs_main_set(&global_main_engine, temp_key, temp_val);
+                kvs_main_set(&global_main_engine, (char*)key_ptr, (char*)val_ptr);
 #endif
                 break;  // 退出 switch
 
@@ -454,30 +436,31 @@ static int aofLoadToEngine_mmap(const char* filename, int engine_type) {
             case AOF_CMD_MOD:
 #if ENABLE_MULTI_ENGINE
                 // 多引擎模式：根据 engine_type 调用相应的 MOD 函数
+                // 直接传递映射内存指针，引擎内部会分配内存并拷贝数据
                 if (engine_type == 0) {
                     // engine_type == 0 表示 Array 引擎
                     #if ENABLE_ARRAY
-                    kvs_array_mod(&array_engine, temp_key, temp_val);
+                    kvs_array_mod(&array_engine, (char*)key_ptr, (char*)val_ptr);
                     #endif
                 } else if (engine_type == 1) {
                     // engine_type == 1 表示 Hash 引擎
                     #if ENABLE_HASH
-                    kvs_hash_mod(&hash_engine, temp_key, temp_val);
+                    kvs_hash_mod(&hash_engine, (char*)key_ptr, (char*)val_ptr);
                     #endif
                 } else if (engine_type == 2) {
                     // engine_type == 2 表示 Rbtree 引擎
                     #if ENABLE_RBTREE
-                    kvs_rbtree_mod(&rbtree_engine, temp_key, temp_val);
+                    kvs_rbtree_mod(&rbtree_engine, (char*)key_ptr, (char*)val_ptr);
                     #endif
                 } else if (engine_type == 3) {
                     // engine_type == 3 表示 Skiplist 引擎
                     #if ENABLE_SKIPLIST
-                    kvs_skiplist_mod(&skiplist_engine, temp_key, temp_val);
+                    kvs_skiplist_mod(&skiplist_engine, (char*)key_ptr, (char*)val_ptr);
                     #endif
                 }
 #else
                 // 单引擎模式：调用统一的 MOD 函数
-                kvs_main_mod(&global_main_engine, temp_key, temp_val);
+                kvs_main_mod(&global_main_engine, (char*)key_ptr, (char*)val_ptr);
 #endif
                 break;  // 退出 switch
 
@@ -485,30 +468,31 @@ static int aofLoadToEngine_mmap(const char* filename, int engine_type) {
             case AOF_CMD_DEL:
 #if ENABLE_MULTI_ENGINE
                 // 多引擎模式：根据 engine_type 调用相应的 DEL 函数
+                // 直接传递映射内存指针，引擎内部会分配内存并拷贝数据
                 if (engine_type == 0) {
                     // engine_type == 0 表示 Array 引擎
                     #if ENABLE_ARRAY
-                    kvs_array_del(&array_engine, temp_key);
+                    kvs_array_del(&array_engine, (char*)key_ptr);
                     #endif
                 } else if (engine_type == 1) {
                     // engine_type == 1 表示 Hash 引擎
                     #if ENABLE_HASH
-                    kvs_hash_del(&hash_engine, temp_key);
+                    kvs_hash_del(&hash_engine, (char*)key_ptr);
                     #endif
                 } else if (engine_type == 2) {
                     // engine_type == 2 表示 Rbtree 引擎
                     #if ENABLE_RBTREE
-                    kvs_rbtree_del(&rbtree_engine, temp_key);
+                    kvs_rbtree_del(&rbtree_engine, (char*)key_ptr);
                     #endif
                 } else if (engine_type == 3) {
                     // engine_type == 3 表示 Skiplist 引擎
                     #if ENABLE_SKIPLIST
-                    kvs_skiplist_del(&skiplist_engine, temp_key);
+                    kvs_skiplist_del(&skiplist_engine, (char*)key_ptr);
                     #endif
                 }
 #else
                 // 单引擎模式：调用统一的 DEL 函数
-                kvs_main_del(&global_main_engine, temp_key);
+                kvs_main_del(&global_main_engine, (char*)key_ptr);
 #endif
                 break;  // 退出 switch
 

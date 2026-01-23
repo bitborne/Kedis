@@ -54,16 +54,16 @@ int kvs_array_set(kvs_array_t* inst, char* key, char* value) {
   // 先查找是否 key has existed
   if (kvs_array_get(inst, key)) return 1;  //  > 0 表示 key 已经存在
 
-  char* tmpKey = strdup(key); // strdup 自动 malloc 且自动预留 \0
-  char* tmpValue = strdup(value); // 两行替代下面两坨注释 但是它好像是 POXIS API
+  // char* tmpKey = strdup(key); // strdup 自动 malloc 且自动预留 \0
+  // char* tmpValue = strdup(value); // 两行替代下面两坨注释 但是它好像是 POXIS API
   // printf("tmpkey = %s, tmpvalue = %s\n", tmpKey, tmpValue); // DEBUG
-  // char* tmpKey = kvs_calloc(1, strlen(key) + 1);
-  // if (tmpKey == NULL) return -3;
-  // strncpy(tmpKey, key, strlen(key));
+  char* tmpKey = kvs_calloc(1, strlen(key) + 1);
+  if (tmpKey == NULL) return -3;
+  strncpy(tmpKey, key, strlen(key));
   
-  // char* tmpValue = kvs_calloc(1, strlen(value) + 1);
-  // if (tmpValue == NULL) return -4;
-  // strncpy(tmpValue, value, strlen(value));
+  char* tmpValue = kvs_calloc(1, strlen(value) + 1);
+  if (tmpValue == NULL) return -4;
+  strncpy(tmpValue, value, strlen(value));
 
   
   for (int idx = 0; idx < KVS_ARRAY_SIZE; idx++) {

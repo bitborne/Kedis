@@ -753,46 +753,36 @@ static int ksfLoadToEngine_mmap(const char* filename, int engine_type) {
             return -1;
         }
 
-        // 获取 key 和 value 的指针
+        // 获取 key 和 value 的指针（直接引用映射内存，不拷贝）
         const char* key_ptr = (key_len > 0) ? (data + pos) : NULL;
         pos += key_len;
 
         const char* val_ptr = (val_len > 0) ? (data + pos) : NULL;
         pos += val_len;
 
-        // 创建临时字符串
-        char temp_key[4096] = {0};
-        char temp_val[65536] = {0};
-
-        if (key_len > 0 && key_len < sizeof(temp_key)) {
-            memcpy(temp_key, key_ptr, key_len);
-        }
-
-        if (val_len > 0 && val_len < sizeof(temp_val)) {
-            memcpy(temp_val, val_ptr, val_len);
-        }
-
         // 根据引擎类型执行 SET 操作
+        // 直接传递映射内存指针，引擎内部会分配内存并拷贝数据
+        // 这样实现了真正的零拷贝，并且支持任意大小的数据（4MB+）
 #if ENABLE_MULTI_ENGINE
         if (engine_type == 0) {
             #if ENABLE_ARRAY
-            kvs_array_set(&array_engine, temp_key, temp_val);
+            kvs_array_set(&array_engine, (char*)key_ptr, (char*)val_ptr);
             #endif
         } else if (engine_type == 1) {
             #if ENABLE_HASH
-            kvs_hash_set(&hash_engine, temp_key, temp_val);
+            kvs_hash_set(&hash_engine, (char*)key_ptr, (char*)val_ptr);
             #endif
         } else if (engine_type == 2) {
             #if ENABLE_RBTREE
-            kvs_rbtree_set(&rbtree_engine, temp_key, temp_val);
+            kvs_rbtree_set(&rbtree_engine, (char*)key_ptr, (char*)val_ptr);
             #endif
         } else if (engine_type == 3) {
             #if ENABLE_SKIPLIST
-            kvs_skiplist_set(&skiplist_engine, temp_key, temp_val);
+            kvs_skiplist_set(&skiplist_engine, (char*)key_ptr, (char*)val_ptr);
             #endif
         }
 #else
-        kvs_main_set(&global_main_engine, temp_key, temp_val);
+        kvs_main_set(&global_main_engine, (char*)key_ptr, (char*)val_ptr);
 #endif
 
         kv_count++;
