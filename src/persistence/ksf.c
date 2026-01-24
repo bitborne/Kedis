@@ -252,8 +252,8 @@ int ksfWriteRbtreeRecurse(int fd, rbtree_node* node) {
 
   // 写入当前节点
   if (node->key != NULL && node->value != NULL) {
-    if (ksfWriteOneKv(fd, node->key, strlen(node->key), (char*)node->value,
-                      strlen((char*)node->value)) != 0) {
+    if (ksfWriteOneKv(fd, node->key, strlen(node->key) + 1, (char*)node->value,
+                      strlen((char*)node->value) + 1) != 0) {
       return -1;
     }
   }
@@ -299,8 +299,8 @@ int ksfWriteHash(int fd) {
       hashnode_t* node = hash->rehash_nodes[i];
       while (node != NULL) {
         if (node->key != NULL) {
-          if (ksfWriteOneKv(fd, node->key, strlen(node->key), node->value,
-                            strlen(node->value)) != 0) {
+          if (ksfWriteOneKv(fd, node->key, strlen(node->key) + 1, node->value,
+                            strlen(node->value) + 1) != 0) {
             return -1;
           }
         }
@@ -314,8 +314,8 @@ int ksfWriteHash(int fd) {
     hashnode_t* node = hash->nodes[i];
     while (node != NULL) {
       if (node->key != NULL) {
-        if (ksfWriteOneKv(fd, node->key, strlen(node->key), node->value,
-                          strlen(node->value)) != 0) {
+        if (ksfWriteOneKv(fd, node->key, strlen(node->key) + 1, node->value,
+                          strlen(node->value) + 1) != 0) {
           return -1;
         }
       }
@@ -344,8 +344,8 @@ int ksfWriteArray(int fd) {
   for (int i = 0; i < array->total; i++) {
     kvs_array_item_t* item = &array->table[i];
     if (item->key != NULL) {  // 只写入非空项
-      if (ksfWriteOneKv(fd, item->key, strlen(item->key), item->value,
-                        strlen(item->value)) != 0) {
+      if (ksfWriteOneKv(fd, item->key, strlen(item->key) + 1, item->value,
+                        strlen(item->value) + 1) != 0) {
         return -1;
       }
     }
@@ -377,8 +377,8 @@ int ksfWriteSkiplist(int fd) {
   skiplist_node_t* current = skiplist->header->forward[0];
   while (current != NULL) {
     if (current->key != NULL && current->value != NULL) {
-      if (ksfWriteOneKv(fd, current->key, strlen(current->key),
-                        current->value, strlen(current->value)) != 0) {
+      if (ksfWriteOneKv(fd, current->key, strlen(current->key) + 1,
+                        current->value, strlen(current->value) + 1) != 0) {
         return -1;
       }
     }

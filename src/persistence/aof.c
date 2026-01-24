@@ -547,8 +547,8 @@ void appendToAofBuffer(int type, const char* key, const char* value) {
 
     char* aof_buf = aofBuffer.buf;
 
-    int klen = key ? strlen(key) : 0;
-    int vlen = (value && type != AOF_CMD_DEL) ? strlen(value) : 0;
+    int klen = key ? strlen(key) + 1 : 0;
+    int vlen = (value int vlen = (value && type != AOF_CMD_DEL) ? strlen(value) : 0;int vlen = (value && type != AOF_CMD_DEL) ? strlen(value) : 0; type != AOF_CMD_DEL) ? strlen(value) + 1 : 0;
 
     uint8_t vlq[16];
     int key_len_bytes = encode_vlq(klen, vlq);
@@ -1152,8 +1152,8 @@ void appendToAofBufferToEngine(int engine_type, int type, const char* key, const
 
     char* aof_buf = aofBuffer[engine_type].buf;
     
-    int klen = key ? strlen(key) : 0;
-    int vlen = (value && type != AOF_CMD_DEL) ? strlen(value) : 0;
+    int klen = key ? strlen(key) + 1 : 0;
+    int vlen = (value && type != AOF_CMD_DEL) ? strlen(value) + 1: 0;
 
     uint8_t vlq[16];
     int key_len_bytes = encode_vlq(klen, vlq);
