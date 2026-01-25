@@ -350,7 +350,7 @@ char* generate_random_string(int size, const char* charset) {
         return NULL;
     }
     
-    const char* default_charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    const char* default_charset = "\r\nabcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ";
     if (!charset || strlen(charset) == 0) charset = default_charset;
     
     int charset_len = strlen(charset);
@@ -359,16 +359,9 @@ char* generate_random_string(int size, const char* charset) {
         return NULL;
     }
     
-    // 使用 /dev/urandom 获取更好的随机数
-    FILE* urandom = fopen("/dev/urandom", "r");
-    if (urandom) {
-        unsigned int seed;
-        fread(&seed, sizeof(seed), 1, urandom);
-        fclose(urandom);
-        srand(seed);
-    } else {
-        srand(time(NULL) ^ getpid());
-    }
+    // 注意：不再在这里设置随机种子
+    // 随机种子应该在 main() 函数中统一设置
+    // 这样确保持久化测试中生成的随机数据可重现
     
     for (int i = 0; i < size; i++) {
         str[i] = charset[rand() % charset_len];
@@ -1076,6 +1069,10 @@ int main(int argc, char* argv[]) {
         return -1;
     }
 
+    // 设置固定随机种子，确保持久化测试中生成的随机数据可重现
+    // 这样可以在保存和加载时生成相同的随机数据，便于验证
+    srand(12345);
+
     int connfd = connect_server(g_config.ip, g_config.port);
     if (connfd < 0) {
         fprintf(stderr, "Failed to connect to server %s:%d\n", g_config.ip, g_config.port);
@@ -1092,17 +1089,6 @@ int main(int argc, char* argv[]) {
 }
 
 /* ==================== 持久化测试函数 ==================== */
-
-/**
- * 生成指定大小的随机数据
- */
-static void generate_random_data(char* buffer, int size) {
-    static const char charset[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    for (int i = 0; i < size; i++) {
-        buffer[i] = charset[rand() % (sizeof(charset) - 1)];
-    }
-    buffer[size] = '\0';
-}
 
 /**
  * KSF 持久化测试
@@ -1146,11 +1132,20 @@ void test_ksf_persistence(int connfd, const engine_ops_t* engine) {
     for (int i = 0; i < 100; i++) {
         char key[128], value[1024];
         snprintf(key, sizeof(key), "ksf_medium_key_%04d_", i);
-        generate_random_data(key + strlen(key), 100 - strlen(key));
-        generate_random_data(value, 1024);
+        char* random_key_suffix = generate_random_string(100 - strlen(key), NULL);
+        if (random_key_suffix) {
+            strcat(key, random_key_suffix);
+            free(random_key_suffix);
+        }
+        
+        char* random_value = generate_random_string(1024, NULL);
+        if (!random_value) {
+            continue;
+        }
         
         char cmd[2048];
-        snprintf(cmd, sizeof(cmd), "%s %s %s", engine->set_cmd, key, value);
+        snprintf(cmd, sizeof(cmd), "%s %s %s", engine->set_cmd, key, random_value);
+        free(random_value);
         
         char* resp_msg = encode_to_resp(cmd);
         if (resp_msg) {
@@ -1175,11 +1170,20 @@ void test_ksf_persistence(int connfd, const engine_ops_t* engine) {
     for (int i = 0; i < 10; i++) {
         char key[1024], value[1024 * 1024];
         snprintf(key, sizeof(key), "ksf_large_key_%02d_", i);
-        generate_random_data(key + strlen(key), 1024 - strlen(key));
-        generate_random_data(value, 1024 * 1024);
+        char* random_key_suffix = generate_random_string(1024 - strlen(key), NULL);
+        if (random_key_suffix) {
+            strcat(key, random_key_suffix);
+            free(random_key_suffix);
+        }
+        
+        char* random_value = generate_random_string(1024 * 1024, NULL);
+        if (!random_value) {
+            continue;
+        }
         
         char cmd[128];
-        snprintf(cmd, sizeof(cmd), "%s %s %s", engine->set_cmd, key, value);
+        snprintf(cmd, sizeof(cmd), "%s %s %s", engine->set_cmd, key, random_value);
+        free(random_value);
         
         char* resp_msg = encode_to_resp(cmd);
         if (resp_msg) {
@@ -1315,11 +1319,20 @@ void test_aof_persistence(int connfd, const engine_ops_t* engine) {
     for (int i = 0; i < 10; i++) {
         char key[1024], value[1024 * 1024];
         snprintf(key, sizeof(key), "aof_large_key_%02d_", i);
-        generate_random_data(key + strlen(key), 1024 - strlen(key));
-        generate_random_data(value, 1024 * 1024);
+        char* random_key_suffix = generate_random_string(1024 - strlen(key), NULL);
+        if (random_key_suffix) {
+            strcat(key, random_key_suffix);
+            free(random_key_suffix);
+        }
+        
+        char* random_value = generate_random_string(1024 * 1024, NULL);
+        if (!random_value) {
+            continue;
+        }
         
         char cmd[128];
-        snprintf(cmd, sizeof(cmd), "%s %s %s", engine->set_cmd, key, value);
+        snprintf(cmd, sizeof(cmd), "%s %s %s", engine->set_cmd, key, random_value);
+        free(random_value);
         
         char* resp_msg = encode_to_resp(cmd);
         if (resp_msg) {
@@ -1342,12 +1355,22 @@ void test_aof_persistence(int connfd, const engine_ops_t* engine) {
     // 测试 5: 大数据 MOD 操作 (5 条)
     printf("\n  Test 5: Large data MOD operations (5 records)...\n");
     for (int i = 0; i < 5; i++) {
-        char key[1024], value[1024 * 1024];
+        char key[1024];
         snprintf(key, sizeof(key), "aof_large_key_%02d_", i);
-        generate_random_data(value, 1024 * 1024);
+        char* random_key_suffix = generate_random_string(1024 - strlen(key), NULL);
+        if (random_key_suffix) {
+            strcat(key, random_key_suffix);
+            free(random_key_suffix);
+        }
+        
+        char* random_value = generate_random_string(1024 * 1024, NULL);
+        if (!random_value) {
+            continue;
+        }
         
         char cmd[128];
-        snprintf(cmd, sizeof(cmd), "%s %s %s", engine->mod_cmd, key, value);
+        snprintf(cmd, sizeof(cmd), "%s %s %s", engine->mod_cmd, key, random_value);
+        free(random_value);
         
         char* resp_msg = encode_to_resp(cmd);
         if (resp_msg) {
@@ -1440,7 +1463,11 @@ void test_persistence_load(int connfd, const engine_ops_t* engine, const char* t
     for (int i = 0; i < 100; i++) {
         char key[128];
         snprintf(key, sizeof(key), "%s_medium_key_%04d_", test_type, i);
-        generate_random_data(key + strlen(key), 100 - strlen(key));
+        char* random_key_suffix = generate_random_string(100 - strlen(key), NULL);
+        if (random_key_suffix) {
+            strcat(key, random_key_suffix);
+            free(random_key_suffix);
+        }
         
         char cmd[256];
         snprintf(cmd, sizeof(cmd), "%s %s", engine->get_cmd, key);
@@ -1468,7 +1495,11 @@ void test_persistence_load(int connfd, const engine_ops_t* engine, const char* t
     for (int i = 0; i < 10; i++) {
         char key[1024];
         snprintf(key, sizeof(key), "%s_large_key_%02d_", test_type, i);
-        generate_random_data(key + strlen(key), 1024 - strlen(key));
+        char* random_key_suffix = generate_random_string(1024 - strlen(key), NULL);
+        if (random_key_suffix) {
+            strcat(key, random_key_suffix);
+            free(random_key_suffix);
+        }
         
         char cmd[2048];
         snprintf(cmd, sizeof(cmd), "%s %s", engine->get_cmd, key);
