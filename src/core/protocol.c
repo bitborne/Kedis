@@ -1,51 +1,55 @@
-#include <string.h>
-#include <stdlib.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
 #include "../../include/kvs_protocol.h"
 #include "../../kvstore.h"
 
+/* ---------------- 从 proactor.c 迁移过来的 RESP 协议解析逻辑 ----------------
+ */
+/*
+int fd;         // TCP 套接字
+int state;      // io_uring 状态：ST_RECV / ST_SEND / ST_CLOSE
+int next_free;  // 空闲链表中的下一个连接索引
 
+char rbuf[IOP_SIZE];  // 读缓冲区（16 KB）
+size_t rlen;             // 缓冲区内有效数据长度
+size_t parse_done;       // 缓冲区内已解析长度
 
-/* ---------------- 从 proactor.c 迁移过来的 RESP 协议解析逻辑 ---------------- */
-
+resp_state_t resp_state;
+size_t bulk_len;        // 当前段长度 (需要读取的长度)
+char* bulk_data;
+int argc;    // 期望的参数个数 (argc)
+robj argv[MAX_ARGC];  // 命令段数组 (每个 ptr 都需要 malloc)
+size_t bulk_done;   // 当前 bulk 已解析长度
+ */
 void kvs_resp_reset(struct conn* c) {
-  // 释放旧参数
-  for (int i = 0; i < c->argc; i++) {
+  c->rlen = 0;                  // 重置读缓冲区有效数据长度
+  c->wlen = c->wdone = 0;       // 重置写缓冲区长度和已发送长度
+  c->resp_state = ST_RESP_HDR;  // 重置 RESP 解析状态为等待解析命令头
+  c->bulk_len = 0;              // 重置 bulk data 长度
+  c->argc = 0;                  // 重置期望的参数个数
+  c->argc_done = 0;             // 重置已解析完成的参数个数
+
+  // 释放所有已分配的参数内存
+  for (int i = 0; i < MAX_ARGC; i++) {
     if (c->argv[i].ptr) {
-      kvs_free(c->argv[i].ptr);
-      c->argv[i].ptr = NULL;
+      kvs_free(c->argv[i].ptr);  // 释放参数内存
+      c->argv[i].ptr = NULL;     // 清空指针
     }
+    c->argv[i].len = 0;  // 清空长度
   }
 
-  if (c->seg_buf) {
-    kvs_free(c->seg_buf);
-    c->seg_buf = NULL;
-  }
-
-  c->argc = 0;
-  c->multibulk_len = 0;
-  c->bulk_len = 0;
-  c->seg_used = 0;
-  c->resp_state = ST_RESP_HDR;
-  
-  // 重置流式接收状态
-  c->streaming_recv = 0;           // 退出流式模式，回到正常模式
-  c->remaining_bulk_len = 0;       // 重置剩余 bulk data 长度
-  c->need_crlf = 0;                // 重置 \r\n 标记
-  
-  // 重置流式发送状态
-  c->streaming_send = 0;           // 退出流式发送模式，回到正常模式
-  c->streaming_data = NULL;        // 重置数据源指针（不负责释放）
-  c->streaming_len = 0;            // 重置数据总长度
-  c->streaming_sent = 0;           // 重置已发送的字节数
+  c->bulk_done = 0;   // 重置 bulk data 已解析长度
+  c->parse_done = 0;  // 重置已解析的数据位置
 }
 
 void kvs_resp_free_resources(struct conn* c) {
   // 释放当前正在解析的 buffer
-  if (c->seg_buf) {
-    kvs_free(c->seg_buf);
-    c->seg_buf = NULL;
-  }
+  // if (c->seg_buf) {
+  //   kvs_free(c->seg_buf);
+  //   c->seg_buf = NULL;
+  // }
 
   // 释放已解析的参数
   for (int i = 0; i < c->argc; i++) {
@@ -54,180 +58,204 @@ void kvs_resp_free_resources(struct conn* c) {
       c->argv[i].ptr = NULL;
     }
   }
-  
+
   // wbuf 是由网络层分配和管理的，这里我们只负责 argv 相关的内存
 }
 
-/* --------------  RESP 流式解析：啃掉 data[]，返回是否完成一条完整命令 -------------- */
+/* --------------  RESP 流式解析：啃掉 data[]，返回是否完成一条完整命令
+ * -------------- */
 int kvs_resp_feed(struct conn* c) {
-  size_t len = c->r_len;
-  char* data = c->frame;
-  size_t done = 0;
+  // 读进来的数据放在
 
-  // 目标, 把 r_len: 目前收到的数据, 全部处理成 RESP
-  while (done < len) {
+  while (c->parse_done < c->rlen) {
     switch (c->resp_state) {
       case ST_RESP_HDR: {
-        // 期待 *<argc>\r\n
-        char* p = data + done;
-        char* nl = memchr(p, '\n', len - done);
-        if (!nl) return done;  // 还没收全一行
-
-        if (nl <= p || *(nl - 1) != '\r') return -1;  // 格式错误
-
-        char prefix = *p;
-        long num = strtol(p + 1, NULL, 10);  // 跳过前缀解析数字
-
-        if (prefix == '*') {
-          c->multibulk_len = num; // 找到了想要的值
-          c->argc = 0; // 接下来开始解析各个段咯,argc是已经收取的段数量
-          if (num <= 0 || num > MAX_ARGC) return -1;
-          c->resp_state = ST_RESP_BULK_LEN;  // 接下来期待参数长度
-        } else {
-          // 如果不是 *, 可能直接是 Inline command? 这里只支持标准 RESP 数组
-          return -1;
+        // 检查是否以 * 开头（Array 格式）
+        if (c->rbuf[c->parse_done] != '*') {
+          return -1;  // 协议错误：不是 Array 格式
         }
 
-        done += (nl - p) + 1;  // 跳过这行
+        // 查找 \r\n，确定命令头结束位置
+        char* end = strstr(c->rbuf + c->parse_done, "\r\n");
+        if (!end) {
+          // 找不到 \r\n，数据不足，保留未解析的数据在 rbuf 中
+          return 0;  // 需要更多数据
+        }
+
+        // 提取 argc（参数个数）
+        char* ptr = c->rbuf + c->parse_done + 1;  // 跳过 '*'
+        char* endptr;
+        c->argc = (int)strtol(ptr, &endptr, 10);  // 解析数字
+
+        // 检查解析是否成功（endptr 应该指向 \r）
+        if (endptr != end) {
+          return -1;  // 解析错误：数字格式错误
+        }
+
+        // 更新 parse_done 到命令头结束位置（跳过 \r\n）
+        c->parse_done = end + 2 - c->rbuf;
+
+        // 切换到 ST_RESP_BULK_LEN 状态，准备解析第一个参数的长度
+        c->resp_state = ST_RESP_BULK_LEN;
         break;
       }
       case ST_RESP_BULK_LEN: {
-        // 期待 $<len>\r\n
-        char* p = data + done;  // 当前所在位置
-        char* nl = memchr(p, '\n', len - done);
-        if (!nl) return done;
-
-        if (nl <= p || *(nl - 1) != '\r' || *p != '$') return -1; // 检查是否合法(RESP协议)
-
-        long len_val = strtol(p + 1, NULL, 10);
-        c->bulk_len = len_val; // 获取到想要的了!
-        
-        if (len_val < 0) {  // NULL Bulk String ($ -1)
-          return -1;
+        // 检查是否以 $ 开头（Bulk String 格式）
+        if (c->rbuf[c->parse_done] != '$') {
+          return -1;  // 协议错误：不是 Bulk String 格式
         }
-        if (len_val > MAX_SEG_SIZE) return -1; // 超过1GB的 Key 或者 Value,不读
 
-        // 分配内存准备接收数据
-        // 预留额外的 2 字节用于流式接收模式下的 \r\n
-        // 格式：[bulk_data(len_val bytes)] + [\r\n(2 bytes)] + [\0(1 byte)]
-        c->seg_buf = kvs_malloc(len_val + 3);  // +2 for \r\n, +1 for null terminator
-        if (!c->seg_buf) {
+        // 查找 \r\n，确定长度头结束位置
+        char* end = strstr(c->rbuf + c->parse_done, "\r\n");
+        if (!end) {
+          // 找不到 \r\n，数据不足
+          // 保留未解析的 $<len> 部分在 rbuf 中，下次继续解析
+          // 注意：不要重置 rlen 为 0，而是设置 parse_done 为当前开始位置
+          return 0;  // 需要更多数据
+        }
+
+        // 提取 bulk_len（bulk data 长度）
+        char* ptr = c->rbuf + c->parse_done + 1;  // 跳过 '$'
+        char* endptr;
+        c->bulk_len = (size_t)strtol(ptr, &endptr, 10);  // 解析数字
+
+        // 检查解析是否成功（endptr 应该指向 \r）
+        if (endptr != end) {
+          return -1;  // 解析错误：数字格式错误
+        }
+
+        // 更新 parse_done 到长度头结束位置（跳过 \r\n）
+        c->parse_done = end + 2 - c->rbuf;
+
+        // 处理 NULL bulk string（bulk_len == -1）
+        if (c->bulk_len == (size_t)-1) {
+          c->argv[c->argc_done].ptr = NULL;  // NULL 指针
+          c->argv[c->argc_done].len = 0;     // 长度为 0
+          c->argc_done++;                    // 已解析参数个数加 1
+
+          // 检查是否所有参数解析完毕
+          if (c->argc_done == c->argc) {
+            c->resp_state = ST_RESP_OK;  // 切换到完成状态
+          }
+          // 否则继续解析下一个参数（保持在 ST_RESP_BULK_LEN 状态）
+          break;
+        }
+
+        // 检查 bulk_len 是否超过最大限制
+        if (c->bulk_len > MAX_SEG_SIZE) {
+          return -1;  // 数据过大，拒绝处理
+        }
+
+        // 分配内存存储 bulk data（+1 用于 null terminator）
+        c->argv[c->argc_done].ptr = kvs_malloc(c->bulk_len + 1);
+        if (!c->argv[c->argc_done].ptr) {
           return -1;  // 内存分配失败
         }
-        c->seg_buf[len_val] = '\0';  // 初始 null terminator 在 bulk_len 位置
-        c->seg_used = 0;
+        c->argv[c->argc_done].len = c->bulk_len;        // 记录长度
+        c->argv[c->argc_done].ptr[c->bulk_len] = '\0';  // 添加 null terminator
 
+        // 切换到 ST_RESP_BULK_DATA 状态，准备接收 bulk data
+        c->bulk_done = 0;  // 重置已接收的 bulk data 长度
         c->resp_state = ST_RESP_BULK_DATA;
-        done += (nl - p) + 1;
         break;
       }
       case ST_RESP_BULK_DATA: {
-        // want: 还需要多少 bulk data（从 seg_used 到 bulk_len 的距离）
-        size_t want = c->bulk_len - c->seg_used;
-        
-        // avail: frame 中还有多少数据可用（从 done 到 len 的距离）
-        size_t avail = len - done;
-        
-        // cp: 这次复制多少数据（取 want 和 avail 的较小值，避免越界）
+        // 计算还需要接收多少 bulk data
+        size_t want = c->bulk_len - c->bulk_done;
+
+        // 计算 rbuf 中还有多少数据可用
+        size_t avail = c->rlen - c->parse_done;
+
+        // 计算本次可以复制的数据量（取 want 和 avail 的较小值）
         size_t cp = (want < avail) ? want : avail;
 
-        // 从 frame 复制数据到 seg_buf
-        memcpy(c->seg_buf + c->seg_used, data + done, cp);
-        
-        // 更新 seg_used（已经接收的 bulk data 长度）
-        c->seg_used += cp;
-        
-        // 更新 done（frame 中已经处理的数据位置）
-        done += cp;
+        // 从 rbuf 复制数据到 argv[argc_done].ptr
+        memcpy(c->argv[c->argc_done].ptr + c->bulk_done,
+               c->rbuf + c->parse_done, cp);
 
-        // 检查 bulk data 是否收全
-        if (c->seg_used == (size_t)c->bulk_len) {
-          // bulk data 收全了，现在检查 \r\n
-          fprintf(stderr, "c->seg_used == %zu\n", c->seg_used);
-          
-          // 确保 seg_buf 正确终止（防止 strlen 计算出错误的长度）
-          c->seg_buf[c->seg_used] = '\0';
-          
-          // 检查 frame 中是否有足够的数据接收 \r\n
-          if (done + 2 > len) {
-            // frame 中的数据已经处理完了，但还没收到 \r\n
-            fprintf(stderr, "Hello World2\n");
-            
-            // 移除 frame 中已处理的数据
-            int left = len - done;
-            if (left > 0 && done > 0) {
-              memmove(c->frame, c->frame + done, left);
-            }
-            c->r_len = left;
+        // 更新 bulk_done（已接收的 bulk data 长度）
+        c->bulk_done += cp;
 
-            
-            // 设置流式接收状态
-            c->streaming_recv = 1;           // 进入流式模式
-            c->remaining_bulk_len = 0;       // bulk data 已经收全
-            c->need_crlf = 1;                // 还需要接收 \r\n
-            
-            // 返回特殊值，告诉主循环需要流式接收
-            return NEED_STREAMING_RECV;
+        // 更新 parse_done（rbuf 中已处理的数据位置）
+        c->parse_done += cp;
+
+        // 检查 bulk data 是否接收完成
+        if (c->bulk_done == c->bulk_len) {
+          // bulk data 收全了，现在检查是否有 \r\n
+
+          // 检查 rbuf 中是否有足够的数据接收 \r\n
+          if (c->parse_done + 2 > c->rlen) {
+            // 数据不足，等待更多数据
+            // 保留已接收的 bulk data，下次继续解析
+            return 0;  // 需要更多数据
           }
-          
+
           // 检查 \r\n 是否正确
-          if (data[done] != '\r' || data[done + 1] != '\n') {
-            return -1;  // 协议错误
+          if (c->rbuf[c->parse_done] != '\r' ||
+              c->rbuf[c->parse_done + 1] != '\n') {
+            return -1;  // 协议错误：缺少 \r\n
           }
-          done += 2;
-          
 
-          fprintf(stderr, "FINAL: c->argc == %d\n", c->argc);
-          fprintf(stderr, "FINAL: c->bulk_len == %ld\n", c->bulk_len);
-          // 参数完整，存入 argv
-          c->argv[c->argc++] = (robj){c->seg_buf, c->bulk_len};
-          c->seg_buf = NULL;  // 权责移交，argv 负责 seg_buf 的内存
-          
-          // 检查是否所有参数都解析完毕
-          if (c->argc == c->multibulk_len) {
-            // 所有参数解析完毕
-            
-            // 移除 frame 中已处理的数据
-            int left = len - done;
-            if (left > 0) {
-              memmove(c->frame, c->frame + done, left);
-            }
-            c->r_len = left;
-            
-            return PARSE_OK;
+          // 跳过 \r\n（2 字节）
+          c->parse_done += 2;
+
+          // 参数解析完成，更新 argc_done
+          c->argc_done++;
+
+          // 检查是否所有参数解析完毕
+          if (c->argc_done == c->argc) {
+            // 所有参数解析完毕，切换到完成状态
+            c->resp_state = ST_RESP_OK;
           } else {
-            // 继续下一个参数
+            // 继续解析下一个参数，切换到 ST_RESP_BULK_LEN 状态
             c->resp_state = ST_RESP_BULK_LEN;
           }
-        } else {
-          // bulk data 没收全，且 frame 中的数据已经处理完了
-          fprintf(stderr, "stream\n");
-          // 移除 frame 中已处理的数据
-          int left = len - done;
-          if (left > 0 && done > 0) {
-            memmove(c->frame, c->frame + done, left);
-          }
-          c->r_len = left;
-          
-          // 设置流式接收状态
-          c->streaming_recv = 1;                           // 进入流式模式
-          c->remaining_bulk_len = c->bulk_len - c->seg_used;  // 还需要接收多少 bulk data
-          c->need_crlf = 1;                                // 收全 bulk data 后还需要 \r\n
-          
-          // 返回特殊值，告诉主循环需要流式接收
-          return NEED_STREAMING_RECV;
         }
+        // 否则，bulk data 还没收全，继续接收（保持在 ST_RESP_BULK_DATA 状态）
+        break;
+      }
+      case ST_RESP_OK: {
+        // 命令解析完成，不需要做任何处理
+        // 这个状态只是标记，实际逻辑在循环结束后处理
         break;
       }
     }
-  }
 
-  // 循环结束（数据耗尽），移除已处理数据
-  int left = len - done;
-  if (left > 0 && done > 0) {
-    memmove(c->frame, c->frame + done, left);
+    // 循环结束，检查是否所有参数解析完毕
+    if (c->resp_state == ST_RESP_OK) {
+      // 所有参数解析完毕
+      // 检查是否所有数据都已处理
+      if (c->parse_done >= c->rlen) {
+        // 所有数据都已处理，重置 rlen 和 parse_done
+        c->rlen = 0;
+        c->parse_done = 0;
+      } else {
+        // 还有未解析的数据（例如：一条命令解析完毕，但 rbuf 中还有下一条命令的部分数据）
+        // 移动未解析的数据到 rbuf 开头
+        size_t remaining = c->rlen - c->parse_done;
+        memmove(c->rbuf, c->rbuf + c->parse_done, remaining);
+        c->rlen = remaining;
+        c->parse_done = 0;
+      }
+      return ST_RESP_OK;
+    } else if (c->parse_done < c->rlen) {
+      // 还有未解析的数据，继续解析
+      // 这种情况不应该发生，因为 while 循环会继续处理
+      return 0;  // 需要更多数据
+    } else {
+      // 数据耗尽，但未解析完毕，需要更多数据
+      // 移动未解析的数据到 rbuf 开头（如果有）
+      if (c->parse_done > 0 && c->parse_done < c->rlen) {
+        size_t remaining = c->rlen - c->parse_done;
+        memmove(c->rbuf, c->rbuf + c->parse_done, remaining);
+        c->rlen = remaining;
+        c->parse_done = 0;
+      } else if (c->parse_done >= c->rlen) {
+        // 所有数据都已处理，重置 rlen
+        c->rlen = 0;
+        c->parse_done = 0;
+      }
+      return 0;  // 需要更多数据
+    }
   }
-  c->r_len = left;
-
-  return 0;  // 需要更多数据
 }

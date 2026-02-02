@@ -4,8 +4,6 @@
 #include "kvs_constants.h"
 #include "kvs_network.h"
 
-#define PARSE_OK 1
-
 /* ---------------- 返回值定义 ---------------- */
 #define NEED_STREAMING_RECV 2  // 需要流式接收（数据直接写入 seg_buf）
 

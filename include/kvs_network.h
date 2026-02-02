@@ -6,7 +6,7 @@
 
 /* ---------------- 常量定义 ---------------- */
 #define IOP_SIZE (44)               // 每次 recv/send 的帧大小（16 KB）
-#define MAX_ARGC (64)                        // 最大参数个数
+#define MAX_ARGC (8)                        // 最大参数个数
 #define RESP_BUF_SIZE (100)          // 响应缓冲区大小
 #define MAX_SEG_SIZE (1024 * 1024 * 1024)  // 单段最大 1 GB
 
@@ -20,6 +20,7 @@ typedef enum {
   ST_RESP_HDR,        // 等待解析 *<argc> (命令开始)
   ST_RESP_BULK_LEN,   // 等待解析 $<len> (参数长度)
   ST_RESP_BULK_DATA,  // 正在收 bulk 内容
+  ST_RESP_OK
 } resp_state_t;
 
 /* ---------------- 段对象：只挂指针，不拷贝数据 ---------------- */
@@ -35,29 +36,19 @@ struct conn {
   int next_free;  // 空闲链表中的下一个连接索引
 
   /* ---- 读流 ---- */
-  char frame[IOP_SIZE];  // 读缓冲区（16 KB）
-  int r_len;             // 缓冲区内有效数据长度
+  char rbuf[IOP_SIZE];  // 读缓冲区（16 KB）
+  size_t rlen;             // 缓冲区内有效数据长度
+  size_t parse_done;       // 缓冲区内已解析长度
 
   /* RESP 状态机 */
   resp_state_t resp_state;
-  long bulk_len;        // 当前段剩余长度 (需要读取的长度)
-  int multibulk_len;    // 期望的参数个数 (argc)
-  int argc;             // 已收段数
-  robj argv[MAX_ARGC];  // 命令段数组 (每个 ptr 都需要 malloc)
+  size_t bulk_len;        // 当前段长度 (需要读取的长度)
+  char* bulk_data;       //  当前段起始位置 
+  int argc;              // 期望的参数个数 (argc)
+  int argc_done;         // 已解析完成的参数个数 (用于跟踪解析进度)
+  size_t bulk_done;      // 当前 bulk 已解析长度
+  robj argv[MAX_ARGC];   // 命令段数组 (每个 ptr 都需要 malloc)
 
-  /* ---- 当前正在解析的参数 ---- */
-  char* seg_buf;    // 当前参数的 buffer
-  size_t seg_used;  // 当前参数已填入的字节数
-
-  /* ---- 流式接收状态 ---- */
-  int streaming_recv;          // 标记是否正在进行流式接收（0: 正常模式，1: 流式模式）
-                                // 正常模式：数据先进入 frame，再复制到 seg_buf
-                                // 流式模式：数据直接进入 seg_buf，跳过 frame
-  size_t remaining_bulk_len;   // 还需要接收的 bulk data 长度（用于流式接收）
-                                // 例如：bulk_len = 4MB，seg_used = 1MB，则 remaining_bulk_len = 3MB
-  int need_crlf;               // 标记是否还需要接收 \r\n（0: 不需要，1: 需要）
-                                // RESP 协议要求 bulk data 后面必须有 \r\n
-  char crlf_buf[2];            // 临时缓冲区，用于接收 \r\n（不存储到 seg_buf 中）
 
   /* ---- 写回 ---- */
   char* wbuf;       // 回包缓冲（+OK\r\n 或 $len\r\n...）
