@@ -78,6 +78,7 @@ static void conn_pool_free(struct conn_pool* pool, struct conn* c) {
 
 /* ---------------- 工具：拿 SQE 并填 user_data ---------------- */
 static struct io_uring_sqe* sqe_prep(struct io_uring* ring, struct conn* c) {
+  // fprintf(stderr, "-->get sqe\n");
   struct io_uring_sqe* sqe = io_uring_get_sqe(ring);
   if (!sqe) {
     fprintf(stderr, "get_sqe failed\n");
@@ -255,7 +256,7 @@ int proactor_start(unsigned short port, msg_handler handler) {
       }
       continue;
     }
-
+    
     /* -------- 正常业务 -------- */
     switch (c->state) {
       // 来了一个请求, 处理一下
@@ -270,20 +271,23 @@ int proactor_start(unsigned short port, msg_handler handler) {
           // 新数据从 c->rbuf + c->rlen 的位置开始写入
           c->rlen += res;  // 累加接收的字节数（不是覆盖）
           
-          do {
-            int ret = kvs_resp_feed(c);
-            if (ret == -1) {
-              fprintf(stderr, "kvs_resp_feed: RESP parse error\n");
-              conn_free(c);
-              conn_pool_free(&g_conn_pool, c);
-              break;
-            }
-          } while (c->resp_state != ST_RESP_OK);
-          // OK了
-          processCommand(c);
-
-          c->wbuf = NULL;
-          c->state = ST_SEND;
+          // 调用 kvs_resp_feed 解析数据
+          int ret = kvs_resp_feed(c);
+          if (ret == -1) {
+            // 协议错误，关闭连接
+            fprintf(stderr, "kvs_resp_feed: RESP parse error\n");
+            conn_free(c);
+            conn_pool_free(&g_conn_pool, c);
+          } else if (ret == ST_RESP_OK) {
+            // 解析完成，处理命令
+            processCommand(c);
+            c->wbuf = NULL;
+            c->state = ST_SEND;
+          } else {
+            // ret == 0，需要更多数据
+            // 提交 recv 请求，等待更多数据
+            post_recv_frame(&g_ring, c);
+          }
         }
         break;
       }
