@@ -111,7 +111,7 @@ static void post_close(struct io_uring* ring, struct conn* c) {
 static void post_recv_frame(struct io_uring* ring, struct conn* c) {
   // 获取一个 SQE（提交队列条目）
   struct io_uring_sqe* sqe = sqe_prep(ring, c);
-  io_uring_prep_recv(sqe, c->fd, c->rbuf + c->rlen, IOP_SIZE, 0);
+  io_uring_prep_recv(sqe, c->fd, c->rbuf + c->rlen, IOP_SIZE - c->rlen, 0);
 }
 
 /* ---------------- 提交异步 send：回 RESP 包 ---------------- */
@@ -273,17 +273,17 @@ int proactor_start(unsigned short port, msg_handler handler) {
           
           // 调用 kvs_resp_feed 解析数据
           int ret = kvs_resp_feed(c);
-          if (ret == -1) {
+          if (ret == RESP_ERROR) {
             // 协议错误，关闭连接
             fprintf(stderr, "kvs_resp_feed: RESP parse error\n");
             conn_free(c);
             conn_pool_free(&g_conn_pool, c);
-          } else if (ret == ST_RESP_OK) {
+          } else if (ret == RESP_PARSE_OK) {
             // 解析完成，处理命令
             processCommand(c);
             c->wbuf = NULL;
             c->state = ST_SEND;
-          } else {
+          } else if (ret == RESP_CONTINUE_RECV) {
             // ret == 0，需要更多数据
             // 提交 recv 请求，等待更多数据
             post_recv_frame(&g_ring, c);

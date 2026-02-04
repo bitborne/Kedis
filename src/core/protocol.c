@@ -77,14 +77,14 @@ int kvs_resp_feed(struct conn* c) {
         // DEBUG
         fprintf(stderr, "-->hdr\n");
         if (c->rbuf[c->parse_done] != '*') {
-          return -1;  // 协议错误：不是 Array 格式
+          goto error;  // 协议错误：不是 Array 格式
         }
 
         // 查找 \r\n，确定命令头结束位置
         char* end = strstr(c->rbuf + c->parse_done, "\r\n");
         if (!end) {
           // 找不到 \r\n，数据不足，保留未解析的数据在 rbuf 中
-          return 0;  // 需要更多数据
+          goto continue_recv;  // 需要更多数据
         }
 
         // 提取 argc（参数个数）
@@ -95,7 +95,7 @@ int kvs_resp_feed(struct conn* c) {
         fprintf(stderr, "c->argc=%d\n", c->argc);
         // 检查解析是否成功（endptr 应该指向 \r）
         if (endptr != end) {
-          return -1;  // 解析错误：数字格式错误
+          goto error;  // 解析错误：数字格式错误
         }
 
         // 更新 parse_done 到命令头结束位置（跳过 \r\n）
@@ -110,30 +110,39 @@ int kvs_resp_feed(struct conn* c) {
 
         // DEBUG
         fprintf(stderr, "-->bulk_len\n");
-
+        
         // fprintf(stderr, "c->parse_down:这个位置是:%s\n", c->rbuf[c->parse_done]);
         if (c->rbuf[c->parse_done] != '$') {
-          return -1;  // 协议错误：不是 Bulk String 格式
+          goto error; // 协议错误：不是 Bulk String 格式
         }
-
+        fprintf(stderr, "-->bulk_len1\n");
+        
         // 查找 \r\n，确定长度头结束位置
         char* end = strstr(c->rbuf + c->parse_done, "\r\n");
         if (!end) {
           // 找不到 \r\n，数据不足
           // 保留未解析的 $<len> 部分在 rbuf 中，下次继续解析
-          // 注意：不要重置 rlen 为 0，而是设置 parse_done 为当前开始位置
-          return 0;  // 需要更多数据
+          // 注意：不要重置 rlen 为 0，而是设置 parse_done 为 0
+          goto continue_recv;
+          // size_t remaining = c->rlen - c->parse_done;
+          // memmove(c->rbuf, c->rbuf + c->parse_done, remaining);
+          // c->rlen = remaining;
+          // c->parse_done = 0;
+          // return RESP_CONTINUE_REMAINING_RECV;
         }
-
+        
+        fprintf(stderr, "-->bulk_len2\n");
         // 提取 bulk_len（bulk data 长度）
         char* ptr = c->rbuf + c->parse_done + 1;  // 跳过 '$'
         char* endptr;
         c->bulk_len = (size_t)strtol(ptr, &endptr, 10);  // 解析数字
-
+        
         // 检查解析是否成功（endptr 应该指向 \r）
         if (endptr != end) {
-          return -1;  // 解析错误：数字格式错误
+          goto error;
+          // return -1;  // 解析错误：数字格式错误
         }
+        fprintf(stderr, "-->bulk_len3\n");
 
         // 更新 parse_done 到长度头结束位置（跳过 \r\n）
         c->parse_done = end + 2 - c->rbuf;
@@ -154,13 +163,13 @@ int kvs_resp_feed(struct conn* c) {
 
         // 检查 bulk_len 是否超过最大限制
         if (c->bulk_len > MAX_SEG_SIZE) {
-          return -1;  // 数据过大，拒绝处理
+          goto error;  // 数据过大，拒绝处理
         }
 
         // 分配内存存储 bulk data（+1 用于 null terminator）
         c->argv[c->argc_done].ptr = kvs_malloc(c->bulk_len + 1);
         if (!c->argv[c->argc_done].ptr) {
-          return -1;  // 内存分配失败
+          goto error;  // 内存分配失败
         }
         c->argv[c->argc_done].len = c->bulk_len;        // 记录长度
         c->argv[c->argc_done].ptr[c->bulk_len] = '\0';  // 添加 null terminator
@@ -184,8 +193,11 @@ int kvs_resp_feed(struct conn* c) {
         size_t cp = (want < avail) ? want : avail;
         fprintf(stderr, "cp == %d\n", cp);
         // 从 rbuf 复制数据到 argv[argc_done].ptr
-        memcpy(c->argv[c->argc_done].ptr + c->bulk_done,
-          c->rbuf + c->parse_done, cp);
+        if (cp > 0) {
+
+          memcpy(c->argv[c->argc_done].ptr + c->bulk_done,
+            c->rbuf + c->parse_done, cp);
+        }
           
         fprintf(stderr, "bulk_done1 == %d\n", c->bulk_done);
         // 更新 bulk_done（已接收的 bulk data 长度）
@@ -206,22 +218,22 @@ int kvs_resp_feed(struct conn* c) {
           fprintf(stderr, "data:--> 1\n");
           if (c->parse_done + 2 > c->rlen) {
             fprintf(stderr, "data:--> 01");
-            // 数据不足，等待更多数据
-            // 保留已接收的 bulk data，下次继续解析
-            return 0;  // 需要更多数据
+            // 缺失\r\n，等待更多数据
+            // 保留已接收的部分 \r\n;
+            goto continue_recv;
           }
           
           fprintf(stderr, "data:--> 2\n");
           // 检查 \r\n 是否正确
           if (c->rbuf[c->parse_done] != '\r' ||
             c->rbuf[c->parse_done + 1] != '\n') {
-              return -1;  // 协议错误：缺少 \r\n
+              goto error;  // 协议错误：缺少 \r\n
             }
           fprintf(stderr, "data:--> 3\n");
             
           // 跳过 \r\n（2 字节）
           c->parse_done += 2;
-
+          fprintf(stderr, "跳过\\r\\n: c->parse_done=%d\n", c->parse_done);
           // 参数解析完成，更新 argc_done
           c->argc_done++;
 
@@ -242,6 +254,7 @@ int kvs_resp_feed(struct conn* c) {
         // 命令解析完成，不需要做任何处理
         // 这个状态只是标记，实际逻辑在循环结束后处理
         // fprintf(stderr, "-->OK\n");
+        fprintf(stderr, "不应该来这\n");
         break;
       }
     }
@@ -254,41 +267,64 @@ int kvs_resp_feed(struct conn* c) {
     fprintf(stderr, "c->parse_done: %zu    c->rlen: %zu\n", c->parse_done, c->rlen);
     if (c->parse_done >= c->rlen) {
       // 所有数据都已处理，重置 rlen 和 parse_done
-      c->rlen = 0;
-      c->parse_done = 0;
+      // c->rlen = 0;
+      // c->parse_done = 0;
+    
+      fprintf(stderr, "应该来这\n");
+      return RESP_PARSE_OK;
+
     } else {
       // 还有未解析的数据（例如：一条命令解析完毕，但 rbuf 中还有下一条命令的部分数据）
       // 移动未解析的数据到 rbuf 开头
-      size_t remaining = c->rlen - c->parse_done;
-      memmove(c->rbuf, c->rbuf + c->parse_done, remaining);
-      c->rlen = remaining;
-      c->parse_done = 0;
+      
+        fprintf(stderr, "不应该来这啊,你不可能出循环的!\n");
+        goto error;
+      // size_t remaining = c->rlen - c->parse_done;
+      // memmove(c->rbuf, c->rbuf + c->parse_done, remaining);
+      // c->rlen = remaining;
+      // c->parse_done = 0;
+      // return RESP_CONTINUE_REMAINING_RECV;
     }
-    return ST_RESP_OK;
+    return RESP_PARSE_OK;
   } else if (c->parse_done < c->rlen) {
     fprintf(stderr, "c->parse_done: %zu    c->rlen: %zu\n", c->parse_done, c->rlen);
     // 还有未解析的数据，继续解析
     // 这种情况不应该发生，因为 while 循环会继续处理
-    return 0;  // 需要更多数据
+    goto continue_recv;
   } else {
     fprintf(stderr, "c->parse_done: %zu    c->rlen: %zu\n", c->parse_done, c->rlen);
     // 数据耗尽，但未解析完毕，需要更多数据
     if (c->parse_done > 0 && c->parse_done < c->rlen) {
-      // 数据耗尽, 但剩下的内容不便解析, 移动未解析的数据到 rbuf 开头（如果有）
-      fprintf(stderr, "-->a\n");
-      size_t remaining = c->rlen - c->parse_done;
-      memmove(c->rbuf, c->rbuf + c->parse_done, remaining);
-      c->rlen = remaining;
-      c->parse_done = 0;
+      // // 数据耗尽, 但剩下的内容不便解析, 移动未解析的数据到 rbuf 开头（如果有）
+      // fprintf(stderr, "-->a\n");
+      // size_t remaining = c->rlen - c->parse_done;
+      // memmove(c->rbuf, c->rbuf + c->parse_done, remaining);
+      // c->rlen = remaining;
+      // c->parse_done = 0;
+      goto continue_recv;
+
     } else if (c->parse_done >= c->rlen) {
       fprintf(stderr, "-->b\n");
       // 所有数据都已处理，重置 rlen
       c->rlen = 0;
       c->parse_done = 0;
-    }
+      goto continue_recv;
+  }
     fprintf(stderr, "-->c\n");
     fprintf(stderr, "bulk_len: %zu\nargc_done: %d\nbulk_done: %zu\n", c->bulk_len, c->argc_done, c->bulk_done);
 
-    return 0;  // 需要更多数据
+    goto continue_recv;  // 需要更多数据
   }
+
+  continue_recv:
+    size_t remaining = c->rlen - c->parse_done;
+    memmove(c->rbuf, c->rbuf + c->parse_done, remaining);
+    memset(c->rbuf + remaining, 0, c->rlen - remaining);
+    c->rlen = remaining;
+    c->parse_done = 0;
+    fprintf(stderr, "留下了谁? %d bytes: %*s\n", remaining , remaining, c->rbuf);
+    return RESP_CONTINUE_RECV;
+
+  error:
+    return RESP_ERROR;
 }

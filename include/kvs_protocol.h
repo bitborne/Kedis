@@ -5,7 +5,10 @@
 #include "kvs_network.h"
 
 /* ---------------- 返回值定义 ---------------- */
-#define NEED_STREAMING_RECV 2  // 需要流式接收（数据直接写入 seg_buf）
+#define RESP_ERROR -1
+#define RESP_CONTINUE_RECV 0       // 已收数据均解析完
+#define RESP_PARSE_OK 1
+
 
 // 从 proactor.c 迁移过来的 RESP 解析核心函数
 // 啃掉 conn->frame 中的数据，填充 conn->argv
