@@ -58,26 +58,26 @@ static uint32_t murmurhash3_32(const char *key, int len) {
 	return h1;
 }
 
-static int _hash(const char *key, int size) {
-	if (!key) return -1;
-	return murmurhash3_32(key, strlen(key)) % size;
+static int _hash(const robj* key, int size) {
+	if (!key || !key->ptr) return -1;
+	return murmurhash3_32(key->ptr, key->len) % size;
 }
 
-hashnode_t *_create_node(const char *key, const char *value) {
+hashnode_t *_create_node(const robj *key, const robj *value) {
 
 	hashnode_t *node = (hashnode_t*)kvs_malloc(sizeof(hashnode_t));
 	if (!node) return NULL;
 
 #if HASH_ENABLE_KEY_POINTER
-	size_t key_len = strlen(key);
-	size_t value_len = strlen(value);
+	size_t key_len = key->len;
+	size_t value_len = value->len;
 
 	char *kcopy = kvs_malloc(key_len + 1);
 	if (kcopy == NULL) {
 		kvs_free(node);
 		return NULL;
 	}
-	memcpy(kcopy, key, key_len + 1);
+	memcpy(kcopy, key->ptr, key_len + 1);
 
 	node->key = kcopy;
 
@@ -87,7 +87,7 @@ hashnode_t *_create_node(const char *key, const char *value) {
 		kvs_free(node);
 		return NULL;
 	}
-	memcpy(kvalue, value, value_len + 1);
+	memcpy(kvalue, value->ptr, value_len + 1);
 
 	node->value = kvalue;
 
@@ -172,8 +172,8 @@ void kvs_hash_destroy(kvs_hash_t *hash) {
 
 #define REHASH_STEPS_PER_OP 16
 
-int kvs_hash_set(kvs_hash_t *hash, char *key, char *value) {
-	if (!hash || !key || !value) return -1;
+int kvs_hash_set(kvs_hash_t *hash, robj* key, robj* value) {
+	if (!hash || !key || !value || !key->ptr || !value->ptr) return -1;
 
 	for (int step = 0; step < REHASH_STEPS_PER_OP; step++) {
 		if (kvs_hash_step_rehash(hash) == 1) break;
@@ -192,7 +192,7 @@ int kvs_hash_set(kvs_hash_t *hash, char *key, char *value) {
 	if (hash->rehash_nodes && idx_rehash < hash->rehash_index) {
 		node = hash->rehash_nodes[idx_rehash];
 		while (node != NULL) {
-			if (strcmp(node->key, key) == 0) {
+			if (strcmp(node->key, key->ptr) == 0) {
 				return 1;
 			}
 			node = node->next;
@@ -201,7 +201,7 @@ int kvs_hash_set(kvs_hash_t *hash, char *key, char *value) {
 
 	node = hash->nodes[idx_main];
 	while (node != NULL) {
-		if (strcmp(node->key, key) == 0) {
+		if (strcmp(node->key, key->ptr) == 0) {
 			return 1;
 		}
 		node = node->next;
@@ -222,9 +222,9 @@ int kvs_hash_set(kvs_hash_t *hash, char *key, char *value) {
 	return 0;
 }
 
-char * kvs_hash_get(kvs_hash_t *hash, char *key) {
+char * kvs_hash_get(kvs_hash_t *hash, robj* key) {
 
-	if (!hash || !key) return NULL;
+	if (!hash || !key || !key->ptr) return NULL;
 
 	for (int step = 0; step < REHASH_STEPS_PER_OP; step++) {
 		if (kvs_hash_step_rehash(hash) == 1) break;
@@ -236,7 +236,7 @@ char * kvs_hash_get(kvs_hash_t *hash, char *key) {
 	if (hash->rehash_nodes && idx_rehash < hash->rehash_index) {
 		hashnode_t *node = hash->rehash_nodes[idx_rehash];
 		while (node != NULL) {
-			if (strcmp(node->key, key) == 0) {
+			if (strcmp(node->key, key->ptr) == 0) {
 				return node->value;
 			}
 			node = node->next;
@@ -245,7 +245,7 @@ char * kvs_hash_get(kvs_hash_t *hash, char *key) {
 
 	hashnode_t *node = hash->nodes[idx_main];
 	while (node != NULL) {
-		if (strcmp(node->key, key) == 0) {
+		if (strcmp(node->key, key->ptr) == 0) {
 			return node->value;
 		}
 		node = node->next;
@@ -254,9 +254,9 @@ char * kvs_hash_get(kvs_hash_t *hash, char *key) {
 	return NULL;
 }
 
-int kvs_hash_mod(kvs_hash_t *hash, char *key, char *value) {
+int kvs_hash_mod(kvs_hash_t *hash, robj* key, robj* value) {
 
-	if (!hash || !key) return -1;
+	if (!hash || !key || !key->ptr || !value || !value->ptr) return -1;
 
 	for (int step = 0; step < REHASH_STEPS_PER_OP; step++) {
 		if (kvs_hash_step_rehash(hash) == 1) break;
@@ -270,7 +270,7 @@ int kvs_hash_mod(kvs_hash_t *hash, char *key, char *value) {
 	if (hash->rehash_nodes && idx_rehash < hash->rehash_index) {
 		node = hash->rehash_nodes[idx_rehash];
 		while (node != NULL) {
-			if (strcmp(node->key, key) == 0) {
+			if (strcmp(node->key, key->ptr) == 0) {
 				break;
 			}
 			node = node->next;
@@ -280,7 +280,7 @@ int kvs_hash_mod(kvs_hash_t *hash, char *key, char *value) {
 	if (node == NULL) {
 		node = hash->nodes[idx_main];
 		while (node != NULL) {
-			if (strcmp(node->key, key) == 0) {
+			if (strcmp(node->key, key->ptr) == 0) {
 				break;
 			}
 			node = node->next;
@@ -293,10 +293,10 @@ int kvs_hash_mod(kvs_hash_t *hash, char *key, char *value) {
 
 #if HASH_ENABLE_KEY_POINTER
 	kvs_free(node->value);
-	size_t value_len = strlen(value);
+	size_t value_len = value->len;
 	char *kvalue = kvs_malloc(value_len + 1);
 	if (kvalue == NULL) return -2;
-	memcpy(kvalue, value, value_len + 1);
+	memcpy(kvalue, value->ptr, value_len + 1);
 	node->value = kvalue;
 #else
 	strncpy(node->value, value, MAX_VALUE_LEN - 1);
@@ -310,8 +310,8 @@ inline int kvs_hash_count(kvs_hash_t *hash) {
 	return hash->count;
 }
 
-int kvs_hash_del(kvs_hash_t *hash, char *key) {
-	if (!hash || !key) return -2;
+int kvs_hash_del(kvs_hash_t *hash, robj* key) {
+	if (!hash || !key || !key->ptr) return -2;
 
 	for (int step = 0; step < REHASH_STEPS_PER_OP; step++) {
 		if (kvs_hash_step_rehash(hash) == 1) break;
@@ -327,7 +327,7 @@ int kvs_hash_del(kvs_hash_t *hash, char *key) {
 		node = hash->rehash_nodes[idx_rehash];
 		prev = NULL;
 		while (node != NULL) {
-			if (strcmp(node->key, key) == 0) {
+			if (strcmp(node->key, key->ptr) == 0) {
 				if (prev == NULL) {
 					hash->rehash_nodes[idx_rehash] = node->next;
 				} else {
@@ -351,7 +351,7 @@ int kvs_hash_del(kvs_hash_t *hash, char *key) {
 	node = hash->nodes[idx_main];
 	prev = NULL;
 	while (node != NULL) {
-		if (strcmp(node->key, key) == 0) {
+		if (strcmp(node->key, key->ptr) == 0) {
 			if (prev == NULL) {
 				hash->nodes[idx_main] = node->next;
 			} else {
@@ -374,7 +374,7 @@ int kvs_hash_del(kvs_hash_t *hash, char *key) {
 	return 1;
 }
 
-int kvs_hash_exist(kvs_hash_t *hash, char *key) {
+int kvs_hash_exist(kvs_hash_t *hash, robj* key) {
 
 	char *value = kvs_hash_get(hash, key);
 	if (value) return 1;
@@ -428,7 +428,11 @@ int kvs_hash_resize(hashtable_t *hash, int new_size) {
 		while (node != NULL) {
 			hashnode_t *next = node->next;
 
-			int new_idx = _hash(node->key, new_size);
+      // 临时方案, 这里必须要调strlen了
+      robj* node_key_robj = NULL;
+      node_key_robj->ptr = node->key;
+      node_key_robj->len = strlen(node->key);
+			int new_idx = _hash(node_key_robj, new_size);
 
 			node->next = new_nodes[new_idx];
 			new_nodes[new_idx] = node;
@@ -551,7 +555,11 @@ int kvs_hash_step_rehash(hashtable_t *hash) {
 		while (node != NULL) {
 			hashnode_t *next = node->next;
 
-			int new_idx = _hash(node->key, hash->rehash_slots);
+      
+      robj* node_key_robj = NULL;
+      node_key_robj->len = strlen(node->key);
+      node_key_robj->ptr = node->key;
+			int new_idx = _hash(node_key_robj, hash->rehash_slots);
 
 			node->next = hash->rehash_nodes[new_idx];
 			hash->rehash_nodes[new_idx] = node;

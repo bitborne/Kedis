@@ -29,14 +29,14 @@ void kvs_array_destroy(kvs_array_t* inst) {
   
 }
 
-char* kvs_array_get(kvs_array_t* inst, char* key) {
+char* kvs_array_get(kvs_array_t* inst, robj* key) {
 
-  if (inst == NULL || key == NULL) return NULL;
+  if (inst == NULL || key == NULL || key->ptr) return NULL;
   // printf("-->arr not NULL\n");
   // for (int i = 0; i < inst->total; i++) {
   for (int i = 0; i < KVS_ARRAY_SIZE; i++) {
     if (inst->table[i].key) { // 找到了一个非空位
-      if (!strcmp(key, inst->table[i].key)) return inst->table[i].value;
+      if (!strcmp(key->ptr, inst->table[i].key)) return inst->table[i].value;
       
     }
   }
@@ -49,8 +49,8 @@ char* kvs_array_get(kvs_array_t* inst, char* key) {
 /// @param key ;
 /// @param value ;
 /// @return < 0, error |  == 0, success | >0, key has existed
-int kvs_array_set(kvs_array_t* inst, char* key, char* value) {
-  if (key == NULL || value == NULL || inst == NULL) return -1;
+int kvs_array_set(kvs_array_t* inst, robj* key, robj* value) {
+  if (key == NULL || value == NULL || inst == NULL || key->ptr == NULL || value->ptr == NULL) return -1;
   if (inst->total == KVS_ARRAY_SIZE) return -2;
 
   // 假设 kvs_array_get 返回指针，NULL 表示不存在
@@ -59,22 +59,20 @@ int kvs_array_set(kvs_array_t* inst, char* key, char* value) {
   // char* tmpKey = strdup(key); // strdup 自动 malloc 且自动预留 \0
   // char* tmpValue = strdup(value); // 两行替代下面两坨注释 但是它好像是 POXIS API
 
-  size_t klen = strlen(key);
-  size_t vlen = strlen(value);
+  size_t klen = key->len;
+  size_t vlen = value->len;
 
-  //[DEBUG]
-  fprintf(stderr, "%zu\n", vlen);
 
   char* tmpKey = kvs_calloc(1, klen + 1);
   if (tmpKey == NULL) return -3;
-  memcpy(tmpKey, key, klen + 1);   // 包含 \0
+  memcpy(tmpKey, key->ptr, klen + 1);   // 包含 \0
 
   char* tmpValue = kvs_calloc(1, vlen + 1);
   if (tmpValue == NULL) {
       kvs_free(tmpKey);                    // 防泄漏
       return -4;
   }
-  memcpy(tmpValue, value, vlen + 1);
+  memcpy(tmpValue, value->ptr, vlen + 1);
 
   for (int idx = 0; idx < KVS_ARRAY_SIZE; idx++) {
       if (inst->table[idx].key == NULL) {
@@ -97,13 +95,13 @@ int kvs_array_set(kvs_array_t* inst, char* key, char* value) {
 /// @param inst ;
 /// @param key ;
 /// @return < 0 error | == 0 success | > 0 not exist;
-int kvs_array_del(kvs_array_t *inst, char* key) {
-  if (inst == NULL || key == NULL) return -1;
+int kvs_array_del(kvs_array_t *inst, robj* key) {
+  if (inst == NULL || key == NULL || key->ptr == NULL) return -1;
 
   // for (int i = 0; i < inst->total; i++) {
   for (int idx = 0; idx < KVS_ARRAY_SIZE; idx++) {
     if (inst->table[idx].key) {
-      if (!strcmp(key, inst->table[idx].key)) {
+      if (!strcmp(key->ptr, inst->table[idx].key)) {
         kvs_free(inst->table[idx].key); // set的时候calloc, del的时候 free
         inst->table[idx].key = NULL;  // free 后置空
         kvs_free(inst->table[idx].value); 
@@ -121,20 +119,20 @@ int kvs_array_del(kvs_array_t *inst, char* key) {
 /// @param key 
 /// @param value 
 /// @return < 0 error | == 0 success  | > 0  not exist
-int kvs_array_mod(kvs_array_t *inst, char* key, char* value) {
-  if (inst == NULL || key == NULL || value == NULL) return -1;
+int kvs_array_mod(kvs_array_t *inst, robj* key, robj* value) {
+  if (inst == NULL || key == NULL || value == NULL || key->ptr == NULL || value->ptr == NULL) return -1;
 
   int i = 0;
   // for (;i < inst->total; i++) {
   for (; i < KVS_ARRAY_SIZE; i++) {
     if (inst->table[i].key) {
-      if (!strcmp(key, inst->table[i].key)) {
+      if (!strcmp(key->ptr, inst->table[i].key)) {
         kvs_free(inst->table[i].value);
         inst->table[i].value = NULL;
 
-        char* tmpValue = kvs_calloc(1, strlen(value) + 1);
+        char* tmpValue = kvs_calloc(1, value->len + 1);
         if (!tmpValue) return -2;
-        strncpy(tmpValue, value, strlen(value));
+        memcpy(tmpValue, value->ptr, value->len + 1);
         inst->table[i].value = tmpValue;
 
         return 0;
@@ -150,8 +148,8 @@ int kvs_array_mod(kvs_array_t *inst, char* key, char* value) {
 /// @param inst 
 /// @param key 
 /// @return 1 Yes | 0 No | -1 error
-int kvs_array_exist(kvs_array_t *inst, char* key) { 
-  if (inst == NULL || key == NULL ) return -1;
+int kvs_array_exist(kvs_array_t *inst, robj* key) { 
+  if (inst == NULL || key == NULL || key->ptr) return -1;
   return (kvs_array_get(inst, key) != NULL);
 
 }

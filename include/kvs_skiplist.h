@@ -2,6 +2,7 @@
 #define __KVS_SKIPLIST_H__
 
 #include "kvs_constants.h"
+#include "kvs_network.h"
 
 #if ENABLE_SKIPLIST
 
@@ -22,11 +23,11 @@
 
   int kvs_skiplist_create(kvs_skiplist_t *inst);
   void kvs_skiplist_destroy(kvs_skiplist_t *inst);
-  int kvs_skiplist_set(kvs_skiplist_t *inst, char *key, char *value);
-  char* kvs_skiplist_get(kvs_skiplist_t *inst, char *key);
-  int kvs_skiplist_del(kvs_skiplist_t *inst, char *key);
-  int kvs_skiplist_mod(kvs_skiplist_t *inst, char *key, char *value);
-  int kvs_skiplist_exist(kvs_skiplist_t *inst, char *key);
+  int kvs_skiplist_set(kvs_skiplist_t *inst, robj* key, robj* value);
+  char* kvs_skiplist_get(kvs_skiplist_t *inst, robj* key);
+  int kvs_skiplist_del(kvs_skiplist_t *inst, robj* key);
+  int kvs_skiplist_mod(kvs_skiplist_t *inst, robj* key, robj* value);
+  int kvs_skiplist_exist(kvs_skiplist_t *inst, robj* key);
 
 #endif // ENABLE_SKIPLIST
 

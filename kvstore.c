@@ -314,9 +314,14 @@ int kvs_protocol(struct conn* c) {
 
   // 提取命令参数
   // 注意：c->argv[i].ptr 已经是 null-terminated 的字符串 (我们在 kvs_resp_feed 里保证了)
+  // char* cmd_name = c->argv[0].ptr;
+  // char* key = (c->argc > 1) ? c->argv[1].ptr : NULL;
+  // char* value = (c->argc > 2) ? c->argv[2].ptr : NULL;
+  
+  
   char* cmd_name = c->argv[0].ptr;
-  char* key = (c->argc > 1) ? c->argv[1].ptr : NULL;
-  char* value = (c->argc > 2) ? c->argv[2].ptr : NULL;
+  robj* key = &c->argv[1];
+  robj* value = &c->argv[2];
 
   // 查找命令 ID
   int cmd = KVS_CMD_START;
@@ -326,16 +331,16 @@ int kvs_protocol(struct conn* c) {
     }
   }
 
-  // SLAVE READ-ONLY CHECK
-  if (!replication_info.is_master) {
-    if (is_write_command(cmd_name)) {
-      if (current_processing_fd != slave_info.master_fd) {
-        add_reply_error(c, "READONLY You can't write against a read only replica");
-        pthread_mutex_unlock(&global_kvs_lock);
-        return c->wlen;
-      }
-    }
-  }
+  // // SLAVE READ-ONLY CHECK
+  // if (!replication_info.is_master) {
+  //   if (is_write_command(cmd_name)) {
+  //     if (current_processing_fd != slave_info.master_fd) {
+  //       add_reply_error(c, "READONLY You can't write against a read only replica");
+  //       pthread_mutex_unlock(&global_kvs_lock);
+  //       return c->wlen;
+  //     }
+  //   }
+  // }
 
   int ret = 0;
   char* gotValue = NULL;
@@ -680,30 +685,35 @@ int kvs_protocol(struct conn* c) {
 int init_kvengine(void) {
   // 初始化内存池，针对KV存储的典型数据大小进行优化
   g_mem_pool = mem_pool_init(BLOCK_SIZE);
-
-#if ENABLE_MULTI_ENGINE
-// 多引擎模式：初始化所有启用的引擎
-#if ENABLE_RBTREE
+  fprintf(stderr, "-1-->\n");
+  #if ENABLE_MULTI_ENGINE
+  // 多引擎模式：初始化所有启用的引擎
+  #if ENABLE_RBTREE
+  fprintf(stderr, "rbt-->\n");
   memset(&rbtree_engine, 0, sizeof(rbtree_engine));
   kvs_rbtree_create(&rbtree_engine);
-#endif
-#if ENABLE_HASH
+  #endif
+  #if ENABLE_HASH
+  fprintf(stderr, "hash-->\n");
   memset(&hash_engine, 0, sizeof(hash_engine));
   kvs_hash_create(&hash_engine);
-#endif
-#if ENABLE_ARRAY
+  #endif
+  #if ENABLE_ARRAY
+  fprintf(stderr, "arr-->\n");
   memset(&array_engine, 0, sizeof(array_engine));
   kvs_array_create(&array_engine);
-#endif
-#if ENABLE_SKIPLIST
+  #endif
+  #if ENABLE_SKIPLIST
+  fprintf(stderr, "skip-->\n");
   memset(&skiplist_engine, 0, sizeof(skiplist_engine));
   kvs_skiplist_create(&skiplist_engine);
-#endif
-#else
+  #endif
+  #else
   // 单引擎模式：只初始化一个引擎
   memset(&global_main_engine, 0, sizeof(global_main_engine));
   kvs_main_create(&global_main_engine);
-#endif
+  #endif
+  fprintf(stderr, "-2-->\n");
   return 0;
 }
 
@@ -768,6 +778,7 @@ int main(int argc, char* argv[]) {
     }
   }
 
+  fprintf(stderr, "0-->\n");
   signal(SIGINT, signal_handler);
   signal(SIGTERM, signal_handler);
 
@@ -790,17 +801,21 @@ int main(int argc, char* argv[]) {
     if (load_mode == INIT_LOAD_AOF) {
 #if ENABLE_MULTI_ENGINE
     #if ENABLE_MMAP
+      fprintf(stderr, "1-->\n");
       aofLoadAll_mmap();
-    #else
+      fprintf(stderr, "2-->\n");
+      #else
       aofLoadAll();
-    #endif
-#else
+      #endif
+      #else
       aofLoad(aof_filename);
-#endif
+      #endif
     } else if (load_mode == INIT_LOAD_SNAP) {
-#if ENABLE_MULTI_ENGINE
+      #if ENABLE_MULTI_ENGINE
       #if ENABLE_MMAP
+      fprintf(stderr, "3-->\n");
       ksfLoadAll_mmap();
+      fprintf(stderr, "4-->\n");
       #else
       ksfLoadAll();
       #endif

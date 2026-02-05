@@ -2,7 +2,7 @@
 #define __KVS_ARRAY_H__
 
 #include "kvs_constants.h"
-
+#include "kvs_network.h"
 #if ENABLE_ARRAY
   #define KVS_ARRAY_SIZE 16384
 
@@ -21,11 +21,11 @@
   int kvs_array_create(kvs_array_t *inst);
   void kvs_array_destroy(kvs_array_t *inst);
 
-  int kvs_array_set(kvs_array_t *inst, char *key, char *value);
-  char* kvs_array_get(kvs_array_t *inst, char *key);
-  int kvs_array_del(kvs_array_t *inst, char *key);
-  int kvs_array_mod(kvs_array_t *inst, char *key, char *value);
-  int kvs_array_exist(kvs_array_t *inst, char *key);
+  int kvs_array_set(kvs_array_t *inst, robj* key, robj* value);
+  char* kvs_array_get(kvs_array_t *inst, robj* key);
+  int kvs_array_del(kvs_array_t *inst, robj* key);
+  int kvs_array_mod(kvs_array_t *inst, robj* key, robj* value);
+  int kvs_array_exist(kvs_array_t *inst, robj* key);
 
 #endif // ENABLE_ARRAY
 

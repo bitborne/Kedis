@@ -23,27 +23,34 @@ typedef struct skiplist_s kvs_skiplist_t;
 
 kvs_skiplist_t global_skiplist;
 
-static skiplist_node_t* skiplist_create_node(int level, const char *key, const char *value) {
+static skiplist_node_t* skiplist_create_node(int level, const robj *key, const robj *value) {
+    fprintf(stderr, "skp0-->\n");
+    if (!value || !key || !key->ptr || !value->ptr) return NULL; 
+    fprintf(stderr, "skp1-->\n");
     skiplist_node_t *newNode = (skiplist_node_t*)kvs_malloc(sizeof(skiplist_node_t));
     if (!newNode) return NULL;
-
-    size_t key_len = strlen(key);
-    size_t value_len = strlen(value);
-
+    
+    fprintf(stderr, "skp2-->\n");
+    size_t key_len = key->len;
+    size_t value_len = value->len;
+    
+    fprintf(stderr, "skp3-->\n");
     char *kcopy = kvs_malloc(key_len + 1);
     if (!kcopy) {
-        kvs_free(newNode);
-        return NULL;
+      kvs_free(newNode);
+      return NULL;
     }
-    memcpy(kcopy, key, key_len + 1);
-
+    fprintf(stderr, "skp4-->\n");
+    memcpy(kcopy, key->ptr, key_len + 1);
+    
     char *vcopy = kvs_malloc(value_len + 1);
     if (!vcopy) {
-        kvs_free(kcopy);
-        kvs_free(newNode);
-        return NULL;
+      kvs_free(kcopy);
+      kvs_free(newNode);
+      return NULL;
     }
-    memcpy(vcopy, value, value_len + 1);
+    fprintf(stderr, "skp5-->\n");
+    memcpy(vcopy, value->ptr, value_len + 1);
 
     newNode->key = kcopy;
     newNode->value = vcopy;
@@ -71,7 +78,12 @@ int kvs_skiplist_create(kvs_skiplist_t *skiplist) {
     srand(time(NULL));
 
     skiplist->level = 0;
-    skiplist->header = skiplist_create_node(MAX_LEVEL, "", "");
+
+    robj hdr_key = {0};
+    hdr_key.len = 0, hdr_key.ptr = "";
+    robj hdr_value = {0};
+    hdr_value.len = 0, hdr_value.ptr = "";
+    skiplist->header = skiplist_create_node(MAX_LEVEL, &hdr_key, &hdr_value);
     if (!skiplist->header) return -1;
 
     for (int i = 0; i <= MAX_LEVEL; ++i) {
@@ -99,21 +111,21 @@ void kvs_skiplist_destroy(kvs_skiplist_t *skiplist) {
     skiplist->header = NULL;
 }
 
-int kvs_skiplist_set(kvs_skiplist_t *skiplist, char *key, char *value) {
-    if (!skiplist || !key || !value) return -1;
+int kvs_skiplist_set(kvs_skiplist_t *skiplist, robj* key, robj* value) {
+    if (!skiplist || !key || !value || !key->ptr || !value->ptr) return -1;
 
     skiplist_node_t *update[MAX_LEVEL + 1];
     skiplist_node_t *current = skiplist->header;
 
     for (int i = skiplist->level; i >= 0; --i) {
-        while (current->forward[i] != NULL && strcmp(current->forward[i]->key, key) < 0)
+        while (current->forward[i] != NULL && strcmp(current->forward[i]->key, key->ptr) < 0)
             current = current->forward[i];
         update[i] = current;
     }
 
     current = current->forward[0];
 
-    if (current == NULL || strcmp(current->key, key) != 0) {
+    if (current == NULL || strcmp(current->key, key->ptr) != 0) {
         int level = skiplist_random_level();
 
         if (level > skiplist->level) {
@@ -136,40 +148,40 @@ int kvs_skiplist_set(kvs_skiplist_t *skiplist, char *key, char *value) {
     }
 }
 
-char* kvs_skiplist_get(kvs_skiplist_t *skiplist, char *key) {
-    if (!skiplist || !key) return NULL;
+char* kvs_skiplist_get(kvs_skiplist_t *skiplist, robj* key) {
+    if (!skiplist || !key || !key->ptr) return NULL;
 
     skiplist_node_t *current = skiplist->header;
 
     for (int i = skiplist->level; i >= 0; --i) {
-        while (current->forward[i] != NULL && strcmp(current->forward[i]->key, key) < 0)
+        while (current->forward[i] != NULL && strcmp(current->forward[i]->key, key->ptr) < 0)
             current = current->forward[i];
     }
 
     current = current->forward[0];
 
-    if (current && strcmp(current->key, key) == 0) {
+    if (current && strcmp(current->key, key->ptr) == 0) {
         return current->value;
     } else {
         return NULL;
     }
 }
 
-int kvs_skiplist_del(kvs_skiplist_t *skiplist, char *key) {
-    if (!skiplist || !key) return -1;
+int kvs_skiplist_del(kvs_skiplist_t *skiplist, robj* key) {
+    if (!skiplist || !key || !key->ptr) return -1;
 
     skiplist_node_t *update[MAX_LEVEL + 1];
     skiplist_node_t *current = skiplist->header;
 
     for (int i = skiplist->level; i >= 0; --i) {
-        while (current->forward[i] != NULL && strcmp(current->forward[i]->key, key) < 0)
+        while (current->forward[i] != NULL && strcmp(current->forward[i]->key, key->ptr) < 0)
             current = current->forward[i];
         update[i] = current;
     }
 
     current = current->forward[0];
 
-    if (current && strcmp(current->key, key) == 0) {
+    if (current && strcmp(current->key, key->ptr) == 0) {
         for (int i = 0; i <= skiplist->level; ++i) {
             if (update[i]->forward[i] != current) break;
             update[i]->forward[i] = current->forward[i];
@@ -190,24 +202,24 @@ int kvs_skiplist_del(kvs_skiplist_t *skiplist, char *key) {
     }
 }
 
-int kvs_skiplist_mod(kvs_skiplist_t *skiplist, char *key, char *value) {
-    if (!skiplist || !key || !value) return -1;
+int kvs_skiplist_mod(kvs_skiplist_t *skiplist, robj* key, robj* value) {
+    if (!skiplist || !key || !value || !key->ptr || !value->ptr) return -1;
 
     skiplist_node_t *current = skiplist->header;
 
     for (int i = skiplist->level; i >= 0; --i) {
-        while (current->forward[i] != NULL && strcmp(current->forward[i]->key, key) < 0)
+        while (current->forward[i] != NULL && strcmp(current->forward[i]->key, key->ptr) < 0)
             current = current->forward[i];
     }
 
     current = current->forward[0];
 
-    if (current && strcmp(current->key, key) == 0) {
-        size_t value_len = strlen(value);
+    if (current && strcmp(current->key, key->ptr) == 0) {
+        size_t value_len = value->len;
         char *vcopy = kvs_malloc(value_len + 1);
         if (!vcopy) return -1;
 
-        memcpy(vcopy, value, value_len + 1);
+        memcpy(vcopy, value->ptr, value_len + 1);
         kvs_free(current->value);
         current->value = vcopy;
 
@@ -217,19 +229,19 @@ int kvs_skiplist_mod(kvs_skiplist_t *skiplist, char *key, char *value) {
     }
 }
 
-int kvs_skiplist_exist(kvs_skiplist_t *skiplist, char *key) {
-    if (!skiplist || !key) return 0;
+int kvs_skiplist_exist(kvs_skiplist_t *skiplist, robj* key) {
+    if (!skiplist || !key || !key->ptr) return 0;
 
     skiplist_node_t *current = skiplist->header;
 
     for (int i = skiplist->level; i >= 0; --i) {
-        while (current->forward[i] != NULL && strcmp(current->forward[i]->key, key) < 0)
+        while (current->forward[i] != NULL && strcmp(current->forward[i]->key, key->ptr) < 0)
             current = current->forward[i];
     }
 
     current = current->forward[0];
 
-    if (current && strcmp(current->key, key) == 0) {
+    if (current && strcmp(current->key, key->ptr) == 0) {
         return 1;
     } else {
         return 0;

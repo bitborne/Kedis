@@ -382,13 +382,16 @@ static int aofLoadToEngine_mmap(const char* filename, int engine_type) {
 
         // 步骤 6.5：获取 key 和 value 的指针（直接引用映射内存，不拷贝）
         // key_ptr 指向映射内存中 key 的起始位置
-        const char* key_ptr = (key_len > 0) ? (data + pos) : NULL;
-        
+        robj key = {0};
+        key.ptr = (key_len > 0) ? (data + pos) : NULL;
+        key.len = (key_len > 0) ? (key_len - 1) : 0;
         // 更新解析位置，跳过 key 的内容
         pos += key_len;
 
         // val_ptr 指向映射内存中 value 的起始位置
-        const char* val_ptr = (val_len > 0) ? (data + pos) : NULL;
+        robj value = {0};
+        value.ptr = (val_len > 0) ? (data + pos) : NULL;
+        value.len = (val_len > 0) ? (val_len - 1) : 0;
         
         // 更新解析位置，跳过 value 的内容
         pos += val_len;
@@ -408,27 +411,27 @@ static int aofLoadToEngine_mmap(const char* filename, int engine_type) {
                 if (engine_type == 0) {
                     // engine_type == 0 表示 Array 引擎
                     #if ENABLE_ARRAY
-                    kvs_array_set(&array_engine, (char*)key_ptr, (char*)val_ptr);
+                    kvs_array_set(&array_engine, &key, &value);
                     #endif
                 } else if (engine_type == 1) {
                     // engine_type == 1 表示 Hash 引擎
                     #if ENABLE_HASH
-                    kvs_hash_set(&hash_engine, (char*)key_ptr, (char*)val_ptr);
+                    kvs_hash_set(&hash_engine, &key, &value);
                     #endif
                 } else if (engine_type == 2) {
                     // engine_type == 2 表示 Rbtree 引擎
                     #if ENABLE_RBTREE
-                    kvs_rbtree_set(&rbtree_engine, (char*)key_ptr, (char*)val_ptr);
+                    kvs_rbtree_set(&rbtree_engine, &key, &value);
                     #endif
                 } else if (engine_type == 3) {
                     // engine_type == 3 表示 Skiplist 引擎
                     #if ENABLE_SKIPLIST
-                    kvs_skiplist_set(&skiplist_engine, (char*)key_ptr, (char*)val_ptr);
+                    kvs_skiplist_set(&skiplist_engine, &key, &value);
                     #endif
                 }
 #else
                 // 单引擎模式：调用统一的 SET 函数
-                kvs_main_set(&global_main_engine, (char*)key_ptr, (char*)val_ptr);
+                kvs_main_set(&global_main_engine, &key_ptr, &val_ptr);
 #endif
                 break;  // 退出 switch
 
@@ -440,27 +443,27 @@ static int aofLoadToEngine_mmap(const char* filename, int engine_type) {
                 if (engine_type == 0) {
                     // engine_type == 0 表示 Array 引擎
                     #if ENABLE_ARRAY
-                    kvs_array_mod(&array_engine, (char*)key_ptr, (char*)val_ptr);
+                    kvs_array_mod(&array_engine, &key, &value);
                     #endif
                 } else if (engine_type == 1) {
                     // engine_type == 1 表示 Hash 引擎
                     #if ENABLE_HASH
-                    kvs_hash_mod(&hash_engine, (char*)key_ptr, (char*)val_ptr);
+                    kvs_hash_mod(&hash_engine, &key, &value);
                     #endif
                 } else if (engine_type == 2) {
                     // engine_type == 2 表示 Rbtree 引擎
                     #if ENABLE_RBTREE
-                    kvs_rbtree_mod(&rbtree_engine, (char*)key_ptr, (char*)val_ptr);
+                    kvs_rbtree_mod(&rbtree_engine, &key, &value);
                     #endif
                 } else if (engine_type == 3) {
                     // engine_type == 3 表示 Skiplist 引擎
                     #if ENABLE_SKIPLIST
-                    kvs_skiplist_mod(&skiplist_engine, (char*)key_ptr, (char*)val_ptr);
+                    kvs_skiplist_mod(&skiplist_engine, &key, &value);
                     #endif
                 }
 #else
                 // 单引擎模式：调用统一的 MOD 函数
-                kvs_main_mod(&global_main_engine, (char*)key_ptr, (char*)val_ptr);
+                kvs_main_mod(&global_main_engine, &key, &value);
 #endif
                 break;  // 退出 switch
 
@@ -472,27 +475,27 @@ static int aofLoadToEngine_mmap(const char* filename, int engine_type) {
                 if (engine_type == 0) {
                     // engine_type == 0 表示 Array 引擎
                     #if ENABLE_ARRAY
-                    kvs_array_del(&array_engine, (char*)key_ptr);
+                    kvs_array_del(&array_engine, &key);
                     #endif
                 } else if (engine_type == 1) {
                     // engine_type == 1 表示 Hash 引擎
                     #if ENABLE_HASH
-                    kvs_hash_del(&hash_engine, (char*)key_ptr);
+                    kvs_hash_del(&hash_engine, &key);
                     #endif
                 } else if (engine_type == 2) {
                     // engine_type == 2 表示 Rbtree 引擎
                     #if ENABLE_RBTREE
-                    kvs_rbtree_del(&rbtree_engine, (char*)key_ptr);
+                    kvs_rbtree_del(&rbtree_engine, &key);
                     #endif
                 } else if (engine_type == 3) {
                     // engine_type == 3 表示 Skiplist 引擎
                     #if ENABLE_SKIPLIST
-                    kvs_skiplist_del(&skiplist_engine, (char*)key_ptr);
+                    kvs_skiplist_del(&skiplist_engine, &key);
                     #endif
                 }
 #else
                 // 单引擎模式：调用统一的 DEL 函数
-                kvs_main_del(&global_main_engine, (char*)key_ptr);
+                kvs_main_del(&global_main_engine, &key);
 #endif
                 break;  // 退出 switch
 
@@ -527,28 +530,28 @@ static int aofLoadToEngine_mmap(const char* filename, int engine_type) {
  * @param key 键
  * @param value 值
  */
-void appendToAofBuffer(int type, const char* key, const char* value) {
+void appendToAofBuffer(int type, const robj* key, const robj* value) {
 #if !ENABLE_MULTI_ENGINE
-    if (type != AOF_CMD_DEL && (key == NULL || value == NULL)) return;
+    if (type != AOF_CMD_DEL && (key == NULL || value == NULL || key->ptr == NULL || value->ptr == NULL)) return;
     if (type == AOF_CMD_DEL && key == NULL) return;
 
-    // REPLICATION BROADCAST
-    char cmd_text[4096];
-    if (type == AOF_CMD_SET) {
-        snprintf(cmd_text, sizeof(cmd_text), "SET %s %s", key, value);
-        replication_feed_slaves(cmd_text);
-    } else if (type == AOF_CMD_MOD) {
-        snprintf(cmd_text, sizeof(cmd_text), "MOD %s %s", key, value);
-        replication_feed_slaves(cmd_text);
-    } else if (type == AOF_CMD_DEL) {
-        snprintf(cmd_text, sizeof(cmd_text), "DEL %s", key);
-        replication_feed_slaves(cmd_text);
-    }
+    // // REPLICATION BROADCAST
+    // char cmd_text[4096];
+    // if (type == AOF_CMD_SET) {
+    //     snprintf(cmd_text, sizeof(cmd_text), "SET %s %s", key, value);
+    //     replication_feed_slaves(cmd_text);
+    // } else if (type == AOF_CMD_MOD) {
+    //     snprintf(cmd_text, sizeof(cmd_text), "MOD %s %s", key, value);
+    //     replication_feed_slaves(cmd_text);
+    // } else if (type == AOF_CMD_DEL) {
+    //     snprintf(cmd_text, sizeof(cmd_text), "DEL %s", key);
+    //     replication_feed_slaves(cmd_text);
+    // }
 
     char* aof_buf = aofBuffer.buf;
 
-    int klen = key ? strlen(key) + 1 : 0;
-    int vlen = (value int vlen = (value && type != AOF_CMD_DEL) ? strlen(value) : 0;int vlen = (value && type != AOF_CMD_DEL) ? strlen(value) : 0; type != AOF_CMD_DEL) ? strlen(value) + 1 : 0;
+    int klen = key ? key->len + 1 : 0;
+    int vlen = (value int vlen = (value->ptr && type != AOF_CMD_DEL) ? value->len : 0;int vlen = (value->ptr && type != AOF_CMD_DEL) ? value->len : 0; type != AOF_CMD_DEL) ? value->len + 1 : 0;
 
     uint8_t vlq[16];
     int key_len_bytes = encode_vlq(klen, vlq);
@@ -583,13 +586,13 @@ void appendToAofBuffer(int type, const char* key, const char* value) {
 
         // 添加键内容
         if (klen > 0) {
-            memcpy(cmd_data + pos, key, klen);
+            memcpy(cmd_data + pos, key->ptr, klen);
             pos += klen;
         }
 
         // 添加值内容
         if (vlen > 0) {
-            memcpy(cmd_data + pos, value, vlen);
+            memcpy(cmd_data + pos, value->ptr, vlen);
             pos += vlen;
         }
 
@@ -621,13 +624,13 @@ void appendToAofBuffer(int type, const char* key, const char* value) {
 
     // 添加键内容
     if (klen > 0) {
-        memcpy(aof_buf + aofBuffer.len, key, klen);
+        memcpy(aof_buf + aofBuffer.len, key->ptr, klen);
         aofBuffer.len += klen;
     }
 
     // 添加值内容
     if (vlen > 0) {
-        memcpy(aof_buf + aofBuffer.len, value, vlen);
+        memcpy(aof_buf + aofBuffer.len, value->ptr, vlen);
         aofBuffer.len += vlen;
     }
 #else
@@ -916,36 +919,38 @@ static int aofLoadToEngine(const char* filename, int engine_type) {
 
         // 读取键内容
         if (pos + key_len > file_size) break;
-        char* key = NULL;
+        robj key = {0};
+        key.len = (key_len > 0) ? (key_len - 1) : 0;
         if (key_len > 0) {
-            key = (char*)kvs_malloc(key_len + 1);
-            if (!key) {
+            key.ptr = (char*)kvs_malloc(key_len);
+            if (!key.ptr) {
                 fprintf(stderr, "无法分配内存来存储键\n");
                 kvs_free(buffer);
                 return -1;
             }
-            memcpy(key, buffer + pos, key_len);
-            key[key_len] = '\0';
+            memcpy(key.ptr, buffer + pos, key_len);
+            // key.ptr[key_len] = '\0';
             pos += key_len;
         }
 
         // 读取值内容
-        char* value = NULL;
+        robj value = {0};
+        value.len = (val_len > 0) ? (val_len - 1) : 0;
         if (val_len > 0) {
             if (pos + val_len > file_size) {
-                if (key) kvs_free(key);
+                if (key.ptr) kvs_free(key.ptr);
                 kvs_free(buffer);
                 return -1;
             }
-            value = (char*)kvs_malloc(val_len + 1);
-            if (!value) {
+            value.ptr = (char*)kvs_malloc(val_len);
+            if (!value.ptr) {
                 fprintf(stderr, "无法分配内存来存储值\n");
-                if (key) kvs_free(key);
+                if (key.ptr) kvs_free(key.ptr);
                 kvs_free(buffer);
                 return -1;
             }
-            memcpy(value, buffer + pos, val_len);
-            value[val_len] = '\0';
+            memcpy(value.ptr, buffer + pos, val_len);
+            // value[val_len] = '\0';
             pos += val_len;
         }
 
@@ -956,23 +961,23 @@ static int aofLoadToEngine(const char* filename, int engine_type) {
 #if ENABLE_MULTI_ENGINE
                 if (engine_type == 0) {
                     #if ENABLE_ARRAY
-                    kvs_array_set(&array_engine, key, value);
+                    kvs_array_set(&array_engine, &key, &value);
                     #endif
                 } else if (engine_type == 1) {
                     #if ENABLE_HASH
-                    kvs_hash_set(&hash_engine, key, value);
+                    kvs_hash_set(&hash_engine, &key, &value);
                     #endif
                 } else if (engine_type == 2) {
                     #if ENABLE_RBTREE
-                    kvs_rbtree_set(&rbtree_engine, key, value);
+                    kvs_rbtree_set(&rbtree_engine, &key, &value);
                     #endif
                 } else if (engine_type == 3) {
                     #if ENABLE_SKIPLIST
-                    kvs_skiplist_set(&skiplist_engine, key, value);
+                    kvs_skiplist_set(&skiplist_engine, &key, &value);
                     #endif
                 }
 #else
-                kvs_main_set(&global_main_engine, key, value);
+                kvs_main_set(&global_main_engine, &key, &value);
 #endif
                 break;
 
@@ -980,23 +985,23 @@ static int aofLoadToEngine(const char* filename, int engine_type) {
 #if ENABLE_MULTI_ENGINE
                 if (engine_type == 0) {
                     #if ENABLE_ARRAY
-                    kvs_array_mod(&array_engine, key, value);
+                    kvs_array_mod(&array_engine, &key, &value);
                     #endif
                 } else if (engine_type == 1) {
                     #if ENABLE_HASH
-                    kvs_hash_mod(&hash_engine, key, value);
+                    kvs_hash_mod(&hash_engine, &key, &value);
                     #endif
                 } else if (engine_type == 2) {
                     #if ENABLE_RBTREE
-                    kvs_rbtree_mod(&rbtree_engine, key, value);
+                    kvs_rbtree_mod(&rbtree_engine, &key, &value);
                     #endif
                 } else if (engine_type == 3) {
                     #if ENABLE_SKIPLIST
-                    kvs_skiplist_mod(&skiplist_engine, key, value);
+                    kvs_skiplist_mod(&skiplist_engine, &key, &value);
                     #endif
                 }
 #else
-                kvs_main_mod(&global_main_engine, key, value);
+                kvs_main_mod(&global_main_engine, &key, &value);
 #endif
                 break;
 
@@ -1004,23 +1009,23 @@ static int aofLoadToEngine(const char* filename, int engine_type) {
 #if ENABLE_MULTI_ENGINE
                 if (engine_type == 0) {
                     #if ENABLE_ARRAY
-                    kvs_array_del(&array_engine, key);
+                    kvs_array_del(&array_engine, &key);
                     #endif
                 } else if (engine_type == 1) {
                     #if ENABLE_HASH
-                    kvs_hash_del(&hash_engine, key);
+                    kvs_hash_del(&hash_engine, &key);
                     #endif
                 } else if (engine_type == 2) {
                     #if ENABLE_RBTREE
-                    kvs_rbtree_del(&rbtree_engine, key);
+                    kvs_rbtree_del(&rbtree_engine, &key);
                     #endif
                 } else if (engine_type == 3) {
                     #if ENABLE_SKIPLIST
-                    kvs_skiplist_del(&skiplist_engine, key);
+                    kvs_skiplist_del(&skiplist_engine, &key);
                     #endif
                 }
 #else
-                kvs_main_del(&global_main_engine, key);
+                kvs_main_del(&global_main_engine, &key);
 #endif
                 break;
 
@@ -1030,8 +1035,8 @@ static int aofLoadToEngine(const char* filename, int engine_type) {
         }
 
         // 释放分配的内存
-        if (key) kvs_free(key);
-        if (value) kvs_free(value);
+        if (key.ptr) kvs_free(key.ptr);
+        if (value.ptr) kvs_free(value.ptr);
     }
 
     kvs_free(buffer);
@@ -1133,27 +1138,27 @@ int aofLoadAll_mmap() {
  * @param key 键
  * @param value 值
  */
-void appendToAofBufferToEngine(int engine_type, int type, const char* key, const char* value) {
-    if (type != AOF_CMD_DEL && (key == NULL || value == NULL)) return;
-    if (type == AOF_CMD_DEL && key == NULL) return;
+void appendToAofBufferToEngine(int engine_type, int type, const robj* key, const robj* value) {
+    if (type != AOF_CMD_DEL && (!key || !value || !key->ptr || !value->ptr )) return;
+    if (type == AOF_CMD_DEL && (!key || !key->ptr)) return;
 
     // REPLICATION BROADCAST
-    char cmd_text[4096];
-    if (type == AOF_CMD_SET) {
-        snprintf(cmd_text, sizeof(cmd_text), "SET %s %s", key, value);
-        replication_feed_slaves(cmd_text);
-    } else if (type == AOF_CMD_MOD) {
-        snprintf(cmd_text, sizeof(cmd_text), "MOD %s %s", key, value);
-        replication_feed_slaves(cmd_text);
-    } else if (type == AOF_CMD_DEL) {
-        snprintf(cmd_text, sizeof(cmd_text), "DEL %s", key);
-        replication_feed_slaves(cmd_text);
-    }
+    // char cmd_text[4096];
+    // if (type == AOF_CMD_SET) {
+    //     snprintf(cmd_text, sizeof(cmd_text), "SET %s %s", key, value);
+    //     replication_feed_slaves(cmd_text);
+    // } else if (type == AOF_CMD_MOD) {
+    //     snprintf(cmd_text, sizeof(cmd_text), "MOD %s %s", key, value);
+    //     replication_feed_slaves(cmd_text);
+    // } else if (type == AOF_CMD_DEL) {
+    //     snprintf(cmd_text, sizeof(cmd_text), "DEL %s", key);
+    //     replication_feed_slaves(cmd_text);
+    // }
 
     char* aof_buf = aofBuffer[engine_type].buf;
     
-    int klen = key ? strlen(key) + 1 : 0;
-    int vlen = (value && type != AOF_CMD_DEL) ? strlen(value) + 1: 0;
+    int klen = key->ptr ? key->len + 1 : 0;
+    int vlen = (value->ptr && type != AOF_CMD_DEL) ? value->len + 1: 0;
 
     uint8_t vlq[16];
     int key_len_bytes = encode_vlq(klen, vlq);
@@ -1188,13 +1193,13 @@ void appendToAofBufferToEngine(int engine_type, int type, const char* key, const
 
         // 添加键内容
         if (klen > 0) {
-            memcpy(cmd_data + pos, key, klen);
+            memcpy(cmd_data + pos, key->ptr, klen); // klen = key->len + 1 // 已经带上\0了
             pos += klen;
         }
 
         // 添加值内容
         if (vlen > 0) {
-            memcpy(cmd_data + pos, value, vlen);
+            memcpy(cmd_data + pos, value->ptr, vlen);
             pos += vlen;
         }
 
@@ -1249,13 +1254,13 @@ void appendToAofBufferToEngine(int engine_type, int type, const char* key, const
 
     // 添加键内容
     if (klen > 0) {
-        memcpy(aof_buf + aofBuffer[engine_type].len, key, klen);
+        memcpy(aof_buf + aofBuffer[engine_type].len, key->ptr, klen);
         aofBuffer[engine_type].len += klen;
     }
 
     // 添加值内容
     if (vlen > 0) {
-        memcpy(aof_buf + aofBuffer[engine_type].len, value, vlen);
+        memcpy(aof_buf + aofBuffer[engine_type].len, value->ptr, vlen);
         aofBuffer[engine_type].len += vlen;
     }
 }

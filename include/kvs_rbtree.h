@@ -2,6 +2,7 @@
 #define __KVS_RBTREE_H__
 
 #include "kvs_constants.h"
+#include "kvs_network.h"
 
 #if ENABLE_RBTREE
 
@@ -35,11 +36,11 @@
 
   int kvs_rbtree_create(kvs_rbtree_t *inst);
   void kvs_rbtree_destroy(kvs_rbtree_t *inst);
-  int kvs_rbtree_set(kvs_rbtree_t *inst, char *key, char *value);
-  char* kvs_rbtree_get(kvs_rbtree_t *inst, char *key);
-  int kvs_rbtree_del(kvs_rbtree_t *inst, char *key);
-  int kvs_rbtree_mod(kvs_rbtree_t *inst, char *key, char *value);
-  int kvs_rbtree_exist(kvs_rbtree_t *inst, char *key);
+  int kvs_rbtree_set(kvs_rbtree_t *inst, robj* key, robj* value);
+  char* kvs_rbtree_get(kvs_rbtree_t *inst, robj* key);
+  int kvs_rbtree_del(kvs_rbtree_t *inst, robj* key);
+  int kvs_rbtree_mod(kvs_rbtree_t *inst, robj* key, robj* value);
+  int kvs_rbtree_exist(kvs_rbtree_t *inst, robj* key);
 
 #endif // ENABLE_RBTREE
 

@@ -625,36 +625,38 @@ static int ksfLoadToEngine(const char* filename, int engine_type) {
 
     // 读取键内容
     if (pos + key_len > file_size) break;
-    char* key = NULL;
+    robj key = {0};
+    key.len = (key_len > 0) ? (key_len - 1) : 0;
     if (key_len > 0) {
-      key = (char*)kvs_malloc(key_len + 1);
-      if (!key) {
+      key.ptr = (char*)kvs_malloc(key_len);
+      if (!key.ptr) {
         fprintf(stderr, "无法分配内存来存储键\n");
         kvs_free(buffer);
         return -1;
       }
-      memcpy(key, buffer + pos, key_len);
-      key[key_len] = '\0';
+      memcpy(key.ptr, buffer + pos, key_len);
+      key.ptr[key_len] = '\0';
       pos += key_len;
     }
 
     // 读取值内容
-    char* value = NULL;
+    robj value = {0};
+    value.len = (val_len > 0) ? (val_len - 1) : 0;
     if (val_len > 0) {
       if (pos + val_len > file_size) {
-        if (key) kvs_free(key);
+        if (key.ptr) kvs_free(key.ptr);
         kvs_free(buffer);
         return -1;
       }
-      value = (char*)kvs_malloc(val_len + 1);
-      if (!value) {
+      value.ptr = (char*)kvs_malloc(val_len);
+      if (!value.ptr) {
         fprintf(stderr, "无法分配内存来存储值\n");
-        if (key) kvs_free(key);
+        if (key.ptr) kvs_free(key.ptr);
         kvs_free(buffer);
         return -1;
       }
-      memcpy(value, buffer + pos, val_len);
-      value[val_len] = '\0';
+      memcpy(value.ptr, buffer + pos, val_len);
+      value.ptr[val_len] = '\0';
       pos += val_len;
     }
 
@@ -662,19 +664,19 @@ static int ksfLoadToEngine(const char* filename, int engine_type) {
 #if ENABLE_MULTI_ENGINE
     if (engine_type == 0) {
       #if ENABLE_ARRAY
-      kvs_array_set(&array_engine, key, value);
+      kvs_array_set(&array_engine, &key, &value);
       #endif
     } else if (engine_type == 1) {
       #if ENABLE_HASH
-      kvs_hash_set(&hash_engine, key, value);
+      kvs_hash_set(&hash_engine, &key, &value);
       #endif
     } else if (engine_type == 2) {
       #if ENABLE_RBTREE
-      kvs_rbtree_set(&rbtree_engine, key, value);
+      kvs_rbtree_set(&rbtree_engine, &key, &value);
       #endif
     } else if (engine_type == 3) {
       #if ENABLE_SKIPLIST
-      kvs_skiplist_set(&skiplist_engine, key, value);
+      kvs_skiplist_set(&skiplist_engine, &key, &value);
       #endif
     }
 #else
@@ -682,8 +684,8 @@ static int ksfLoadToEngine(const char* filename, int engine_type) {
 #endif
 
     // 释放分配的内存
-    if (key) kvs_free(key);
-    if (value) kvs_free(value);
+    if (key.ptr) kvs_free(key.ptr);
+    if (value.ptr) kvs_free(value.ptr);
   }
 
   kvs_free(buffer);
@@ -754,10 +756,16 @@ static int ksfLoadToEngine_mmap(const char* filename, int engine_type) {
         }
 
         // 获取 key 和 value 的指针（直接引用映射内存，不拷贝）
-        const char* key_ptr = (key_len > 0) ? (data + pos) : NULL;
+        robj key = {0};
+        key.ptr = (key_len > 0) ? (data + pos) : NULL;
+        key.len = (key_len > 0) ? (key_len - 1) : 0;
+        
         pos += key_len;
-
-        const char* val_ptr = (val_len > 0) ? (data + pos) : NULL;
+        
+        robj value = {0};
+        value.ptr = (val_len > 0) ? (data + pos) : NULL;
+        value.len = (val_len > 0) ? (val_len - 1) : 0;
+        
         pos += val_len;
 
         // 根据引擎类型执行 SET 操作
@@ -766,23 +774,23 @@ static int ksfLoadToEngine_mmap(const char* filename, int engine_type) {
 #if ENABLE_MULTI_ENGINE
         if (engine_type == 0) {
             #if ENABLE_ARRAY
-            kvs_array_set(&array_engine, (char*)key_ptr, (char*)val_ptr);
+            kvs_array_set(&array_engine, &key, &value);
             #endif
         } else if (engine_type == 1) {
             #if ENABLE_HASH
-            kvs_hash_set(&hash_engine, (char*)key_ptr, (char*)val_ptr);
+            kvs_hash_set(&hash_engine, &key, &value);
             #endif
         } else if (engine_type == 2) {
             #if ENABLE_RBTREE
-            kvs_rbtree_set(&rbtree_engine, (char*)key_ptr, (char*)val_ptr);
+            kvs_rbtree_set(&rbtree_engine, &key, &value);
             #endif
         } else if (engine_type == 3) {
             #if ENABLE_SKIPLIST
-            kvs_skiplist_set(&skiplist_engine, (char*)key_ptr, (char*)val_ptr);
+            kvs_skiplist_set(&skiplist_engine, &key, &value);
             #endif
         }
 #else
-        kvs_main_set(&global_main_engine, (char*)key_ptr, (char*)val_ptr);
+        kvs_main_set(&global_main_engine, key, value);
 #endif
 
         kv_count++;

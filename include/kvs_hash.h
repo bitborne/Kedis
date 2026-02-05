@@ -2,6 +2,7 @@
 #define __KVS_HASH_H__
 
 #include "kvs_constants.h"
+#include "kvs_network.h"
 
 #if ENABLE_HASH
 
@@ -51,11 +52,11 @@
 
   int kvs_hash_create(kvs_hash_t *hash);
   void kvs_hash_destroy(kvs_hash_t *hash);
-  int kvs_hash_set(hashtable_t *hash, char *key, char *value);
-  char* kvs_hash_get(kvs_hash_t *hash, char *key);
-  int kvs_hash_mod(kvs_hash_t *hash, char *key, char *value);
-  int kvs_hash_del(kvs_hash_t *hash, char *key);
-  int kvs_hash_exist(kvs_hash_t *hash, char *key);
+  int kvs_hash_set(hashtable_t *hash, robj* key, robj* value);
+  char* kvs_hash_get(kvs_hash_t *hash, robj* key);
+  int kvs_hash_mod(kvs_hash_t *hash, robj* key, robj* value);
+  int kvs_hash_del(kvs_hash_t *hash, robj* key);
+  int kvs_hash_exist(kvs_hash_t *hash, robj* key);
 
   // 方案一新增接口
   typedef struct {

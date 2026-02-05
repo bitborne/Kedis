@@ -461,10 +461,10 @@ void kvs_rbtree_destroy(kvs_rbtree_t* inst) {
   kvs_free(inst->nil);
 }
 
-char* kvs_rbtree_get(kvs_rbtree_t* inst, char* key) {
-  if (inst == NULL || key == NULL) return NULL;
+char* kvs_rbtree_get(kvs_rbtree_t* inst, robj* key) {
+  if (inst == NULL || key == NULL || key->ptr == NULL) return NULL;
   
-  rbtree_node* node = rbtree_search(inst, key);
+  rbtree_node* node = rbtree_search(inst, key->ptr);
 
   if (node == inst->nil) {
     return NULL; // 键不存在，安全返回NULL
@@ -477,19 +477,19 @@ char* kvs_rbtree_get(kvs_rbtree_t* inst, char* key) {
 /// @param key ;
 /// @param value ;
 /// @return < 0, error |  == 0, success | >0, key has existed
-int kvs_rbtree_set(kvs_rbtree_t* inst, char* key, char* value) {
-  if (inst == NULL || key == NULL || value == NULL) return -1;
+int kvs_rbtree_set(kvs_rbtree_t* inst, robj* key, robj* value) {
+  if (inst == NULL || key == NULL || value == NULL || key->ptr == NULL || value->ptr == NULL) return -1;
   
-  if (rbtree_search(inst, key) != inst->nil) return 1;
+  if (rbtree_search(inst, key->ptr) != inst->nil) return 1;
 
   rbtree_node* node = (rbtree_node*)kvs_malloc(sizeof(rbtree_node));
-  node->key = kvs_calloc(1, strlen(key) + 1);
+  node->key = kvs_calloc(1, key->len + 1);
   if (!node->key) return -2;
-  strcpy(node->key, key);
+  memcpy(node->key, key->ptr, key->len + 1);
   
-  node->value = kvs_calloc(1, strlen(value) + 1);
+  node->value = kvs_calloc(1, value->len + 1);
   if (!node->value) return -2;
-  strcpy(node->value, value);
+  memcpy(node->value, value->ptr, value->len + 1);
 
   rbtree_insert(inst, node);
   return 0;
@@ -499,10 +499,10 @@ int kvs_rbtree_set(kvs_rbtree_t* inst, char* key, char* value) {
 /// @param inst ;
 /// @param key ;
 /// @return < 0 error | == 0 success | > 0 not exist;
-int kvs_rbtree_del(kvs_rbtree_t* inst, char* key) {
-  if (inst == NULL || key == NULL) return -1;
+int kvs_rbtree_del(kvs_rbtree_t* inst, robj* key) {
+  if (inst == NULL || key == NULL || key->ptr == NULL) return -1;
 
-  rbtree_node* node = rbtree_search(inst, key);
+  rbtree_node* node = rbtree_search(inst, key->ptr);
 
   if (node == inst->nil) return 1;
 
@@ -519,17 +519,17 @@ int kvs_rbtree_del(kvs_rbtree_t* inst, char* key) {
 /// @param key
 /// @param value
 /// @return < 0 error | == 0 success  | > 0  not exist
-int kvs_rbtree_mod(kvs_rbtree_t* inst, char* key, char* value) {
-  if (inst == NULL || key == NULL || value == NULL) return -1;
+int kvs_rbtree_mod(kvs_rbtree_t* inst, robj* key, robj* value) {
+  if (inst == NULL || key == NULL || value == NULL || key->ptr == NULL || value->ptr == NULL) return -1;
 
-  rbtree_node* node = rbtree_search(inst, key);
+  rbtree_node* node = rbtree_search(inst, key->ptr);
 
   if (node == inst->nil) return 1;
   kvs_free(node->value);
 
-  node->value = kvs_calloc(1, strlen(value) + 1);
+  node->value = kvs_calloc(1, value->len + 1);
   if (!node->value) return -2;
-  strcpy(node->value, value);
+  memcpy(node->value, value->ptr, value->len + 1);
   
 
   return 0;
@@ -541,10 +541,10 @@ int kvs_rbtree_mod(kvs_rbtree_t* inst, char* key, char* value) {
 /// @param inst
 /// @param key
 /// @return 1 Yes | 0 No | -1 error
-int kvs_rbtree_exist(kvs_rbtree_t* inst, char* key) {
-  if (inst == NULL || key == NULL) return -1;
+int kvs_rbtree_exist(kvs_rbtree_t* inst, robj* key) {
+  if (inst == NULL || key == NULL || key->ptr == NULL) return -1;
 
-  return rbtree_search(inst, key) != inst->nil;
+  return rbtree_search(inst, key->ptr) != inst->nil;
 
 }
 

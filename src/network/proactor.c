@@ -270,7 +270,7 @@ int proactor_start(unsigned short port, msg_handler handler) {
           // 注意：c->rlen 是当前 rbuf 中的有效数据长度
           // 新数据从 c->rbuf + c->rlen 的位置开始写入
           c->rlen += res;  // 累加接收的字节数（不是覆盖）
-          
+          fprintf(stderr, "=========数据包来啦!整个缓冲区哦!\n%*s", IOP_SIZE, c->rbuf);
           // 调用 kvs_resp_feed 解析数据
           int ret = kvs_resp_feed(c);
           if (ret == RESP_ERROR) {
