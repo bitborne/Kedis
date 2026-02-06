@@ -111,6 +111,7 @@ static void post_close(struct io_uring* ring, struct conn* c) {
 static void post_recv_frame(struct io_uring* ring, struct conn* c) {
   // 获取一个 SQE（提交队列条目）
   struct io_uring_sqe* sqe = sqe_prep(ring, c);
+  fprintf(stderr, "before post: rlen = %zu\n", c->rlen);
   io_uring_prep_recv(sqe, c->fd, c->rbuf + c->rlen, IOP_SIZE - c->rlen, 0);
 }
 
@@ -119,20 +120,59 @@ static void post_send_resp(struct io_uring* ring, struct conn* c) {
   // 获取一个 SQE（提交队列条目）
   struct io_uring_sqe* sqe = sqe_prep(ring, c);
 
-  // 检查是否处于流式发送模式
-  if (c->streaming_send) {
-    // 流式发送模式：发送 streaming_data 中的数据
-
-    // 计算这次发送的字节数
-    size_t want = c->streaming_len - c->streaming_sent;
-    size_t cp = (want < IOP_SIZE) ? want : IOP_SIZE;
-
-    // 从 streaming_data + streaming_sent 的位置开始发送
-    io_uring_prep_send(sqe, c->fd, c->streaming_data + c->streaming_sent, cp,
-                       0);
-  } else {
-    // 正常模式：发送 wbuf 中的数据
+  // 检查是否还有未发送的数据
+  if (c->wdone < c->wlen) {
+    // 还有 wbuf 中的数据未发送，继续发送 wbuf
     io_uring_prep_send(sqe, c->fd, c->wbuf + c->wdone, c->wlen - c->wdone, 0);
+  } else {
+    // wbuf 中的数据已发送完毕
+    // wbuf 中的数据已发送完毕，需要填充下一帧数据
+
+    // 检查是否是 Bulk String 格式（以 $ 开头）
+    if (c->wlen > 0 && c->wbuf[0] == '$' && c->bulk_data != NULL) {
+      // 这是 Bulk String 格式，需要流式发送大数据
+
+      // 计算数据的长度（从 RESP 头部中解析）
+      // RESP 头部格式：$<len>\r\n
+      size_t data_len = 0;
+      char* end = strstr(c->wbuf, "\r\n");
+      if (end) {
+        data_len = strtoul(c->wbuf + 1, NULL, 10);
+      }
+
+      // 检查是否还有数据未发送
+      if (c->data_sent < data_len) {
+        // 还有数据未发送，从 bulk_data 中拷贝下一帧到 wbuf
+
+        // 计算这次可以拷贝的数据量
+        size_t remaining = data_len - c->data_sent;  // 剩余数据长度
+        size_t copy_size =
+            (remaining < RESP_BUF_SIZE) ? remaining : RESP_BUF_SIZE;
+
+        // 从 bulk_data + data_sent 的位置开始拷贝数据到 wbuf
+        memcpy(c->wbuf, c->bulk_data + c->data_sent, copy_size);
+
+        // 更新 wbuf 的有效长度
+        c->wlen = copy_size;
+        c->wdone = 0;  // 重置已发送位置
+
+        // 投递发送 wbuf 的请求
+        io_uring_prep_send(sqe, c->fd, c->wbuf, c->wlen, 0);
+      } else {
+        // 数据已全部发送完毕，现在发送最后的 \r\n
+
+        // 将 \r\n 写入 wbuf
+        memcpy(c->wbuf, "\r\n", 2);
+        c->wlen = 2;
+        c->wdone = 0;
+
+        // 投递发送 \r\n 的请求
+        io_uring_prep_send(sqe, c->fd, c->wbuf, c->wlen, 0);
+      }
+    } else {
+      // 不是 Bulk String 格式，或者已经发送完毕
+      // 不需要做任何操作，发送完成
+    }
   }
 }
 
@@ -231,7 +271,6 @@ int proactor_start(unsigned short port, msg_handler handler) {
             close(res);
             fprintf(stderr, "Failed to alloc write buffer\n");
           } else {
-
             // conn_reset(nc); -> kvs_resp_reset
             kvs_resp_reset(nc);
             post_recv_frame(&g_ring, nc);  // 投递第一个 recv
@@ -256,7 +295,7 @@ int proactor_start(unsigned short port, msg_handler handler) {
       }
       continue;
     }
-    
+
     /* -------- 正常业务 -------- */
     switch (c->state) {
       // 来了一个请求, 处理一下
@@ -270,8 +309,9 @@ int proactor_start(unsigned short port, msg_handler handler) {
           // 注意：c->rlen 是当前 rbuf 中的有效数据长度
           // 新数据从 c->rbuf + c->rlen 的位置开始写入
           c->rlen += res;  // 累加接收的字节数（不是覆盖）
-          fprintf(stderr, "=========数据包来啦!整个缓冲区哦!\n%*s", IOP_SIZE, c->rbuf);
-          // 调用 kvs_resp_feed 解析数据
+          c->parse_done = 0;
+          // fprintf(stderr, "=========数据包来啦!整个缓冲区哦!\n%*s", IOP_SIZE,
+          // c->rbuf); 调用 kvs_resp_feed 解析数据
           int ret = kvs_resp_feed(c);
           if (ret == RESP_ERROR) {
             // 协议错误，关闭连接
@@ -281,8 +321,10 @@ int proactor_start(unsigned short port, msg_handler handler) {
           } else if (ret == RESP_PARSE_OK) {
             // 解析完成，处理命令
             processCommand(c);
-            c->wbuf = NULL;
+            // 切换到发送状态
             c->state = ST_SEND;
+            // 投递发送请求
+            post_send_resp(&g_ring, c);
           } else if (ret == RESP_CONTINUE_RECV) {
             // ret == 0，需要更多数据
             // 提交 recv 请求，等待更多数据
@@ -294,106 +336,123 @@ int proactor_start(unsigned short port, msg_handler handler) {
 
       // 发我们准备好的数据过去
       case ST_SEND: {
-        // 检查是否处于流式发送模式
-        if (c->streaming_send) {
-          // 流式发送模式
+        // 更新已发送的字节数
+        c->wdone += res;
 
-          // fprintf(stderr, "[DEBUG] Streaming send: fd=%d, res=%d,
-          // sent=%zu/%zu\n", c->fd, res, c->streaming_sent, c->streaming_len);
+        // 检查当前帧是否发送完毕
+        if (c->wdone == c->wlen) {
+          // 当前帧发送完毕
 
-          // 更新已发送的字节数
-          c->streaming_sent += res;
+          // 检查是否是 Bulk String 格式（以 $ 开头）
+          int is_bulk_string = (c->wlen > 0 && c->wbuf[0] == '$' && c->bulk_data != NULL);
 
-          // 检查是否发送完成
-          if (c->streaming_sent == c->streaming_len) {
-            // 数据发送完成，现在发送 \r\n
+          if (is_bulk_string) {
+            // 这是 Bulk String，需要更新 data_sent
 
-            // fprintf(stderr, "[DEBUG] Streaming send complete, sending CRLF:
-            // fd=%d\n", c->fd);
+            // 从 RESP 头部中提取数据长度
+            size_t data_len = 0;
+            char* end = strstr(c->wbuf, "\r\n");
+            if (end) {
+              data_len = strtoul(c->wbuf + 1, NULL, 10);
+            }
 
-            // 将 \r\n 写入 wbuf
-            memcpy(c->wbuf, "\r\n", 2);
-            c->wlen = 2;
-            c->wdone = 0;
+            // 检查当前帧是否是头部帧
+            int is_header_frame = (strstr(c->wbuf, "\r\n") != NULL);
 
-            // 退出流式发送模式（但是 streaming_data 仍然指向 argv 中的数据）
-            c->streaming_send = 0;
+            if (is_header_frame) {
+              // 这是头部帧，不需要更新 data_sent
+            } else {
+              // 这是数据帧，更新 data_sent
+              c->data_sent += c->wlen;
+            }
 
-            // 投递发送 \r\n 的请求
-            post_send_resp(&g_ring, c);
+            // 检查是否还有数据未发送
+            if (c->data_sent < data_len) {
+              // 还有数据未发送，继续发送
+              post_send_resp(&g_ring, c);
+            } else {
+              // 数据已全部发送完毕（包括 \r\n），直接重置状态并切换到接收状态
+                // 重置写缓冲区状态
+                c->wlen = 0;
+                c->wdone = 0;
+                c->bulk_data = NULL;
+                c->data_sent = 0;
+                
+                // 重置 RESP 解析状态
+                c->resp_state = ST_RESP_HDR;
+                c->argc = 0;
+                c->argc_done = 0;
+                c->bulk_len = 0;
+                c->bulk_done = 0;
+                
+                // 切换到接收状态
+                c->state = ST_RECV;
+                post_recv_frame(&g_ring, c);
+                // 如果 rlen 中还有数据（粘包），尝试解析下一条命令
+              //   if (c->rlen > 0) {
+              //     int n = kvs_resp_feed(c);
+              //     if (n == RESP_PARSE_OK) {
+              //       c->wlen = 0;
+              //       c->wdone = 0;
+              //       processCommand(c);
+              //       c->state = ST_SEND;
+              //       post_send_resp(&g_ring, c);
+              //     }
+              //   } else {
+              //     // 没有数据，等待新的接收
+              //     io_uring_prep_recv(sqe, c->fd, c->rbuf + c->rlen, 
+              // IOP_SIZE - c->rlen, 0);
+              //   }
+            }
           } else {
-            // 还需要发送更多数据
-            post_send_resp(&g_ring, c);
+            // 不是 Bulk String，发送完毕
+
+            // 检查是否是 \r\n 帧
+            int is_crlf_frame = (c->wlen == 2 && c->wbuf[0] == '\r' && c->wbuf[1] == '\n');
+
+            if (is_crlf_frame || !is_bulk_string) {
+              // 所有数据已发送完毕（\r\n 帧或非 Bulk String）
+
+              // 重置写缓冲区状态
+              c->wlen = 0;
+              c->wdone = 0;
+              c->bulk_data = NULL;
+              c->data_sent = 0;
+
+              // 重置 RESP 解析状态
+              c->resp_state = ST_RESP_HDR;
+              c->argc = 0;
+              c->argc_done = 0;
+              c->bulk_len = 0;
+              c->bulk_done = 0;
+
+              // 切换到接收状态
+              c->state = ST_RECV;
+              post_recv_frame(&g_ring, c);
+
+              // // 如果 rlen 中还有数据（粘包），尝试解析下一条命令
+              // if (c->rlen > 0) {
+              //   int n = kvs_resp_feed(c);
+              //   if (n == RESP_PARSE_OK) {
+              //     c->wlen = 0;
+              //     c->wdone = 0;
+              //     processCommand(c);
+              //     c->state = ST_SEND;
+              //     post_send_resp(&g_ring, c);
+              //   } else if (n == RESP_ERROR) {
+              //     conn_free(c);
+              //     conn_pool_free(&g_conn_pool, c);
+              //   } else {
+              //     post_recv_frame(&g_ring, c);
+              //   }
+              // } else {
+              //   post_recv_frame(&g_ring, c);
+              // }
+            }
           }
         } else {
-          // 正常模式
-
-          // 更新已发送的字节数
-          c->wdone += res;
-
-          // 检查是否发送完成
-          if (c->wdone == c->wlen) {
-            // 发送完成
-
-            // 检查是否刚刚完成了流式发送（通过检查 streaming_len > 0）
-            if (c->streaming_len > 0) {
-              // 刚刚完成了流式发送，需要重置连接状态
-              // 但不能调用 kvs_resp_reset，因为它会释放 argv 中的数据
-              // 而 streaming_data 指向 argv 中的数据（可能已经被引擎管理）
-
-              // fprintf(stderr, "[DEBUG] Resetting connection state after
-              // streaming send: fd=%d\n", c->fd);
-
-              // 重置 argv（不释放内存，只清空指针）
-              for (int i = 0; i < c->argc; i++) {
-                c->argv[i].ptr = NULL;
-                c->argv[i].len = 0;
-              }
-
-              // 重置连接状态
-              c->argc = 0;
-              // c->multibulk_len = 0;
-              c->bulk_len = 0;
-              // c->seg_used = 0;
-              c->resp_state = ST_RESP_HDR;
-
-              // 重置流式发送状态
-              c->streaming_data = NULL;
-              c->streaming_len = 0;
-              c->streaming_sent = 0;
-            } else {
-              // 正常发送完成，调用 kvs_resp_reset
-              kvs_resp_reset(c);
-            }
-
-            c->state = ST_RECV;
-
-            // 如果有剩余数据，尝试解析下一条
-            if (c->rlen > 0) {
-              int n = kvs_resp_feed(c);
-              if (n == ST_RESP_OK) {
-                current_processing_fd = c->fd;
-                c->wlen = 0;  // 重置写缓冲区长度
-                processCommand(c);
-                current_processing_fd = -1;
-                kvs_resp_reset(c);
-                c->state = ST_SEND;
-                c->wdone = 0;
-                post_send_resp(&g_ring, c);
-              } else if (n < 0) {
-                conn_free(c);
-                conn_pool_free(&g_conn_pool, c);
-              } else {
-                // 依然不够
-                post_recv_frame(&g_ring, c);
-              }
-            } else {
-              post_recv_frame(&g_ring, c);  // 准备下一条命令
-            }
-          } else {
-            // 还需要发送更多数据
-            post_send_resp(&g_ring, c);
-          }
+          // 当前帧未发送完毕，继续发送
+          post_send_resp(&g_ring, c);
         }
         break;
       }

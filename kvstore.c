@@ -250,48 +250,31 @@ static void add_reply_status(struct conn* c, const char* status) {
 }
 
 static void add_reply_bulk(struct conn* c, const char* str) {
+    // 如果 str 为 NULL，返回 Null Bulk String
     if (str == NULL) {
         add_reply_str(c, "$-1\r\n"); // Null Bulk String
         return;
     }
     
     // 计算数据的长度
-    size_t len = strlen(str);
-    // fprintf(stderr, "---> len = %zu\n", len);
+    size_t len = strlen(str) + 2; // 为了 \r\n
+    
     // 计算响应数据的总长度
-    // 格式：$<len>\r\n<data>\r\n
+    // 格式：$<len>\r\n<data>\r\n  (第二个 \r\n 已包含在数据中)
     // 长度：1 ($) + 数字位数 + 2 (\r\n) + len + 2 (\r\n)
-    char buf[32];
-    int header_len = sprintf(buf, "$%zu\r\n", len);
-    size_t total_len = header_len + len + 2;
+    char buf[32]; // 临时缓冲区，用于存储 RESP 头部
+    int header_len = sprintf(buf, "$%zu\r\n", len); // 生成 RESP 头部
     
-    // fprintf(stderr, "[DEBUG] add_reply_bulk: fd=%d, len=%zu, total_len=%zu, RESP_BUF_SIZE=%d\n",
-            // c->fd, len, total_len, RESP_BUF_SIZE);
+    // 将 RESP 头部写入 wbuf（作为第一帧）
+    memcpy(c->wbuf, buf, header_len);
+    c->wlen = header_len; // wbuf 中有效数据长度
+    c->wdone = 0; // 已发送 0 字节
     
-    // 检查 wbuf 是否足够
-    if (total_len > RESP_BUF_SIZE) {
-        // wbuf 不够，切换到流式发送模式
-        
-        // fprintf(stderr, "[DEBUG] Switching to streaming send: fd=%d\n", c->fd);
-        
-        // 先发送 header（$<len>\r\n）
-        memcpy(c->wbuf, buf, header_len);
-        c->wlen = header_len;
-        
-        // 设置流式发送状态
-        c->streaming_send = 1;           // 进入流式发送模式
-        c->streaming_data = str;         // 指向实际数据（不复制）
-        c->streaming_len = len;          // 数据长度
-        c->streaming_sent = 0;           // 已发送 0 字节
-        
-        // fprintf(stderr, "[DEBUG] Streaming send state set: fd=%d, streaming_send=%d, streaming_len=%zu\n",
-                // c->fd, c->streaming_send, c->streaming_len);
-    } else {
-        // wbuf 足够，正常发送
-        add_reply_str(c, buf);
-        add_reply_str(c, str);
-        add_reply_str(c, "\r\n");
-    }
+    // 保存大数据源指针，用于后续滑动窗口发送
+    c->bulk_data = str; // 指向实际数据（不复制）
+    
+    // 初始化发送进度跟踪
+    c->data_sent = 0; // 已发送 0 字节数据
 }
 
 // 为了兼容旧的 "YES, Exist" 返回格式，这里做个简单映射，也可以直接返回 RESP Integer
@@ -363,7 +346,7 @@ int kvs_protocol(struct conn* c) {
       break;
     case KVS_CMD_AGET:
       gotValue = kvs_array_get(&array_engine, key);
-      fprintf(stderr, "--> gotValue:\n%s", gotValue);
+      // fprintf(stderr, "--> gotValue:\n%s", gotValue);
       if (gotValue == NULL) {
         add_reply_error(c, "ERROR / Not Exist"); // Redis style: return nil
       } else {
@@ -678,33 +661,33 @@ int kvs_protocol(struct conn* c) {
   check_and_perform_autosave();
   pthread_mutex_unlock(&global_kvs_lock);  // UNLOCK
   
-  fprintf(stderr, "c->wlen == %d\n", c->wlen);
+  // fprintf(stderr, "c->wlen == %d\n", c->wlen);
   return c->wlen;
 }
 
 int init_kvengine(void) {
   // 初始化内存池，针对KV存储的典型数据大小进行优化
   g_mem_pool = mem_pool_init(BLOCK_SIZE);
-  fprintf(stderr, "-1-->\n");
+  // fprintf(stderr, "-1-->\n");
   #if ENABLE_MULTI_ENGINE
   // 多引擎模式：初始化所有启用的引擎
   #if ENABLE_RBTREE
-  fprintf(stderr, "rbt-->\n");
+  // fprintf(stderr, "rbt-->\n");
   memset(&rbtree_engine, 0, sizeof(rbtree_engine));
   kvs_rbtree_create(&rbtree_engine);
   #endif
   #if ENABLE_HASH
-  fprintf(stderr, "hash-->\n");
+  // fprintf(stderr, "hash-->\n");
   memset(&hash_engine, 0, sizeof(hash_engine));
   kvs_hash_create(&hash_engine);
   #endif
   #if ENABLE_ARRAY
-  fprintf(stderr, "arr-->\n");
+  // fprintf(stderr, "arr-->\n");
   memset(&array_engine, 0, sizeof(array_engine));
   kvs_array_create(&array_engine);
   #endif
   #if ENABLE_SKIPLIST
-  fprintf(stderr, "skip-->\n");
+  // fprintf(stderr, "skip-->\n");
   memset(&skiplist_engine, 0, sizeof(skiplist_engine));
   kvs_skiplist_create(&skiplist_engine);
   #endif
@@ -713,7 +696,7 @@ int init_kvengine(void) {
   memset(&global_main_engine, 0, sizeof(global_main_engine));
   kvs_main_create(&global_main_engine);
   #endif
-  fprintf(stderr, "-2-->\n");
+  // fprintf(stderr, "-2-->\n");
   return 0;
 }
 
@@ -778,7 +761,7 @@ int main(int argc, char* argv[]) {
     }
   }
 
-  fprintf(stderr, "0-->\n");
+  // fprintf(stderr, "0-->\n");
   signal(SIGINT, signal_handler);
   signal(SIGTERM, signal_handler);
 
@@ -801,9 +784,9 @@ int main(int argc, char* argv[]) {
     if (load_mode == INIT_LOAD_AOF) {
 #if ENABLE_MULTI_ENGINE
     #if ENABLE_MMAP
-      fprintf(stderr, "1-->\n");
+      // fprintf(stderr, "1-->\n");
       aofLoadAll_mmap();
-      fprintf(stderr, "2-->\n");
+      // fprintf(stderr, "2-->\n");
       #else
       aofLoadAll();
       #endif
@@ -813,9 +796,9 @@ int main(int argc, char* argv[]) {
     } else if (load_mode == INIT_LOAD_SNAP) {
       #if ENABLE_MULTI_ENGINE
       #if ENABLE_MMAP
-      fprintf(stderr, "3-->\n");
+      // fprintf(stderr, "3-->\n");
       ksfLoadAll_mmap();
-      fprintf(stderr, "4-->\n");
+      // fprintf(stderr, "4-->\n");
       #else
       ksfLoadAll();
       #endif

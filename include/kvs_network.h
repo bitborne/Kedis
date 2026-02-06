@@ -43,24 +43,18 @@ struct conn {
   /* RESP 状态机 */
   resp_state_t resp_state;
   size_t bulk_len;        // 当前段长度 (需要读取的长度)
-  char* bulk_data;       //  当前段起始位置 
   int argc;              // 期望的参数个数 (argc)
   int argc_done;         // 已解析完成的参数个数 (用于跟踪解析进度)
   size_t bulk_done;      // 当前 bulk 已解析长度
   robj argv[MAX_ARGC];   // 命令段数组 (每个 ptr 都需要 malloc)
-
-
+  
+  
   /* ---- 写回 ---- */
+  char* bulk_data;       // 大数据源指针（用于流式发送）
   char* wbuf;       // 回包缓冲（+OK\r\n 或 $len\r\n...）
-  int wlen, wdone;  // 总长度 & 已发长度
-
-  /* ---- 流式发送状态 ---- */
-  int streaming_send;          // 标记是否正在进行流式发送（0: 正常模式，1: 流式模式）
-                                // 正常模式：数据先进入 wbuf，再一次性发送
-                                // 流式模式：数据直接从数据源分多次发送
-  const char* streaming_data;  // 流式发送的数据源指针（指向实际数据，不复制）
-  size_t streaming_len;        // 流式发送的数据总长度
-  size_t streaming_sent;       // 流式发送已发送的字节数
+  size_t wlen, wdone;  // wbuf 有效长度 & 已发长度
+  size_t data_sent;  // 已发送的数据长度（用于流式发送跟踪）
+  
 };
 
 // 消息处理回调函数定义

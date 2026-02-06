@@ -30,14 +30,12 @@ void kvs_array_destroy(kvs_array_t* inst) {
 }
 
 char* kvs_array_get(kvs_array_t* inst, robj* key) {
-
-  if (inst == NULL || key == NULL || key->ptr) return NULL;
+  if (inst == NULL || key == NULL || key->ptr == NULL) return NULL;
   // printf("-->arr not NULL\n");
   // for (int i = 0; i < inst->total; i++) {
   for (int i = 0; i < KVS_ARRAY_SIZE; i++) {
     if (inst->table[i].key) { // 找到了一个非空位
       if (!strcmp(key->ptr, inst->table[i].key)) return inst->table[i].value;
-      
     }
   }
   return NULL;
