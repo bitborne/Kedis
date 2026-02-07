@@ -535,13 +535,13 @@ void test_large_data(int connfd, const engine_ops_t* engine) {
     // 测试 1KB key/value
     char* large_key_1k = generate_random_string(1024, NULL);
     char* large_value_1k = generate_random_string(1024, NULL);
-    printf("-====-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=\nkey::::\n%s\nvalue::::%s\n", large_key_1k, large_value_1k);
+    // printf("-====-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=\nkey::::\n%s\nvalue::::%s\n", large_key_1k, large_value_1k);
     if (large_key_1k && large_value_1k) {
         snprintf(cmd, MAX_LARGE_MSG, "%s %s %s", engine->set_cmd, large_key_1k, large_value_1k);
         testcase(connfd, cmd, "OK\r\n", "Large: 1KB key/value SET");
         
         snprintf(cmd, MAX_LARGE_MSG, "%s %s", engine->get_cmd, large_key_1k);
-        snprintf(expected, sizeof(expected), "%s\r\n", large_value_1k);
+        sprintf(expected, "%s\r\n", large_value_1k);
         testcase(connfd, cmd, expected, "Large: 1KB key/value GET");
 
         // 清理
@@ -564,7 +564,7 @@ void test_large_data(int connfd, const engine_ops_t* engine) {
         
         memset(expected, 0, sizeof(expected));
         snprintf(cmd, MAX_LARGE_MSG, "%s %s", engine->get_cmd, large_key_16k);
-        snprintf(expected, sizeof(expected), "%s\r\n", large_value_16k);
+        sprintf(expected, "%s\r\n", large_value_16k);
         testcase(connfd, cmd, expected, "Large: 16KB value GET");
         
         // 清理
@@ -588,7 +588,7 @@ void test_large_data(int connfd, const engine_ops_t* engine) {
         
         memset(expected, 0, sizeof(expected));
         snprintf(cmd, MAX_LARGE_MSG, "%s %s", engine->get_cmd, large_key_128k);
-        snprintf(expected, sizeof(expected), "%s\r\n", large_value_128k);
+        sprintf(expected, "%s\r\n", large_value_128k);
         testcase(connfd, cmd, expected, "Large: 128KB value GET");
         
         // 清理
@@ -612,7 +612,7 @@ void test_large_data(int connfd, const engine_ops_t* engine) {
         
         memset(expected, 0, sizeof(expected));
         snprintf(cmd, MAX_LARGE_MSG, "%s %s", engine->get_cmd, large_key_1m);
-        snprintf(expected, sizeof(expected), "%s\r\n", large_value_1m);
+        sprintf(expected, "%s\r\n", large_value_1m);
         testcase(connfd, cmd, expected, "Large: 1MB value GET");
         
         // 清理
@@ -636,7 +636,7 @@ void test_large_data(int connfd, const engine_ops_t* engine) {
         
         memset(expected, 0, sizeof(expected));
         snprintf(cmd, MAX_LARGE_MSG, "%s %s", engine->get_cmd, large_key_4m);
-        snprintf(expected, sizeof(expected), "%s\r\n", large_value_4m);
+        sprintf(expected, "%s\r\n", large_value_4m);
         testcase(connfd, cmd, expected, "Large: 4MB value GET");
         
         // 清理

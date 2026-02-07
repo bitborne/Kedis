@@ -1169,7 +1169,7 @@ void appendToAofBufferToEngine(int engine_type, int type, const robj* key,
   // }
 
   char* aof_buf = aofBuffer[engine_type].buf;
-  printf("-->aof 1\n");
+  // printf("-->aof 1\n");
   int klen = key->ptr ? key->len : 0;
   int vlen = (type != AOF_CMD_DEL) ? value->len : 0;
 
@@ -1178,7 +1178,7 @@ void appendToAofBufferToEngine(int engine_type, int type, const robj* key,
   int val_len_bytes = encode_vlq(vlen, vlq + key_len_bytes);
 
   int total_needed = 1 + key_len_bytes + val_len_bytes + klen + vlen + 2;
-  printf("-->aof end\n");
+  // printf("-->aof end\n");
 
   // 检查是否为大命令，如果是则绕过缓冲区直接写入
   if (total_needed >= LARGE_CMD_THRESHOLD) {
@@ -1286,5 +1286,5 @@ void appendToAofBufferToEngine(int engine_type, int type, const robj* key,
     aof_buf[aofBuffer[engine_type].len] = '\0';
     aofBuffer[engine_type].len++;
   }
-  printf("-->aof end\n");
+  // printf("-->aof end\n");
 }

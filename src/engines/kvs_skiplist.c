@@ -24,23 +24,23 @@ typedef struct skiplist_s kvs_skiplist_t;
 kvs_skiplist_t global_skiplist;
 
 static skiplist_node_t* skiplist_create_node(int level, const robj *key, const robj *value) {
-    fprintf(stderr, "skp0-->\n");
+    // fprintf(stderr, "skp0-->\n");
     if (!value || !key || !key->ptr || !value->ptr) return NULL; 
-    fprintf(stderr, "skp1-->\n");
+    // fprintf(stderr, "skp1-->\n");
     skiplist_node_t *newNode = (skiplist_node_t*)kvs_malloc(sizeof(skiplist_node_t));
     if (!newNode) return NULL;
     
-    fprintf(stderr, "skp2-->\n");
+    // fprintf(stderr, "skp2-->\n");
     size_t key_len = key->len;
     size_t value_len = value->len;
     
-    fprintf(stderr, "skp3-->\n");
+    // fprintf(stderr, "skp3-->\n");
     char *kcopy = kvs_malloc(key_len + 1);
     if (!kcopy) {
       kvs_free(newNode);
       return NULL;
     }
-    fprintf(stderr, "skp4-->\n");
+    // fprintf(stderr, "skp4-->\n");
     memcpy(kcopy, key->ptr, key_len + 1);
     
     char *vcopy = kvs_malloc(value_len + 1);
@@ -49,7 +49,7 @@ static skiplist_node_t* skiplist_create_node(int level, const robj *key, const r
       kvs_free(newNode);
       return NULL;
     }
-    fprintf(stderr, "skp5-->\n");
+    // fprintf(stderr, "skp5-->\n");
     memcpy(vcopy, value->ptr, value_len + 1);
 
     newNode->key = kcopy;
