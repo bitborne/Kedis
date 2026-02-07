@@ -241,12 +241,14 @@ static void add_reply_error(struct conn* c, const char* err) {
     add_reply_str(c, "-");
     add_reply_str(c, err);
     add_reply_str(c, "\r\n");
-}
-
+    c->send_st = ST_SEND_SMALL;
+  }
+  
 static void add_reply_status(struct conn* c, const char* status) {
     add_reply_str(c, "+");
     add_reply_str(c, status);
     add_reply_str(c, "\r\n");
+    c->send_st = ST_SEND_SMALL;
 }
 
 static void add_reply_bulk(struct conn* c, const char* str) {
@@ -257,24 +259,33 @@ static void add_reply_bulk(struct conn* c, const char* str) {
     }
     
     // 计算数据的长度
-    size_t len = strlen(str) + 2; // 为了 \r\n
-    
+    c->bulk_tt = strlen(str) + 2; // 为了 \r\n
+    c->bulk_data = str;
     // 计算响应数据的总长度
     // 格式：$<len>\r\n<data>\r\n  (第二个 \r\n 已包含在数据中)
     // 长度：1 ($) + 数字位数 + 2 (\r\n) + len + 2 (\r\n)
-    char buf[32]; // 临时缓冲区，用于存储 RESP 头部
-    int header_len = sprintf(buf, "$%zu\r\n", len); // 生成 RESP 头部
-    
-    // 将 RESP 头部写入 wbuf（作为第一帧）
-    memcpy(c->wbuf, buf, header_len);
-    c->wlen = header_len; // wbuf 中有效数据长度
-    c->wdone = 0; // 已发送 0 字节
-    
-    // 保存大数据源指针，用于后续滑动窗口发送
-    c->bulk_data = str; // 指向实际数据（不复制）
-    
-    // 初始化发送进度跟踪
-    c->data_sent = 0; // 已发送 0 字节数据
+    char hdr_buf[32]; // 临时缓冲区，用于存储 RESP 头部
+    c->hdr_len = sprintf(hdr_buf, "$%zu\r\n", c->bulk_tt - 2); // 生成 RESP 头部
+
+    memcpy(c->wbuf + c->wlen, hdr_buf, c->hdr_len);
+    c->wlen += c->hdr_len;
+
+    size_t avail  = RESP_BUF_SIZE - c->wlen;
+    size_t remain = c->bulk_tt - c->bulk_sent;
+    size_t cp = avail < remain ? avail : remain;
+    memcpy(c->wbuf + c->wlen, str, cp);
+
+    c->wlen += cp;
+    if (remain <= avail) {
+      c->wbuf[c->wlen - 2] = '\r';
+      c->wbuf[c->wlen - 1] = '\n';
+    } else if (remain == avail + 1) {
+      c->wbuf[c->wlen - 1] = '\r';
+    } else if (remain == 1) {
+      c->wbuf[c->wlen] = '\n';
+    }
+
+    c->send_st = ST_SEND_HDR_SENT;
 }
 
 // 为了兼容旧的 "YES, Exist" 返回格式，这里做个简单映射，也可以直接返回 RESP Integer
@@ -283,6 +294,7 @@ static void add_reply_exist(struct conn* c, int exists) {
     char buf[32];
     sprintf(buf, ":%d\r\n", exists ? 1 : 0);
     add_reply_str(c, buf);
+    c->send_st = ST_SEND_SMALL;
 }
 
 
@@ -358,9 +370,9 @@ int kvs_protocol(struct conn* c) {
       if (ret < 0) {
         add_reply_error(c, "ERROR");
       } else if (ret == 0) {
-        if (replication_info.is_master) {
-          appendToAofBufferToEngine(0, AOF_CMD_DEL, key, NULL);
-        }
+        // if (replication_info.is_master) {
+        appendToAofBufferToEngine(0, AOF_CMD_DEL, key, NULL);
+        // }
         add_reply_status(c, "OK");
       } else {
         add_reply_error(c, "ERROR / Not Exist");

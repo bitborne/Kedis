@@ -23,6 +23,13 @@ typedef enum {
   ST_RESP_OK
 } resp_state_t;
 
+typedef enum {
+  ST_SEND_SMALL,   // 等待解析 $<len> (参数长度)
+  ST_SEND_HDR_SENT,        // 等待解析 *<argc> (命令开始)
+  ST_SEND_BULK,  // 正在收 bulk 内容
+  ST_SEND_NOTSET
+} send_state_t;
+
 /* ---------------- 段对象：只挂指针，不拷贝数据 ---------------- */
 typedef struct {
   char* ptr;   // 指向堆内存
@@ -51,10 +58,13 @@ struct conn {
   
   /* ---- 写回 ---- */
   char* bulk_data;       // 大数据源指针（用于流式发送）
+  char* bulk_p;
   char* wbuf;       // 回包缓冲（+OK\r\n 或 $len\r\n...）
-  size_t wlen, wdone;  // wbuf 有效长度 & 已发长度
-  size_t data_sent;  // 已发送的数据长度（用于流式发送跟踪）
-  
+  size_t wlen;  // wbuf 有效长度 & 已发长度
+  size_t bulk_sent;  // 已发送的数据长度（用于流式发送跟踪）
+  size_t bulk_tt;
+  size_t hdr_len;
+  send_state_t send_st;
 };
 
 // 消息处理回调函数定义

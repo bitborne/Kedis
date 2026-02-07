@@ -25,7 +25,9 @@ size_t bulk_done;   // 当前 bulk 已解析长度
  */
 void kvs_resp_reset(struct conn* c) {
   c->rlen = 0;                  // 重置读缓冲区有效数据长度
-  c->wlen = c->wdone = 0;       // 重置写缓冲区长度和已发送长度
+  c->wlen = c->bulk_sent = 0;       // 重置写缓冲区长度和已发送长度
+  c->bulk_p = NULL;
+  c->send_st = ST_SEND_NOTSET;
   c->resp_state = ST_RESP_HDR;  // 重置 RESP 解析状态为等待解析命令头
   c->bulk_len = 0;              // 重置 bulk data 长度
   c->argc = 0;                  // 重置期望的参数个数
@@ -70,14 +72,15 @@ int kvs_resp_feed(struct conn* c) {
   // fprintf(stderr, "--> while\n");
   // fprintf(stderr, "--> while: resp_state: %d\n", c->resp_state);
   // fprintf(stderr, "c->parse_done: %zu < c->rlen: %zu", c->parse_done, c->rlen);
+
   while (c->parse_done < c->rlen && c->resp_state != ST_RESP_OK) {
     switch (c->resp_state) {
       case ST_RESP_HDR: {
         // 检查是否以 * 开头（Array 格式）
         // DEBUG
-        fprintf(stderr, "-->hdr: rbuf: %s\n", c->rbuf);
+        // fprintf(stderr, "-->hdr: rbuf: %s\n", c->rbuf);
         if (c->rbuf[c->parse_done] != '*') {
-            fprintf(stderr, "rbuf: %*s\nparse_>done后: %*s\n", IOP_SIZE, c->rbuf, IOP_SIZE - c->parse_done, c->rbuf + c->parse_done);
+            // fprintf(stderr, "rbuf: %*s\nparse_>done后: %*s\n", IOP_SIZE, c->rbuf, IOP_SIZE - c->parse_done, c->rbuf + c->parse_done);
             fprintf(stderr, "the first char must be *\n");
           goto error;  // 协议错误：不是 Array 格式
         }
@@ -97,24 +100,26 @@ int kvs_resp_feed(struct conn* c) {
         // fprintf(stderr, "c->argc=%d\n", c->argc);
         // 检查解析是否成功（endptr 应该指向 \r）
         if (endptr != end) {
+          fprintf(stderr, "[ERROR] argc parse\n");
           goto error;  // 解析错误：数字格式错误
         }
-
+        
         // 更新 parse_done 到命令头结束位置（跳过 \r\n）
         c->parse_done = end + 2 - c->rbuf;
-
+        
         // 切换到 ST_RESP_BULK_LEN 状态，准备解析第一个参数的长度
         c->resp_state = ST_RESP_BULK_LEN;
         break;
       }
       case ST_RESP_BULK_LEN: {
         // 检查是否以 $ 开头（Bulk String 格式）
-
+        
         // DEBUG
         // fprintf(stderr, "-->bulk_len\n");
         
         // fprintf(stderr, "c->parse_down:这个位置是:%s\n", c->rbuf[c->parse_done]);
         if (c->rbuf[c->parse_done] != '$') {
+          fprintf(stderr, "[ERROR] bulk should start with $\n");
           goto error; // 协议错误：不是 Bulk String 格式
         }
         // fprintf(stderr, "-->bulk_len1\n");
@@ -141,20 +146,22 @@ int kvs_resp_feed(struct conn* c) {
         
         // 检查解析是否成功（endptr 应该指向 \r）
         if (endptr != end) {
+          fprintf(stderr, "[ERROR] bulk len parse\n");
           goto error;
           // return -1;  // 解析错误：数字格式错误
         }
         // fprintf(stderr, "-->bulk_len3\n");
-
+        
         // 更新 parse_done 到长度头结束位置（跳过 \r\n）
         c->parse_done = end + 2 - c->rbuf;
-
+        
         // 处理 NULL bulk string（bulk_len == -1）
         if (c->bulk_len == (size_t)-1) {
+          fprintf(stderr, "NULL STRING????\n");
           c->argv[c->argc_done].ptr = NULL;  // NULL 指针
           c->argv[c->argc_done].len = 0;     // 长度为 0
           c->argc_done++;                    // 已解析参数个数加 1
-
+          
           // 检查是否所有参数解析完毕
           if (c->argc_done == c->argc) {
             c->resp_state = ST_RESP_OK;  // 切换到完成状态
@@ -162,20 +169,22 @@ int kvs_resp_feed(struct conn* c) {
           // 否则继续解析下一个参数（保持在 ST_RESP_BULK_LEN 状态）
           break;
         }
-
+        
         // 检查 bulk_len 是否超过最大限制
         if (c->bulk_len > MAX_SEG_SIZE) {
+          fprintf(stderr, "[ERROR] bulk too big\n");
           goto error;  // 数据过大，拒绝处理
         }
-
+        
         // 分配内存存储 bulk data（+1 用于 null terminator）
         c->argv[c->argc_done].ptr = kvs_malloc(c->bulk_len + 1);
         if (!c->argv[c->argc_done].ptr) {
+          fprintf(stderr, "[ERROR] bulk malloc fail\n");
           goto error;  // 内存分配失败
         }
         c->argv[c->argc_done].len = c->bulk_len;        // 记录长度
         c->argv[c->argc_done].ptr[c->bulk_len] = '\0';  // 添加 null terminator
-
+        
         // 切换到 ST_RESP_BULK_DATA 状态，准备接收 bulk data
         c->bulk_done = 0;  // 重置已接收的 bulk data 长度
         c->resp_state = ST_RESP_BULK_DATA;
@@ -185,9 +194,9 @@ int kvs_resp_feed(struct conn* c) {
         // 计算还需要接收多少 bulk data
         
         // fprintf(stderr, "-->bulk_data\n");
-
+        
         size_t want = c->bulk_len - c->bulk_done;
-
+        
         // 计算 rbuf 中还有多少数据可用
         size_t avail = c->rlen - c->parse_done;
 
@@ -196,26 +205,26 @@ int kvs_resp_feed(struct conn* c) {
         // fprintf(stderr, "cp == %d\n", cp);
         // 从 rbuf 复制数据到 argv[argc_done].ptr
         if (cp > 0) {
-
+          
           memcpy(c->argv[c->argc_done].ptr + c->bulk_done,
             c->rbuf + c->parse_done, cp);
-        }
+          }
           
-        // fprintf(stderr, "bulk_done1 == %d\n", c->bulk_done);
-        // 更新 bulk_done（已接收的 bulk data 长度）
-        c->bulk_done += cp;
+          // fprintf(stderr, "bulk_done1 == %d\n", c->bulk_done);
+          // 更新 bulk_done（已接收的 bulk data 长度）
+          c->bulk_done += cp;
         // fprintf(stderr, "bulk_done2 == %d\n", c->bulk_done);
         
         // fprintf(stderr, "parse_done1 == %d\n", c->parse_done);
         // 更新 parse_done（rbuf 中已处理的数据位置）
         c->parse_done += cp;
         // fprintf(stderr, "parse_done2 == %d\n", c->parse_done);
-
+        
         // 检查 bulk data 是否接收完成
         // fprintf(stderr, "c->bulk_done:%d != c->bulk_len: %d\n", c->bulk_done, c->bulk_len);
         if (c->bulk_done == c->bulk_len) {
           // bulk data 收全了，现在检查是否有 \r\n
-
+          
           // 检查 rbuf 中是否有足够的数据接收 \r\n
           // fprintf(stderr, "data:--> 1\n");
           if (c->parse_done + 2 > c->rlen) {
@@ -229,6 +238,7 @@ int kvs_resp_feed(struct conn* c) {
           // 检查 \r\n 是否正确
           if (c->rbuf[c->parse_done] != '\r' ||
             c->rbuf[c->parse_done + 1] != '\n') {
+              fprintf(stderr, "[ERROR] bulk should end with \\r\\n\n");
               goto error;  // 协议错误：缺少 \r\n
             }
           // fprintf(stderr, "data:--> 3\n");
@@ -245,14 +255,16 @@ int kvs_resp_feed(struct conn* c) {
             // fprintf(stderr, "change to: OK\n");
             c->resp_state = ST_RESP_OK;
             // 处理粘包, 让下一条命令先留在缓冲区 memmove到开头
-            fprintf(stderr, "OK==rbuf: %*s\nparse_>done后: %*s\n", IOP_SIZE, c->rbuf, IOP_SIZE - c->parse_done, c->rbuf + c->parse_done);
+            // fprintf(stderr, "OK==rbuf: %*s\nparse_>done后: %*s\n", IOP_SIZE, c->rbuf, IOP_SIZE - c->parse_done, c->rbuf + c->parse_done);
             if (c->parse_done < c->rlen) {  
               size_t remaining = c->rlen - c->parse_done;
               memmove(c->rbuf, c->rbuf + c->parse_done, remaining);
               memset(c->rbuf + remaining, 0, c->rlen - remaining);
               c->rlen = remaining;
               c->parse_done = 0;
+              // fprintf(stderr, "--> 不完美, 有粘包 ?? 你走这里来了?\n");
             } else {
+              // fprintf(stderr, "--> 完美 你走这里来了?\n");
               c->rlen = 0;
               c->parse_done = 0;
               memset(c->rbuf, 0, IOP_SIZE);
@@ -282,12 +294,16 @@ int kvs_resp_feed(struct conn* c) {
     // 所有参数解析完毕
     // 检查是否所有数据都已处理
     // fprintf(stderr, "c->parse_done: %zu    c->rlen: %zu\n", c->parse_done, c->rlen);
+    // fprintf(stderr, "state == OK: ==> parse done = %zu\n rlen = %zu\n", c->parse_done, c->rlen);
     if (c->parse_done >= c->rlen) {
       // 所有数据都已处理，重置 rlen 和 parse_done
       // c->rlen = 0;
       // c->parse_done = 0;
     
       // fprintf(stderr, "应该来这\n");
+      c->resp_state = ST_RESP_HDR;
+      c->rlen = c->parse_done = c->bulk_len = c->bulk_len = 0;
+      c->argc_done = 0;
       return RESP_PARSE_OK;
 
     } else {
@@ -343,5 +359,8 @@ int kvs_resp_feed(struct conn* c) {
     return RESP_CONTINUE_RECV;
 
   error:
+    c->rlen = c->parse_done = 0;
+    memset(c->rbuf, 0, IOP_SIZE);
+    c->resp_state = ST_RESP_HDR;
     return RESP_ERROR;
 }

@@ -98,12 +98,19 @@ int kvs_array_del(kvs_array_t *inst, robj* key) {
 
   // for (int i = 0; i < inst->total; i++) {
   for (int idx = 0; idx < KVS_ARRAY_SIZE; idx++) {
+    printf("-->1\n");
     if (inst->table[idx].key) {
       if (!strcmp(key->ptr, inst->table[idx].key)) {
+        printf("-->2\n");
+
+        if (inst->table[idx].key) printf("-->3\n");
         kvs_free(inst->table[idx].key); // set的时候calloc, del的时候 free
         inst->table[idx].key = NULL;  // free 后置空
+
+        if (inst->table[idx].value) printf("-->4\n");
         kvs_free(inst->table[idx].value); 
         inst->table[idx].value = NULL;
+
         inst->total--;
         return 0;
       }
@@ -147,7 +154,7 @@ int kvs_array_mod(kvs_array_t *inst, robj* key, robj* value) {
 /// @param key 
 /// @return 1 Yes | 0 No | -1 error
 int kvs_array_exist(kvs_array_t *inst, robj* key) { 
-  if (inst == NULL || key == NULL || key->ptr) return -1;
+  if (inst == NULL || key == NULL || key->ptr == NULL) return -1;
   return (kvs_array_get(inst, key) != NULL);
 
 }
