@@ -1,0 +1,24 @@
+{
+  "engines": [
+    "A",
+    "R",
+    "S",
+    "H"
+  ],
+  "commands": [
+    "SET",
+    "GET",
+    "MOD",
+    "DEL",
+    "EXIST"
+  ],
+  "count": 1,
+  "tests": [
+    {
+      "name": "nihao",
+      "key_expr": "b\"nihao\\x0aSchatten\\x00pig\"",
+      "value_expr": "\"nihao\"",
+      "engine_cmds": {}
+    }
+  ]
+}

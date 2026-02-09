@@ -1,0 +1,54 @@
+{
+  "engines": [
+    "A",
+    "R",
+    "S",
+    "H"
+  ],
+  "commands": [
+    "SET",
+    "GET",
+    "MOD",
+    "DEL",
+    "EXIST"
+  ],
+  "count": 6,
+  "tests": [
+    {
+      "name": "small_string",
+      "key_expr": "\"k1\"",
+      "value_expr": "\"v1\"",
+      "engine_cmds": {}
+    },
+    {
+      "name": "large_string",
+      "key_expr": "\"large_key\"",
+      "value_expr": "\"x\" * 10000",
+      "engine_cmds": {}
+    },
+    {
+      "name": "unicode",
+      "key_expr": "\"中文key\"",
+      "value_expr": "\"中文value 🎉\"",
+      "engine_cmds": {}
+    },
+    {
+      "name": "number_value",
+      "key_expr": "\"num_key\"",
+      "value_expr": "12345",
+      "engine_cmds": {}
+    },
+    {
+      "name": "special_chars",
+      "key_expr": "\"spec:key\"",
+      "value_expr": "\"val\\r\\nwith\\nlines\"",
+      "engine_cmds": {}
+    },
+    {
+      "name": "huge_key",
+      "key_expr": "\"k\" * 1000",
+      "value_expr": "\"huge_key_test\"",
+      "engine_cmds": {}
+    }
+  ]
+}
