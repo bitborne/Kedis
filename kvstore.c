@@ -75,9 +75,9 @@ enum {
   KVS_CMD_COUNT
 };
 
-// Global Lock and Context
-pthread_mutex_t global_kvs_lock = PTHREAD_MUTEX_INITIALIZER;
-__thread int current_processing_fd = -1;
+// // Global Lock and Context
+// pthread_mutex_t global_kvs_lock = PTHREAD_MUTEX_INITIALIZER;
+// __thread int current_processing_fd = -1;
 
 // 多引擎模式下的引擎实例定义
 #if ENABLE_MULTI_ENGINE
@@ -185,8 +185,6 @@ static int save_params_seconds = 300;    // 5分钟
 static int save_params_changes = 100;    // 100次变化
 static time_t last_save_time = 0;        // 上次保存时间
 static int changes_since_last_save = 0;  // 自上次保存以来的变化次数
-
-extern replication_state_t replication_info;
 
 /*
  * 检查命令是否为写操作
@@ -300,12 +298,12 @@ static void add_reply_exist(struct conn* c, int exists) {
 
 /* ---------------- 核心命令执行逻辑 ---------------- */
 int kvs_protocol(struct conn* c) {
-  pthread_mutex_lock(&global_kvs_lock);  // LOCK
+  // pthread_mutex_lock(&global_kvs_lock);  // LOCK
 
-  if (c->argc == 0) {
-    pthread_mutex_unlock(&global_kvs_lock);
-    return 0;
-  }
+  // if (c->argc == 0) {
+  //   pthread_mutex_unlock(&global_kvs_lock);
+  //   return 0;
+  // }
 
   // 提取命令参数
   // 注意：c->argv[i].ptr 已经是 null-terminated 的字符串 (我们在 kvs_resp_feed 里保证了)
@@ -348,9 +346,7 @@ int kvs_protocol(struct conn* c) {
       if (ret < 0) {
         add_reply_error(c, "ERROR");
       } else if (ret == 0) {
-        if (replication_info.is_master) {
-          appendToAofBufferToEngine(0, AOF_CMD_SET, key, value);
-        }
+        appendToAofBufferToEngine(0, AOF_CMD_SET, key, value);
         add_reply_status(c, "OK");
       } else {
          add_reply_error(c, "Key has existed");
@@ -370,9 +366,7 @@ int kvs_protocol(struct conn* c) {
       if (ret < 0) {
         add_reply_error(c, "ERROR");
       } else if (ret == 0) {
-        // if (replication_info.is_master) {
         appendToAofBufferToEngine(0, AOF_CMD_DEL, key, NULL);
-        // }
         add_reply_status(c, "OK");
       } else {
         add_reply_error(c, "ERROR / Not Exist");
@@ -383,9 +377,7 @@ int kvs_protocol(struct conn* c) {
       if (ret < 0) {
          add_reply_error(c, "ERROR");
       } else if (ret == 0) {
-        if (replication_info.is_master) {
-          appendToAofBufferToEngine(0, AOF_CMD_MOD, key, value);
-        }
+        appendToAofBufferToEngine(0, AOF_CMD_MOD, key, value);
         add_reply_status(c, "OK");
       } else {
         add_reply_error(c, "Not Exist");
@@ -408,9 +400,7 @@ int kvs_protocol(struct conn* c) {
       if (ret < 0) {
          add_reply_error(c, "ERROR");
       } else if (ret == 0) {
-        if (replication_info.is_master) {
-          appendToAofBufferToEngine(1, AOF_CMD_SET, key, value);
-        }
+        appendToAofBufferToEngine(1, AOF_CMD_SET, key, value);
         add_reply_status(c, "OK");
       } else {
         add_reply_error(c, "Key has existed");
@@ -429,9 +419,7 @@ int kvs_protocol(struct conn* c) {
       if (ret < 0) {
         add_reply_error(c, "ERROR");
       } else if (ret == 0) {
-        if (replication_info.is_master) {
-          appendToAofBufferToEngine(1, AOF_CMD_DEL, key, NULL);
-        }
+        appendToAofBufferToEngine(1, AOF_CMD_DEL, key, NULL);
         add_reply_status(c, "OK");
       } else {
         add_reply_error(c, "ERROR / Not Exist");
@@ -442,9 +430,7 @@ int kvs_protocol(struct conn* c) {
       if (ret < 0) {
         add_reply_error(c, "ERROR");
       } else if (ret == 0) {
-        if (replication_info.is_master) {
-          appendToAofBufferToEngine(1, AOF_CMD_MOD, key, value);
-        }
+        appendToAofBufferToEngine(1, AOF_CMD_MOD, key, value);
         add_reply_status(c, "OK");
       } else {
         add_reply_error(c, "Not Exist");
@@ -467,9 +453,7 @@ int kvs_protocol(struct conn* c) {
       if (ret < 0) {
         add_reply_error(c, "ERROR");
       } else if (ret == 0) {
-        if (replication_info.is_master) {
-          appendToAofBufferToEngine(2, AOF_CMD_SET, key, value);
-        }
+        appendToAofBufferToEngine(2, AOF_CMD_SET, key, value);
         add_reply_status(c, "OK");
       } else {
         add_reply_error(c, "Key has existed");
@@ -488,9 +472,7 @@ int kvs_protocol(struct conn* c) {
       if (ret < 0) {
         add_reply_error(c, "ERROR");
       } else if (ret == 0) {
-        if (replication_info.is_master) {
-          appendToAofBufferToEngine(2, AOF_CMD_DEL, key, NULL);
-        }
+        appendToAofBufferToEngine(2, AOF_CMD_DEL, key, NULL);
         add_reply_status(c, "OK");
       } else {
         add_reply_error(c, "ERROR / Not Exist");
@@ -501,9 +483,7 @@ int kvs_protocol(struct conn* c) {
       if (ret < 0) {
         add_reply_error(c, "ERROR");
       } else if (ret == 0) {
-        if (replication_info.is_master) {
-          appendToAofBufferToEngine(2, AOF_CMD_MOD, key, value);
-        }
+        appendToAofBufferToEngine(2, AOF_CMD_MOD, key, value);
         add_reply_status(c, "OK");
       } else {
         add_reply_error(c, "Not Exist");
@@ -524,9 +504,7 @@ int kvs_protocol(struct conn* c) {
       if (ret < 0) {
         add_reply_error(c, "ERROR");
       } else if (ret == 0) {
-        if (replication_info.is_master) {
-          appendToAofBufferToEngine(3, AOF_CMD_SET, key, value);
-        }
+        appendToAofBufferToEngine(3, AOF_CMD_SET, key, value);
         add_reply_status(c, "OK");
       } else {
         add_reply_error(c, "Key has existed");
@@ -545,9 +523,7 @@ int kvs_protocol(struct conn* c) {
       if (ret < 0) {
         add_reply_error(c, "ERROR");
       } else if (ret == 0) {
-        if (replication_info.is_master) {
-          appendToAofBufferToEngine(3, AOF_CMD_DEL, key, NULL);
-        }
+        appendToAofBufferToEngine(3, AOF_CMD_DEL, key, NULL);
         add_reply_status(c, "OK");
       } else {
         add_reply_error(c, "ERROR / Not Exist");
@@ -558,9 +534,7 @@ int kvs_protocol(struct conn* c) {
       if (ret < 0) {
         add_reply_error(c, "ERROR");
       } else if (ret == 0) {
-        if (replication_info.is_master) {
-          appendToAofBufferToEngine(3, AOF_CMD_MOD, key, value);
-        }
+        appendToAofBufferToEngine(3, AOF_CMD_MOD, key, value);
         add_reply_status(c, "OK");
       } else {
         add_reply_error(c, "Not Exist");
@@ -582,9 +556,7 @@ int kvs_protocol(struct conn* c) {
       if (ret < 0) {
         add_reply_error(c, "ERROR");
       } else if (ret == 0) {
-        if (replication_info.is_master) {
-          appendToAofBuffer(AOF_CMD_SET, key, value);
-        }
+        appendToAofBuffer(AOF_CMD_SET, key, value);
         add_reply_status(c, "OK");
       } else {
         add_reply_error(c, "Key has existed");
@@ -603,9 +575,7 @@ int kvs_protocol(struct conn* c) {
       if (ret < 0) {
         add_reply_error(c, "ERROR");
       } else if (ret == 0) {
-        if (replication_info.is_master) {
-          appendToAofBuffer(AOF_CMD_DEL, key, NULL);
-        }
+        appendToAofBuffer(AOF_CMD_DEL, key, NULL);
         add_reply_status(c, "OK");
       } else {
         add_reply_error(c, "Not Exist");
@@ -616,9 +586,7 @@ int kvs_protocol(struct conn* c) {
       if (ret < 0) {
         add_reply_error(c, "ERROR");
       } else if (ret == 0) {
-        if (replication_info.is_master) {
-          appendToAofBuffer(AOF_CMD_MOD, key, value);
-        }
+        appendToAofBuffer(AOF_CMD_MOD, key, value);
         add_reply_status(c, "OK");
       } else {
         add_reply_error(c, "Not Exist");
@@ -651,15 +619,17 @@ int kvs_protocol(struct conn* c) {
       add_reply_status(c, "Background saving started");
       break;
     case KVS_CMD_SYNC:
-      if (handle_sync_command(current_processing_fd) == 0) {
+      fprintf(stderr, "SYNC 命令暂未实现\n");
+      add_reply_error(c, "SYNC 命令暂未实现");
+      // if (handle_sync_command(current_processing_fd) == 0) {
         // SYNC 处理可能特殊，暂不做修改，或者假设 handle_sync_command 自己写了 fd？
         // 原始代码: return 0; // Response sent by handler
         // 这里保持原样
-        pthread_mutex_unlock(&global_kvs_lock);
-        return 0;
-      } else {
-        add_reply_error(c, "ERROR SYNC");
-      }
+        // pthread_mutex_unlock(&global_kvs_lock);
+      return 0;
+      // } else {
+      //   add_reply_error(c, "ERROR SYNC");
+      // }
       break;
     default:
       add_reply_error(c, "UNKNOWN COMMAND");
@@ -671,7 +641,7 @@ int kvs_protocol(struct conn* c) {
   }
   
   check_and_perform_autosave();
-  pthread_mutex_unlock(&global_kvs_lock);  // UNLOCK
+  // pthread_mutex_unlock(&global_kvs_lock);  // UNLOCK
   
   // fprintf(stderr, "c->wlen == %d\n", c->wlen);
   return c->wlen;
@@ -714,7 +684,7 @@ int init_kvengine(void) {
 
 void dest_kvengine(void) {
 #if ENABLE_MULTI_ENGINE
-  if (replication_info.is_master) ksfSaveAll();
+  ksfSaveAll();
 // 多引擎模式：销毁所有引擎
 #if ENABLE_RBTREE
   kvs_rbtree_destroy(&rbtree_engine);
@@ -729,7 +699,7 @@ void dest_kvengine(void) {
   kvs_skiplist_destroy(&skiplist_engine);
 #endif
 #else
-  if (replication_info.is_master) ksfSave(snap_filename);
+  ksfSave(snap_filename);
   // 单引擎模式：只销毁一个引擎
   kvs_main_destroy(&global_main_engine);
 #endif
@@ -749,24 +719,24 @@ void signal_handler(int sig) {
 }
 
 int main(int argc, char* argv[]) {
-  if (argc < 2) {
-    printf("Usage: %s <port> [aof|snap] [--slaveof ip port]\n", argv[0]);
+  if (argc < 3) {
+    printf("Usage: %s <port> [aof|snap]\n", argv[0]);
     return -1;
   }
 
   int port = atoi(argv[1]);
-  char* master_ip = NULL;
-  int master_port = 0;
+  // char* master_ip = NULL;
+  // int master_port = 0;
 
   // Arg parsing
   for (int i = 2; i < argc; i++) {
-    if (strcmp(argv[i], "--slaveof") == 0) {
-      if (i + 2 < argc) {
-        master_ip = argv[i + 1];
-        master_port = atoi(argv[i + 2]);
-        i += 2;
-      }
-    } else if (strcmp(argv[i], "aof") == 0) {
+    // if (strcmp(argv[i], "--slaveof") == 0) {
+    //   if (i + 2 < argc) {
+    //     master_ip = argv[i + 1];
+    //     master_port = atoi(argv[i + 2]);
+    //     i += 2;
+    //   }
+    if (strcmp(argv[i], "aof") == 0) {
       load_mode = INIT_LOAD_AOF;
     } else if (strcmp(argv[i], "snap") == 0) {
       load_mode = INIT_LOAD_SNAP;
@@ -783,30 +753,28 @@ int main(int argc, char* argv[]) {
 
   init_kvengine();
 
-  if (master_ip != NULL) {
-    // SLAVE MODE
-    printf("Starting as SLAVE. Syncing with Master %s:%d...\n", master_ip,
-           master_port);
-    if (init_slave_replication(master_ip, master_port) != 0) {
-      fprintf(stderr, "Failed to sync with master. Exiting.\n");
-      return -1;
-    }
-  } else {
-    // MASTER MODE
+  // if (master_ip != NULL) {
+  //   // SLAVE MODE
+  //   printf("Starting as SLAVE. Syncing with Master %s:%d...\n", master_ip,
+  //          master_port);
+  //   // if (init_slave_replication(master_ip, master_port) != 0) {
+  //   //   fprintf(stderr, "Failed to sync with master. Exiting.\n");
+  //   //   return -1;
+  //   // }
+  // } else {
+  //   // MASTER MODE
     if (load_mode == INIT_LOAD_AOF) {
 #if ENABLE_MULTI_ENGINE
     #if ENABLE_MMAP
-      // fprintf(stderr, "1-->\n");
       aofLoadAll_mmap();
-      // fprintf(stderr, "2-->\n");
-      #else
+    #else
       aofLoadAll();
-      #endif
-      #else
+    #endif
+#else
       aofLoad(aof_filename);
-      #endif
+    #endif
     } else if (load_mode == INIT_LOAD_SNAP) {
-      #if ENABLE_MULTI_ENGINE
+#if ENABLE_MULTI_ENGINE
       #if ENABLE_MMAP
       // fprintf(stderr, "3-->\n");
       ksfLoadAll_mmap();
@@ -818,7 +786,7 @@ int main(int argc, char* argv[]) {
       ksfLoad(snap_filename);
 #endif
     }
-  }
+  // }
 
   start_aof_fsync_process();
 

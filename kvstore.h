@@ -302,10 +302,6 @@ typedef struct {
 int mmap_append(int fd, const char* filename, char *data, size_t n);
 */
 
-// 流式发送相关函数声明
-extern void reset_streaming_send(struct conn* c);
-extern int init_streaming_send(struct conn* c, const char* data, size_t len);
-
 // KSF持久化相关函数声明
 /* 已移至 include/kvs_ksf.h
 int ksfSave(const char *filename);  // 保存KSF快照
@@ -335,55 +331,55 @@ void appendToAofBufferToEngine(int engine_type, int type, const char* key, const
 */
 
 // 复制相关函数声明
-int handle_sync_command(int fd);
-int init_slave_replication(const char* master_host, int master_port);
-int slave_state_machine();
-void replication_send_aof_loop();
-void check_and_cleanup_replication_clients();
+// int handle_sync_command(int fd);
+// int init_slave_replication(const char* master_host, int master_port);
+// int slave_state_machine();
+// void replication_send_aof_loop();
+// void check_and_cleanup_replication_clients();
 
-// 从节点状态结构定义
-typedef enum {
-    REPL_STATE_CONNECTING = 0,
-    REPL_STATE_LOADING_KSF,
-    REPL_STATE_REPLAYING_AOF,
-    REPL_STATE_CONNECTED
-} repl_state_t;
+// // 从节点状态结构定义
+// typedef enum {
+//     REPL_STATE_CONNECTING = 0,
+//     REPL_STATE_LOADING_KSF,
+//     REPL_STATE_REPLAYING_AOF,
+//     REPL_STATE_CONNECTED
+// } repl_state_t;
 
-typedef struct slave_state {
-    repl_state_t state;
-    char master_host[256];
-    int master_port;
-    int master_fd;
-    time_t last_reconnect_time;
-    off_t current_aof_offset;
-    int is_loading_snapshot;
-    char *temp_ksf_file;
-} slave_state_t;
+// typedef struct slave_state {
+//     repl_state_t state;
+//     char master_host[256];
+//     int master_port;
+//     int master_fd;
+//     time_t last_reconnect_time;
+//     off_t current_aof_offset;
+//     int is_loading_snapshot;
+//     char *temp_ksf_file;
+// } slave_state_t;
 
-// 复制客户端结构定义
-typedef struct replication_client {
-    int fd;
-    repl_state_t state;
-    time_t last_io_time;
-    off_t sent_aof_offset;
-    off_t acked_aof_offset;
-    struct replication_client *next;
-} replication_client_t;
+// // 复制客户端结构定义
+// typedef struct replication_client {
+//     int fd;
+//     repl_state_t state;
+//     time_t last_io_time;
+//     off_t sent_aof_offset;
+//     off_t acked_aof_offset;
+//     struct replication_client *next;
+// } replication_client_t;
 
-typedef struct replication_state {
-    int is_master;
-    char **slave_list;
-    int slave_count;
-    replication_client_t *slaves;
-    pthread_mutex_t lock;
-    off_t aof_keep_size;
-} replication_state_t;
+// typedef struct replication_state {
+//     int is_master;
+//     char **slave_list;
+//     int slave_count;
+//     replication_client_t *slaves;
+//     pthread_mutex_t lock;
+//     off_t aof_keep_size;
+// } replication_state_t;
 
-extern replication_state_t replication_info;
-extern slave_state_t slave_info;
+// extern replication_state_t replication_info;
+// extern slave_state_t slave_info;
 
-extern pthread_mutex_t global_kvs_lock;
-extern __thread int current_processing_fd;
-void replication_feed_slaves(const char *cmd);
+// extern pthread_mutex_t global_kvs_lock;
+// extern __thread int current_processing_fd;
+// void replication_feed_slaves(const char *cmd);
 
 #endif

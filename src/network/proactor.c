@@ -36,7 +36,7 @@ static msg_handler g_kvs_handler;     // KV 协议处理器
 
 /* ---------------- 外部函数声明 ---------------- */
 extern void before_sleep(void);
-extern __thread int current_processing_fd;
+// extern __thread int current_processing_fd;
 
 /* ---------------- 连接池管理 ---------------- */
 static void conn_pool_init(struct conn_pool* pool, int max_conns) {
