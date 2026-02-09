@@ -5,24 +5,6 @@
 #include "../../include/kvs_protocol.h"
 #include "../../kvstore.h"
 
-/* ---------------- 从 proactor.c 迁移过来的 RESP 协议解析逻辑 ----------------
- */
-/*
-int fd;         // TCP 套接字
-int state;      // io_uring 状态：ST_RECV / ST_SEND / ST_CLOSE
-int next_free;  // 空闲链表中的下一个连接索引
-
-char rbuf[IOP_SIZE];  // 读缓冲区（16 KB）
-size_t rlen;             // 缓冲区内有效数据长度
-size_t parse_done;       // 缓冲区内已解析长度
-
-resp_state_t resp_state;
-size_t bulk_len;        // 当前段长度 (需要读取的长度)
-char* bulk_data;
-int argc;    // 期望的参数个数 (argc)
-robj argv[MAX_ARGC];  // 命令段数组 (每个 ptr 都需要 malloc)
-size_t bulk_done;   // 当前 bulk 已解析长度
- */
 void kvs_resp_reset(struct conn* c) {
   c->rlen = 0;                  // 重置读缓冲区有效数据长度
   c->wlen = c->bulk_sent = 0;       // 重置写缓冲区长度和已发送长度
@@ -208,7 +190,7 @@ int kvs_resp_feed(struct conn* c) {
           
           memcpy(c->argv[c->argc_done].ptr + c->bulk_done,
             c->rbuf + c->parse_done, cp);
-          }
+        }
           
           // fprintf(stderr, "bulk_done1 == %d\n", c->bulk_done);
           // 更新 bulk_done（已接收的 bulk data 长度）
@@ -240,7 +222,7 @@ int kvs_resp_feed(struct conn* c) {
             c->rbuf[c->parse_done + 1] != '\n') {
               fprintf(stderr, "[ERROR] bulk should end with \\r\\n\n");
               goto error;  // 协议错误：缺少 \r\n
-            }
+          }
           // fprintf(stderr, "data:--> 3\n");
             
           // 跳过 \r\n（2 字节）
@@ -257,6 +239,7 @@ int kvs_resp_feed(struct conn* c) {
             // 处理粘包, 让下一条命令先留在缓冲区 memmove到开头
             // fprintf(stderr, "OK==rbuf: %*s\nparse_>done后: %*s\n", IOP_SIZE, c->rbuf, IOP_SIZE - c->parse_done, c->rbuf + c->parse_done);
             if (c->parse_done < c->rlen) {  
+              // fprintf(stderr, "[循环内]判断出了有粘包\n");
               size_t remaining = c->rlen - c->parse_done;
               memmove(c->rbuf, c->rbuf + c->parse_done, remaining);
               memset(c->rbuf + remaining, 0, c->rlen - remaining);
@@ -309,9 +292,16 @@ int kvs_resp_feed(struct conn* c) {
     } else {
       // 还有未解析的数据（例如：一条命令解析完毕，但 rbuf 中还有下一条命令的部分数据）
       // 移动未解析的数据到 rbuf 开头
-      
-        // fprintf(stderr, "不应该来这啊,你不可能出循环的!\n");
-        goto error;
+      // 粘包才走这里( rlen = remaining, parse_done = 0 )
+        // fprintf(stderr, "[循环外]确实出现粘包!\n");
+        // [原本以为走到这个分支是不可能的, 故原本`go to error`]
+        // [但实际,如果粘包,确实会走在这个分支] 
+        // goto error;
+        c->resp_state = ST_RESP_HDR;
+        c->argc_done = 0;
+        // rlen, parse_done, 在循环内判断出粘包的时候已初始化;
+        return RESP_PARSE_OK;
+
       // size_t remaining = c->rlen - c->parse_done;
       // memmove(c->rbuf, c->rbuf + c->parse_done, remaining);
       // c->rlen = remaining;
