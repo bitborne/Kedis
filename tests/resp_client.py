@@ -1,75 +1,64 @@
 import socket
 import struct
 
-
 class RawRedisClient:
-    """原始 RESP 协议客户端，精确控制每个字节"""
+    """优化后的原始 RESP 协议客户端，使用带缓冲的读取以提升性能"""
     
     def __init__(self, host='localhost', port=6379):
         self.host = host
         self.port = port
         self.sock = None
+        self.reader = None # 缓冲读取器
     
     def connect(self):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.connect((self.host, self.port))
+        # 核心优化：使用 makefile 创建一个带缓冲的二进制文件对象
+        # 默认缓冲区通常为 8KB，能极大减少 recv 系统调用
+        self.reader = self.sock.makefile('rb')
         return self
     
     def close(self):
+        if self.reader:
+            self.reader.close()
+            self.reader = None
         if self.sock:
             self.sock.close()
             self.sock = None
     
     def encode_bulk_string(self, s):
-        """编码 Bulk String，支持 str/bytes/int/float"""
-        # 统一转成字符串处理
+        """编码 Bulk String"""
         if isinstance(s, bytes):
             data = s
         else:
-            # int, float 等先转 str
             data = str(s).encode('utf-8')
-        
         length = len(data)
         return f"${length}\r\n".encode('utf-8') + data + b"\r\n"
     
     def encode_array(self, *args):
-        """编码 RESP 数组: *数量\r\n$长度\r\n内容\r\n..."""
-        # *数量\r\n
+        """编码 RESP 数组"""
         result = f"*{len(args)}\r\n".encode('utf-8')
-        
-        # 每个参数作为 Bulk String
         for arg in args:
             result += self.encode_bulk_string(arg)
-        
         return result
     
     def send_raw(self, data_bytes):
-        """发送原始字节，确保完全发送"""
-        total_sent = 0
-        while total_sent < len(data_bytes):
-            sent = self.sock.send(data_bytes[total_sent:])
-            if sent == 0:
-                raise ConnectionError("Socket connection broken")
-            total_sent += sent
-        return total_sent
+        """发送原始字节"""
+        self.sock.sendall(data_bytes)
     
     def recv_response(self):
-        """接收并解析 RESP 响应（简单实现）"""
-        # 先读取第一个字节判断类型
-        type_byte = self.sock.recv(1)
-        if not type_byte:
+        """高效接收并解析 RESP 响应"""
+        if not self.reader:
+            return None
+            
+        # 1. 使用 readline 一次性读取类型和长度/内容行，不再使用 recv(1)
+        line = self.reader.readline()
+        if not line:
             return None
         
-        # 读取到 \r\n 结束的第一行
-        line = type_byte
-        while not line.endswith(b'\r\n'):
-            chunk = self.sock.recv(1)
-            if not chunk:
-                break
-            line += chunk
-        
         resp_type = chr(line[0])
-        content = line[1:-2].decode('utf-8')  # 去掉类型和\r\n
+        # 去掉前面的类型字符和末尾的 \r\n
+        content = line[1:-2].decode('utf-8', errors='replace')
         
         if resp_type == '+':  # Simple String
             return ("simple_string", content)
@@ -80,90 +69,47 @@ class RawRedisClient:
         elif resp_type == '$':  # Bulk String
             length = int(content)
             if length == -1:
-                return ("bulk_string", None)  # null
-            # 读取 length + 2 (\r\n)
-            data = b''
-            while len(data) < length + 2:
-                data += self.sock.recv(length + 2 - len(data))
-            return ("bulk_string", data[:-2].decode('utf-8'))
+                return ("bulk_string", None)
+            # 2. 已知长度，直接从缓冲区读取固定字节
+            data = self.reader.read(length)
+            self.reader.read(2)  # 跳过末尾的 \r\n
+            return ("bulk_string", data.decode('utf-8', errors='replace'))
         elif resp_type == '*':  # Array
             count = int(content)
             if count == -1:
                 return ("array", None)
-            elements = []
-            for _ in range(count):
-                elements.append(self.recv_response())
-            return ("array", elements)
+            return ("array", [self.recv_response() for _ in range(count)])
         
         return ("unknown", line)
     
     def execute(self, *args):
-        """执行命令，args 为命令和参数"""
-        # 构造 RESP 数组
+        """执行命令"""
         data = self.encode_array(*args)
-        
-        # 打印即将发送的原始字节（调试用）
-        print("Sending raw bytes:")
-        print(repr(data))
-        # print("Hex dump:")
-        # print(data.hex(' '))
-        
-        # 发送
         self.send_raw(data)
-        
-        # 接收响应
+        # 移除调试打印，避免在高性能测试中产生额外开销
         return self.recv_response()
 
 def eval_input(prompt):
-
-  user_input = input(prompt)
-  if not user_input:
-      return None  # 空输入表示None
-
-  # 安全地执行简单的字符串乘法
-  # 只允许字符串和数字的*运算
-  try:
-      # 尝试eval，但限制环境
-      result = eval(user_input, {"__builtins__": {}}, {})
-      return result
-  except:
-      # 如果eval失败，就当普通字符串返回
-      return user_input
-# ============ 使用示例 ============
+    user_input = input(prompt)
+    if not user_input: return None
+    try:
+        return eval(user_input, {"__builtins__": {}}, {})
+    except:
+        return user_input
 
 if __name__ == "__main__":
+    # 保持原有示例逻辑
     port = int(input("输入端口号: "))
-    client = RawRedisClient('172.20.10.2', port)
+    client = RawRedisClient('127.0.0.1', port)
     client.connect()
-    
     try:
         while True:
-            # 输入命令
             cmd = input("\n命令 (或quit退出): ").strip()
-            if cmd.lower() in ('quit', 'q', 'exit'):
-                break
-            
-            # 输入key，支持运算
-            key = eval_input("key (支持如 'a'*3): ")
-            if key is None:
-                print("key不能为空")
-                continue
-            
-            # 输入value，支持运算，空表示只有2个参数
-            value = eval_input("value (回车跳过，支持如 'b'*4): ")
-            
-            # 构造参数列表
-            if value is None:
-                args = [cmd, key]
-                print(f"执行: {cmd} {key!r} (2参数)")
-            else:
-                args = [cmd, key, value]
-                print(f"执行: {cmd} {key!r} {value!r} (3参数)")
-            
-            # 执行并打印结果
-            result = client.execute(*args)
-            print(f"响应: {result}")
-            
+            if cmd.lower() in ('quit', 'q', 'exit'): break
+            key = eval_input("key: ")
+            if key is None: continue
+            value = eval_input("value (回车跳过): ")
+            args = [cmd, key] if value is None else [cmd, key, value]
+            print(f"响应: {client.execute(*args)}")
     finally:
         client.close()
-        print("已断开连接")
