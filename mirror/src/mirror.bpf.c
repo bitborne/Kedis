@@ -58,7 +58,7 @@ int mirror_forward(struct __sk_buff *skb)
     
     __u32 payload_len = skb->len - data_offset;
     if (payload_len == 0) return 0;
-    // 限制最大处理长度，防止验证器爆炸
+    // 限制最大处理长度，防止验证器爆炸 (不这么做)
     // if (payload_len > 2560) payload_len = 2560;
 
     // 发送 Header
@@ -81,7 +81,6 @@ int mirror_forward(struct __sk_buff *skb)
         __u32 chunk_len = remaining;
         if (chunk_len > CHUNK_SIZE) chunk_len = CHUNK_SIZE;
 
-        // --- 【最终修复逻辑】 ---
         // 1. 即使验证器不确定 chunk_len 的最小边界
         // 2. 我们通过 (len - 1) & 0xFF 确保结果在 0-255
         // 3. 再 + 1，确保结果在 1-256

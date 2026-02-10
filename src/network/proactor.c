@@ -12,8 +12,6 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
-// [DEBUG]
-int g_100 = 0;
 #include "../../include/kvs_protocol.h"
 #include "../../kvstore.h"
 

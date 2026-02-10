@@ -52,3 +52,4 @@ mirror/.output/
 ebpf_example/
 vmlinux.h
 *.log
+report_hybrid_*
