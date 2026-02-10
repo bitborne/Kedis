@@ -18,36 +18,42 @@
       "name": "small_string",
       "key_expr": "\"k1\"",
       "value_expr": "\"v1\"",
+      "mod_value_expr": "\"v1_mod\"",
       "engine_cmds": {}
     },
     {
       "name": "large_string",
       "key_expr": "\"large_key\"",
       "value_expr": "\"x\" * 10000",
+      "mod_value_expr": "\"y\" * 10000",
       "engine_cmds": {}
     },
     {
       "name": "unicode",
       "key_expr": "\"中文key\"",
       "value_expr": "\"中文value 🎉\"",
+      "mod_value_expr": "\"修改后的中文 🎉\"",
       "engine_cmds": {}
     },
     {
       "name": "number_value",
       "key_expr": "\"num_key\"",
       "value_expr": "12345",
+      "mod_value_expr": "99999",
       "engine_cmds": {}
     },
     {
       "name": "special_chars",
       "key_expr": "\"spec:key\"",
       "value_expr": "\"val\\r\\nwith\\nlines\"",
+      "mod_value_expr": "\"new\\r\\nval\"",
       "engine_cmds": {}
     },
     {
       "name": "huge_key",
       "key_expr": "\"k\" * 1000",
       "value_expr": "\"huge_key_test\"",
+      "mod_value_expr": "\"huge_key_mod\"",
       "engine_cmds": {}
     }
   ]
