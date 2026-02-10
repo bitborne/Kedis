@@ -1,3 +1,9 @@
 [submodule "NtyCo"]
 	path = NtyCo
 	url = https://github.com/wangbojing/NtyCo.git
+[submodule "mirror/libbpf"]
+	path = mirror/libbpf
+	url = https://github.com/libbpf/libbpf.git
+[submodule "mirror/bpftool"]
+	path = mirror/bpftool
+	url = https://github.com/libbpf/bpftool.git

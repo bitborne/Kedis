@@ -47,3 +47,8 @@ test_large_packet_30k
 test_streaming_recv
 debug_streaming
 __pycache__/
+mirror/src/mirror
+mirror/.output/
+ebpf_example/
+vmlinux.h
+*.log

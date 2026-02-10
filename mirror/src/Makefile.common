@@ -1,0 +1,91 @@
+# SPDX-License-Identifier: (LGPL-2.1 OR BSD-2-Clause)
+# mirror 项目公共构建规则
+
+.DEFAULT_GOAL := all
+
+CLANG      ?= clang
+LLVM_STRIP ?= llvm-strip
+CC         ?= cc
+
+# 根目录指向 mirror/
+ROOT_DIR  := $(abspath ..)
+OUTPUT    := $(ROOT_DIR)/.output
+PROJECT   := $(notdir $(CURDIR))
+
+LIBBPF_OBJ := $(OUTPUT)/libbpf.a
+BPFTOOL    := $(OUTPUT)/bpftool/bootstrap/bpftool
+
+ARCH := $(shell uname -m | sed 's/x86_64/x86/' \
+                         | sed 's/aarch64/arm64/' \
+                         | sed 's/ppc64le/powerpc/' \
+                         | sed 's/mips.*/mips/' \
+                         | sed 's/^arm(v[0-9].*)?/arm/' \
+                         | sed 's/riscv64/riscv/')
+
+VMLINUX_DIR := $(ROOT_DIR)/vmlinux/$(ARCH)
+VMLINUX_H   := $(VMLINUX_DIR)/vmlinux.h
+
+# 搜索路径
+INCLUDES := -I$(OUTPUT) -I$(ROOT_DIR)/libbpf/include/uapi -I$(VMLINUX_DIR)
+CFLAGS := -g -Wall
+ALL_LDFLAGS := $(LDFLAGS) $(EXTRA_LDFLAGS)
+
+CLANG_BPF_SYS_INCLUDES := $(shell $(CLANG) -v -E - </dev/null 2>&1 \
+    | sed -n '/<...> search starts here:/,/End of search list./{ s| \(/.*\)|-idirafter \1|p }')
+
+ifeq ($(V),1)
+    Q =
+    msg = @true
+else
+    Q = @
+    msg = @printf '  %-8s %s%s\n' "$(1)" "$(notdir $(2))" "$(if $(3), $(3))";
+endif
+
+$(OUTPUT):
+	$(call msg,MKDIR,$@)
+	$(Q)mkdir -p $@
+
+# 编译 BPF 字节码
+$(OUTPUT)/%.bpf.o: %.bpf.c $(wildcard %.h) $(VMLINUX_H) | $(OUTPUT)
+	$(call msg,BPF,$@)
+	$(Q)$(CLANG) -g -O2 -target bpf -D__TARGET_ARCH_$(ARCH) \
+		$(INCLUDES) $(CLANG_BPF_SYS_INCLUDES) -c $(filter %.c,$^) -o $@
+	$(Q)$(LLVM_STRIP) -g $@
+
+# 生成 BPF Skeleton
+$(OUTPUT)/%.skel.h: $(OUTPUT)/%.bpf.o | $(OUTPUT)
+	$(call msg,GEN-SKEL,$@)
+	$(Q)$(BPFTOOL) gen skeleton $< > $@
+
+# 编译用户态对象文件
+$(OUTPUT)/%.o: %.c $(wildcard %.h) | $(OUTPUT)
+	$(call msg,CC,$@)
+	$(Q)$(CC) $(CFLAGS) $(INCLUDES) -c $(filter %.c,$^) -o $@
+
+# 用户态代码依赖于 Skeleton
+ifndef NO_SKELETON
+$(patsubst %,$(OUTPUT)/%.o,$(APPS)): $(OUTPUT)/%.o: $(OUTPUT)/%.skel.h
+endif
+
+# 链接最终二进制文件
+$(APPS): %: $(OUTPUT)/%.o $(EXTRA_OBJS) $(LIBBPF_OBJ) | $(OUTPUT)
+	$(call msg,BINARY,$@)
+	$(Q)$(CC) $(CFLAGS) $^ $(ALL_LDFLAGS) -lelf -lz -o $@
+
+.PHONY: all clean check-prebuild
+
+check-prebuild:
+	@if [ ! -f "$(LIBBPF_OBJ)" ] || [ ! -f "$(BPFTOOL)" ]; then \
+		echo "错误: 请先在 mirror 根目录执行 'make prebuild'"; \
+		exit 1; \
+	fi
+
+all: check-prebuild $(APPS)
+
+clean:
+	$(call msg,CLEAN,$(PROJECT))
+	$(Q)rm -f $(foreach app,$(APPS),$(OUTPUT)/$(app).o $(OUTPUT)/$(app).bpf.o $(OUTPUT)/$(app).skel.h $(app))
+
+.DELETE_ON_ERROR:
+.SECONDARY:
+MAKEFLAGS += --no-print-directory
