@@ -1,4 +1,4 @@
-#include "include/kvstore.h"
+#include "../../include/kvstore.h"
 
 #include <assert.h>
 #include <fcntl.h>
@@ -14,9 +14,9 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "include/memory_pool.h"
-#include "include/kvs_protocol.h"
-#include "include/kvs_network.h"
+#include "../../include/memory_pool.h"
+#include "../../include/kvs_protocol.h"
+#include "../../include/kvs_network.h"
 
 // jemalloc头文件
 #ifdef HAVE_JEMALLOC

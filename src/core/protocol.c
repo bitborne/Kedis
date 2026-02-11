@@ -285,7 +285,7 @@ int kvs_resp_feed(struct conn* c) {
     
       // fprintf(stderr, "应该来这\n");
       c->resp_state = ST_RESP_HDR;
-      c->rlen = c->parse_done = c->bulk_len = c->bulk_len = 0;
+      c->rlen = c->parse_done = c->bulk_len = 0;
       c->argc_done = 0;
       return RESP_PARSE_OK;
 

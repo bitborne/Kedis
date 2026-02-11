@@ -963,7 +963,7 @@ static int aofLoadToEngine(const char* filename, int engine_type) {
     }
 
     // 根据引擎类型和命令类型执行相应的操作
-    int result = 0;
+    // int result = 0;  // unused variable
     switch (cmd_type) {
       case AOF_CMD_SET:
 #if ENABLE_MULTI_ENGINE

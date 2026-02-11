@@ -38,23 +38,6 @@ typedef struct {
     const char* exist_cmd;
 } engine_ops_t;
 
-
-/* ==================== 引擎定义 ==================== */
-static const engine_ops_t g_engines[] = {
-  {"Array", "ASET", "AGET", "ADEL", "AMOD", "AEXIST"},
-  {"Hash", "HSET", "HGET", "HDEL", "HMOD", "HEXIST"},
-  {"Rbtree", "RSET", "RGET", "RDEL", "RMOD", "REXIST"},
-  {"Skiplist", "SSET", "SGET", "SDEL", "SMOD", "SEXIST"}
-};
-
-static const int g_engine_count = sizeof(g_engines) / sizeof(g_engines[0]);
-
-/* ==================== 全局变量 ==================== */
-
-static test_config_t g_config;
-static test_stats_t g_stats = {0};
-
-
 // testcase.c
 int connect_server(const char *ip, unsigned short port);
 int send_msg(int connfd, const char* msg, int length);

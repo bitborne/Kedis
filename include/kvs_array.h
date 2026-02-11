@@ -4,7 +4,7 @@
 #include "kvs_constants.h"
 #include "kvs_network.h"
 #if ENABLE_ARRAY
-  #define KVS_ARRAY_SIZE 16384
+  #define KVS_ARRAY_SIZE 1024 * 1024
 
   // 元素
   typedef struct kvs_array_item {

@@ -335,7 +335,7 @@ void rbtree_traversal(rbtree* T, rbtree_node* node) {
     rbtree_traversal(T, node->left);
 
 #if ENABLE_KEY_CHAR
-    printf("key:%s, value:%s\n", node->key, node->value);
+    // printf("key:%s, value:%s\n", node->key, node->value);
 #else
     printf("key:%d, color:%d\n", node->key, node->color);
 #endif

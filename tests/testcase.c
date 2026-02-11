@@ -10,6 +10,21 @@
 #include <unistd.h>
 #include <time.h>
 
+/* ==================== 全局变量 ==================== */
+
+test_config_t g_config;
+test_stats_t g_stats = {0};
+
+/* ==================== 引擎定义 ==================== */
+const engine_ops_t g_engines[] = {
+  {"Array", "ASET", "AGET", "ADEL", "AMOD", "AEXIST"},
+  {"Hash", "HSET", "HGET", "HDEL", "HMOD", "HEXIST"},
+  {"Rbtree", "RSET", "RGET", "RDEL", "RMOD", "REXIST"},
+  {"Skiplist", "SSET", "SGET", "SDEL", "SMOD", "SEXIST"}
+};
+
+const int g_engine_count = sizeof(g_engines) / sizeof(g_engines[0]);
+
 /* ==================== 网络层 ==================== */
 
 int connect_server(const char *ip, unsigned short port) {
@@ -49,7 +64,7 @@ int send_msg(int connfd, const char* msg, int length) {
 // 动态接收消息，支持大包
 char* recv_msg_dynamic(int connfd, int* length) {
     char buffer[MAX_MSG];
-    int total_received = 0;
+    // int total_received = 0;  // unused variable
     char* result = NULL;
     int result_size = 0;
     int expected_len = -1;  // -1 表示未知
@@ -409,42 +424,58 @@ void test_basic_crud(int connfd, const engine_ops_t* engine) {
     snprintf(test_value, sizeof(test_value), "%s_test_value", engine->name);
     snprintf(test_value2, sizeof(test_value2), "%s_test_value2", engine->name);
     
-    char cmd[128], expected[128];
     
+    char cmd[128], expected[128];
     // 1. SET
     snprintf(cmd, sizeof(cmd), "%s %s %s", engine->set_cmd, test_key, test_value);
     testcase(connfd, cmd, "OK\r\n", "Basic: SET operation");
     
+    memset(cmd, 0, 128);
+    memset(expected, 0, 128);
     // 2. GET
     snprintf(cmd, sizeof(cmd), "%s %s", engine->get_cmd, test_key);
     snprintf(expected, sizeof(expected), "%s\r\n", test_value);
     testcase(connfd, cmd, expected, "Basic: GET operation");
     
+    memset(cmd, 0, 128);
+    memset(expected, 0, 128);
     // 3. EXIST
     snprintf(cmd, sizeof(cmd), "%s %s", engine->exist_cmd, test_key);
     testcase(connfd, cmd, "YES, Exist\r\n", "Basic: EXIST operation");
     
+    memset(cmd, 0, 128);
+    memset(expected, 0, 128);
     // 4. MOD
     snprintf(cmd, sizeof(cmd), "%s %s %s", engine->mod_cmd, test_key, test_value2);
     testcase(connfd, cmd, "OK\r\n", "Basic: MOD operation");
     
+    memset(cmd, 0, 128);
+    memset(expected, 0, 128);
     // 5. GET after MOD
     snprintf(cmd, sizeof(cmd), "%s %s", engine->get_cmd, test_key);
     snprintf(expected, sizeof(expected), "%s\r\n", test_value2);
     testcase(connfd, cmd, expected, "Basic: GET after MOD");
     
+    memset(cmd, 0, 128);
+    memset(expected, 0, 128);
     // 6. DEL
     snprintf(cmd, sizeof(cmd), "%s %s", engine->del_cmd, test_key);
     testcase(connfd, cmd, "OK\r\n", "Basic: DEL operation");
     
+    memset(cmd, 0, 128);
+    memset(expected, 0, 128);
     // 7. EXIST after DEL
     snprintf(cmd, sizeof(cmd), "%s %s", engine->exist_cmd, test_key);
     testcase(connfd, cmd, "NO, Not Exist\r\n", "Basic: EXIST after DEL");
     
+    memset(cmd, 0, 128);
+    memset(expected, 0, 128);
     // 8. GET after DEL (should fail)
     snprintf(cmd, sizeof(cmd), "%s %s", engine->get_cmd, test_key);
     testcase(connfd, cmd, "ERROR / Not Exist\r\n", "Basic: GET after DEL (should fail)");
     
+    memset(cmd, 0, 128);
+    memset(expected, 0, 128);
     // 9. DEL non-existent key (should fail)
     snprintf(cmd, sizeof(cmd), "%s %s_non_existent", engine->del_cmd, test_key);
     testcase(connfd, cmd, "ERROR / Not Exist\r\n", "Basic: DEL non-existent key (should fail)");
@@ -454,7 +485,7 @@ void test_basic_crud(int connfd, const engine_ops_t* engine) {
 void test_special_chars(int connfd, const engine_ops_t* engine) {
     printf("\n  Testing %s Engine - Special Chars...\n", engine->name);
     
-    char cmd[MAX_MSG], expected[MAX_MSG];
+    char cmd[MAX_MSG];//, expected[MAX_MSG];  // unused variable
     
     // 测试包含空格的 key（使用引号包裹）
     snprintf(cmd, sizeof(cmd), "%s \"key with spaces\" value1", engine->set_cmd);
@@ -562,7 +593,7 @@ void test_large_data(int connfd, const engine_ops_t* engine) {
         snprintf(cmd, MAX_LARGE_MSG, "%s %s %s", engine->set_cmd, large_key_16k, large_value_16k);
         testcase(connfd, cmd, "OK\r\n", "Large: 16KB value SET");
         
-        memset(expected, 0, sizeof(expected));
+        memset(expected, 0, MAX_LARGE_MSG);
         snprintf(cmd, MAX_LARGE_MSG, "%s %s", engine->get_cmd, large_key_16k);
         sprintf(expected, "%s\r\n", large_value_16k);
         testcase(connfd, cmd, expected, "Large: 16KB value GET");
@@ -586,7 +617,7 @@ void test_large_data(int connfd, const engine_ops_t* engine) {
         snprintf(cmd, MAX_LARGE_MSG, "%s %s %s", engine->set_cmd, large_key_128k, large_value_128k);
         testcase(connfd, cmd, "OK\r\n", "Large: 128KB value SET");
         
-        memset(expected, 0, sizeof(expected));
+        memset(expected, 0, MAX_LARGE_MSG);
         snprintf(cmd, MAX_LARGE_MSG, "%s %s", engine->get_cmd, large_key_128k);
         sprintf(expected, "%s\r\n", large_value_128k);
         testcase(connfd, cmd, expected, "Large: 128KB value GET");
@@ -610,7 +641,7 @@ void test_large_data(int connfd, const engine_ops_t* engine) {
         snprintf(cmd, MAX_LARGE_MSG, "%s %s %s", engine->set_cmd, large_key_1m, large_value_1m);
         testcase(connfd, cmd, "OK\r\n", "Large: 1MB value SET");
         
-        memset(expected, 0, sizeof(expected));
+        memset(expected, 0, MAX_LARGE_MSG);
         snprintf(cmd, MAX_LARGE_MSG, "%s %s", engine->get_cmd, large_key_1m);
         sprintf(expected, "%s\r\n", large_value_1m);
         testcase(connfd, cmd, expected, "Large: 1MB value GET");
@@ -634,7 +665,7 @@ void test_large_data(int connfd, const engine_ops_t* engine) {
         snprintf(cmd, MAX_LARGE_MSG, "%s %s %s", engine->set_cmd, large_key_4m, large_value_4m);
         testcase(connfd, cmd, "OK\r\n", "Large: 4MB value SET");
         
-        memset(expected, 0, sizeof(expected));
+        memset(expected, 0, MAX_LARGE_MSG);
         snprintf(cmd, MAX_LARGE_MSG, "%s %s", engine->get_cmd, large_key_4m);
         sprintf(expected, "%s\r\n", large_value_4m);
         testcase(connfd, cmd, expected, "Large: 4MB value GET");

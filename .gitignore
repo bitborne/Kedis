@@ -53,3 +53,4 @@ ebpf_example/
 vmlinux.h
 *.log
 report_hybrid_*
+tests/image/uv.lock

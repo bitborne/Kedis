@@ -74,15 +74,16 @@ void server(void *arg) {
 
 
 int ntyco_start(unsigned short port, msg_handler handler) {
-
-	//int port = atoi(argv[1]);
+  
+  //int port = atoi(argv[1]);
 	kvs_handler = handler;
-
+  
 	
 	nty_coroutine *co = NULL;
 	nty_coroutine_create(&co, server, &port);
-
+  
 	nty_schedule_run();
+	return 0;
 
 }
 

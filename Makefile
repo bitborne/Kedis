@@ -1,34 +1,52 @@
-
 CC = gcc
-FLAGS = -I ./NtyCo/core/ -L ./NtyCo/ -lntyco -lpthread -luring -ldl
-JEMALLOC_FLAGS = -DHAVE_JEMALLOC -ljemalloc
-SRCS = src/core/kvstore.c src/core/protocol.c src/network/ntyco.c src/network/proactor.c src/engines/kvs_array.c src/engines/kvs_rbtree.c src/engines/kvs_hash.c src/engines/kvs_skiplist.c src/persistence/ksf.c src/persistence/aof.c src/utils/memory_pool.c
-TESTCASE_SRCS = tests/testcase.c tests/testcase_persistence.c
-TARGET = kvstore
-SUBDIR = ./NtyCo/
-TESTCASE = tests/testcase
+CFLAGS = -I./NtyCo/core/ -O2 -Wall
+LDFLAGS = -L./NtyCo/ -lntyco -lpthread -luring -ldl -ljemalloc
+
+# 主项目源文件
+SRCS = src/core/kvstore.c \
+       src/core/protocol.c \
+       src/network/ntyco.c \
+       src/network/proactor.c \
+       src/engines/kvs_array.c \
+       src/engines/kvs_rbtree.c \
+       src/engines/kvs_hash.c \
+       src/engines/kvs_skiplist.c \
+       src/persistence/ksf.c \
+       src/persistence/aof.c \
+       src/utils/memory_pool.c
 
 OBJS = $(SRCS:.c=.o)
 
+# 测试用例（独立编译）
+TEST_SRCS = tests/testcase.c
+TEST_OBJS = $(TEST_SRCS:.c=.o)
+
+TARGET = kvstore
+TESTCASE = tests/testcase
+SUBDIR = ./NtyCo/
+
+.PHONY: all clean $(SUBDIR)
 
 all: $(SUBDIR) $(TARGET) $(TESTCASE)
 
-$(SUBDIR): ECHO
-	make -C $@
+$(SUBDIR):
+	$(MAKE) -C $@
 
-ECHO:
-	@echo $(SUBDIR)
+# 静态模式规则：.o 挨着 .c
+$(OBJS): %.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
 
+$(TEST_OBJS): %.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+# 主程序（根目录）
 $(TARGET): $(OBJS)
-	$(CC) -o $@ $^ $(FLAGS) $(JEMALLOC_FLAGS)
+	$(CC) -o $@ $^ $(LDFLAGS)
 
-$(TESTCASE): $(TESTCASE_SRCS)
+# 测试程序（独立，不链接主项目）
+$(TESTCASE): tests/testcase.o
 	$(CC) -o $@ $^
 
-%.o: %.c
-	$(CC) $(FLAGS) $(JEMALLOC_FLAGS) -c $^ -o $@
-
 clean:
-	rm -rf $(OBJS) $(TARGET) $(TESTCASE)
-
-
+	rm -f $(OBJS) $(TEST_OBJS) $(TARGET) $(TESTCASE)
+	$(MAKE) -C $(SUBDIR) clean 2>/dev/null || true

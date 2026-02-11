@@ -88,7 +88,7 @@ void test_ksf_persistence(int connfd, const engine_ops_t* engine) {
         g_small_test_count++;
         
         // SET 操作
-        char cmd[128];
+        char cmd[256] = {0};
         snprintf(cmd, sizeof(cmd), "%s %s %s", engine->set_cmd, key, value);
         testcase(connfd, cmd, "OK\r\n", "Persistence: Small SET operation");
     }
@@ -122,7 +122,7 @@ void test_ksf_persistence(int connfd, const engine_ops_t* engine) {
         g_medium_test_count++;
         
         // SET 操作
-        char cmd[2048];
+        char cmd[2048] = {0};
         snprintf(cmd, sizeof(cmd), "%s %s %s", engine->set_cmd, key, random_value);
         free(random_value);
         
@@ -134,7 +134,7 @@ void test_ksf_persistence(int connfd, const engine_ops_t* engine) {
     printf("\n  Test 3: Large data (10 records, key=1KB, value=1MB)...\n");
     g_large_test_count = 0;
     for (int i = 0; i < LARGE_TEST_COUNT; i++) {
-        char key[1024];
+        char key[1024] = {0};
         snprintf(key, sizeof(key), "ksf_large_key_%02d_", i);
         
         // 生成随机 key 后缀
@@ -159,11 +159,13 @@ void test_ksf_persistence(int connfd, const engine_ops_t* engine) {
         g_large_test_count++;
         
         // SET 操作
-        char cmd[128];
+        char* cmd = calloc(1, 2 * 1024 * 1024);
         snprintf(cmd, sizeof(cmd), "%s %s %s", engine->set_cmd, key, random_value);
         free(random_value);
         
         testcase(connfd, cmd, "OK\r\n", "Persistence: Large SET operation");
+        free(cmd);
+        cmd = NULL;
     }
     printf("    Large data: %d SET operations passed\n", LARGE_TEST_COUNT);
     
@@ -265,11 +267,13 @@ void test_aof_persistence(int connfd, const engine_ops_t* engine) {
         g_large_test_count++;
         
         // SET 操作
-        char cmd[128];
+        char* cmd = calloc(1, 2 * 1024 * 1024);
         snprintf(cmd, sizeof(cmd), "%s %s %s", engine->set_cmd, key, random_value);
         free(random_value);
         
         testcase(connfd, cmd, "OK\r\n", "Persistence: AOF Large SET operation");
+        free(cmd);
+        cmd = NULL;
     }
     printf("    Large data: %d SET operations passed\n", LARGE_TEST_COUNT);
     
@@ -321,11 +325,13 @@ void test_aof_persistence(int connfd, const engine_ops_t* engine) {
         g_aof_large_mod_values[i] = strdup(random_mod_value);
         
         // MOD 操作
-        char cmd[128];
+        char* cmd = calloc(1, 2 * 1024 * 1024);
         snprintf(cmd, sizeof(cmd), "%s %s %s", engine->mod_cmd, g_large_test_keys[i], random_mod_value);
         free(random_mod_value);
         
         testcase(connfd, cmd, "OK\r\n", "Persistence: AOF Large MOD operation");
+        free(cmd);
+        cmd = NULL;
     }
     
     printf("    MOD operations: 1110 operations passed\n");
@@ -404,7 +410,7 @@ void test_ksf_load(int connfd, const engine_ops_t* engine) {
  * AOF 加载测试 - MOD 验证（第一次加载）
  */
 void test_aof_load_mod(int connfd, const engine_ops_t* engine) {
-    printf("\n  === AOF Load Test (MOD Verification) ===\n", engine->name);
+    printf("\n  === AOF Load Test (MOD Verification) ===\n");
     
     // 1. 验证小数据（检查是否是 MOD 后的值）
     printf("\n  Checking small data (%d records)...\n", g_small_test_count);
@@ -494,7 +500,7 @@ void test_aof_load_mod(int connfd, const engine_ops_t* engine) {
  * AOF 加载测试 - DEL 验证（第二次加载）
  */
 void test_aof_load_del(int connfd, const engine_ops_t* engine) {
-    printf("\n  === AOF Load Test (DEL Verification) ===\n", engine->name);
+    printf("\n  === AOF Load Test (DEL Verification) ===\n");
     
     // 1. 验证小数据（应该不存在）
     printf("\n  Checking small data (%d records)...\n", g_small_test_count);
