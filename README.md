@@ -11,6 +11,8 @@ KVstore 是一个高性能、多引擎、支持持久化及基于 eBPF 主从增
 - [Introduction](#introduction)
   - [Key Components](#key-components)
 - [Features](#features)
+- [架构设计]()
+  - [选择io_uring的原因](#为什么最终选择 io_uring？)
 - [Get Started](#get-started)
   - [Clone the Repository](#clone-the-repository)
   - [Requirements](#requirements)
@@ -48,6 +50,31 @@ KVstore 旨在构建一个高性能的存储基座，完全兼容 RESP (Redis Se
 - **mmap 持久化机制**: 集成 AOF (Append Only File) 与 KSF (Snapshot) 两种持久化策略，使用名为 ksf 的自研数据存储格式，加载数据时均采用 **mmap** 减少数据拷贝。
 - **协程并发模型**: 基于 NtyCo 实现的 Reactor/Proactor 网络模型，极大提升单机并发吞吐。
 - **eBPF 独立镜像模块**: 利用 eBPF 技术在内核态实现数据镜像转发与性能监控，完全支持 Redis 等所有基于 TCP 的网络服务流量转发。
+
+## 架构设计
+
+本项目采用**模块化网络层设计**，支持三种底层网络框架：
+
+| 框架 | 状态 | 说明 |
+|:---|:---|:---|
+| **io_uring** | ✅ 生产就绪 | 当前主力方案，完整实现 RESP 协议、分片流式收发与解析 |
+| epoll | 🚧 实验性 | 基础实现，**未实现 RESP 协议及流式处理** |
+| Ntyco | 🚧 实验性 | 基础实现，**未实现 RESP 协议及流式处理** |
+
+> **设计意图**：验证 io_uring 在现代存储场景下的性能优势，同时保留 epoll/Ntyco 实现作为跨平台基础。后续计划统一抽象层，实现真正的跨平台支持。
+
+---
+
+### 为什么最终选择 io_uring？
+
+开发初期对三种框架进行了原型验证，io_uring 在以下方面表现显著优于传统方案：
+
+- 减少 70% 的系统调用开销
+- 更低的延迟抖动
+- 更简洁的异步编程模型
+
+因此决定将核心功能（RESP 协议、流式解析、分片传输）优先在 io_uring 上完善，epoll/kqueue 保留为**可扩展的架构基础**。
+
 
 ## Get Started
 
