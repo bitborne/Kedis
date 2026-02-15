@@ -8,7 +8,7 @@
 
   #define MAX_KEY_LEN	128
   #define MAX_VALUE_LEN	512
-  #define MAX_TABLE_SIZE	1024
+  #define MAX_TABLE_SIZE	65536
 
   #define HASH_ENABLE_KEY_POINTER	1
 

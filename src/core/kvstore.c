@@ -168,10 +168,10 @@ void kvs_free(void* ptr) {
 // 定义了头文件中 command 变量的声明
 const char*
         command[] =
-                {"SET",    "GET",        "DEL",        "MOD",        "EXIST", "ASET",
-                 "AGET", "ADEL",     "AMOD",     "AEXIST", "HSET",    "HGET",
-                 "HDEL", "HMOD",     "HEXIST", "RSET",     "RGET",    "RDEL",
-                 "RMOD", "REXIST", "SSET",     "SGET",     "SDEL",    "SMOD",
+                {"SET", "GET", "DEL", "MOD", "EXIST", "ASET",
+                 "AGET", "ADEL", "AMOD", "AEXIST", "HSET", "HGET",
+                 "HDEL", "HMOD", "HEXIST", "RSET", "RGET", "RDEL",
+                 "RMOD", "REXIST", "SSET", "SGET", "SDEL", "SMOD",
                  "SEXIST", "SAVE", "BGSAVE", "SYNC"};    // 添加SAVE和BGSAVE命令
 
 // 自动保存参数：save seconds changes
@@ -311,7 +311,7 @@ int kvs_protocol(struct conn* c) {
     switch (cmd) {
 #if ENABLE_MULTI_ENGINE
         case KVS_CMD_ASET:
-            kvs_logInfo("ASET key(%zu bytes) value(%zu bytes)");
+            kvs_logInfo("ASET key(%zu bytes) value(%zu bytes)", key->len, value->len);
             ret = kvs_array_set(&array_engine, key, value);
             if (ret < 0) {
                 add_reply_error(c, "ERROR");
@@ -325,7 +325,7 @@ int kvs_protocol(struct conn* c) {
             }
             break;
         case KVS_CMD_AGET:
-            kvs_logInfo("AGET key(%zu bytes) value(%zu bytes)");
+            kvs_logInfo("AGET key(%zu bytes) value(%zu bytes)", key->len, value->len);
             gotValue = kvs_array_get(&array_engine, key);
             // fprintf(stderr, "--> gotValue:\n%s", gotValue);
             if (gotValue == NULL) {
@@ -335,7 +335,7 @@ int kvs_protocol(struct conn* c) {
             }
             break;
         case KVS_CMD_ADEL:
-            kvs_logInfo("ADEL key(%zu bytes) value(%zu bytes)");
+            kvs_logInfo("ADEL key(%zu bytes) value(%zu bytes)", key->len, value->len);
             ret = kvs_array_del(&array_engine, key);
             if (ret < 0) {
                 add_reply_error(c, "ERROR");
@@ -349,7 +349,7 @@ int kvs_protocol(struct conn* c) {
             }
             break;
         case KVS_CMD_AMOD:
-            kvs_logInfo("AMOD key(%zu bytes) value(%zu bytes)");
+            kvs_logInfo("AMOD key(%zu bytes) value(%zu bytes)", key->len, value->len);
             ret = kvs_array_mod(&array_engine, key, value);
             if (ret < 0) {
                  add_reply_error(c, "ERROR");
@@ -363,7 +363,7 @@ int kvs_protocol(struct conn* c) {
             }
             break;
         case KVS_CMD_AEXIST:
-            kvs_logInfo("AEXIST key(%zu bytes) value(%zu bytes)");
+            kvs_logInfo("AEXIST key(%zu bytes) value(%zu bytes)", key->len, value->len);
             ret = kvs_array_exist(&array_engine, key);
             if (ret > 0) {
                 add_reply_exist(c, 1);
@@ -376,7 +376,7 @@ int kvs_protocol(struct conn* c) {
 
         // 多引擎模式 - Hash 引擎命令
         case KVS_CMD_HSET:
-            kvs_logInfo("HSET key(%zu bytes) value(%zu bytes)");
+            kvs_logInfo("HSET key(%zu bytes) value(%zu bytes)", key->len, value->len);
             ret = kvs_hash_set(&hash_engine, key, value);
             if (ret < 0) {
                  add_reply_error(c, "ERROR");
@@ -390,7 +390,7 @@ int kvs_protocol(struct conn* c) {
             }
             break;
         case KVS_CMD_HGET:
-            kvs_logInfo("HGET key(%zu bytes) value(%zu bytes)");
+            kvs_logInfo("HGET key(%zu bytes) value(%zu bytes)", key->len, value->len);
             gotValue = kvs_hash_get(&hash_engine, key);
             if (gotValue == NULL) {
                 add_reply_error(c, "ERROR / Not Exist");
@@ -399,7 +399,7 @@ int kvs_protocol(struct conn* c) {
             }
             break;
         case KVS_CMD_HDEL:
-            kvs_logInfo("HDEL key(%zu bytes) value(%zu bytes)");
+            kvs_logInfo("HDEL key(%zu bytes) value(%zu bytes)", key->len, value->len);
             ret = kvs_hash_del(&hash_engine, key);
             if (ret < 0) {
                 add_reply_error(c, "ERROR");
@@ -413,7 +413,7 @@ int kvs_protocol(struct conn* c) {
             }
             break;
         case KVS_CMD_HMOD:
-            kvs_logInfo("HMOD key(%zu bytes) value(%zu bytes)");
+            kvs_logInfo("HMOD key(%zu bytes) value(%zu bytes)", key->len, value->len);
             ret = kvs_hash_mod(&hash_engine, key, value);
             if (ret < 0) {
                 add_reply_error(c, "ERROR");
@@ -427,7 +427,7 @@ int kvs_protocol(struct conn* c) {
             }
             break;
         case KVS_CMD_HEXIST:
-            kvs_logInfo("HEXIST key(%zu bytes) value(%zu bytes)");
+            kvs_logInfo("HEXIST key(%zu bytes) value(%zu bytes)", key->len, value->len);
             ret = kvs_hash_exist(&hash_engine, key);
             if (ret > 0) {
                 add_reply_exist(c, 1);
@@ -440,7 +440,7 @@ int kvs_protocol(struct conn* c) {
 
         // 多引擎模式 - RBTREE 引擎命令
         case KVS_CMD_RSET:
-            kvs_logInfo("RSET key(%zu bytes) value(%zu bytes)");
+            kvs_logInfo("RSET key(%zu bytes) value(%zu bytes)", key->len, value->len);
             ret = kvs_rbtree_set(&rbtree_engine, key, value);
             if (ret < 0) {
                 add_reply_error(c, "ERROR");
@@ -454,7 +454,7 @@ int kvs_protocol(struct conn* c) {
             }
             break;
         case KVS_CMD_RGET:
-            kvs_logInfo("RGET key(%zu bytes) value(%zu bytes)");
+            kvs_logInfo("RGET key(%zu bytes) value(%zu bytes)", key->len, value->len);
             gotValue = kvs_rbtree_get(&rbtree_engine, key);
             if (gotValue == NULL) {
                 add_reply_error(c, "ERROR / Not Exist");
@@ -463,7 +463,7 @@ int kvs_protocol(struct conn* c) {
             }
             break;
         case KVS_CMD_RDEL:
-            kvs_logInfo("RDEL key(%zu bytes) value(%zu bytes)");
+            kvs_logInfo("RDEL key(%zu bytes) value(%zu bytes)", key->len, value->len);
             ret = kvs_rbtree_del(&rbtree_engine, key);
             if (ret < 0) {
                 add_reply_error(c, "ERROR");
@@ -477,7 +477,7 @@ int kvs_protocol(struct conn* c) {
             }
             break;
         case KVS_CMD_RMOD:
-            kvs_logInfo("RMOD key(%zu bytes) value(%zu bytes)");
+            kvs_logInfo("RMOD key(%zu bytes) value(%zu bytes)", key->len, value->len);
             ret = kvs_rbtree_mod(&rbtree_engine, key, value);
             if (ret < 0) {
                 add_reply_error(c, "ERROR");
@@ -491,7 +491,7 @@ int kvs_protocol(struct conn* c) {
             }
             break;
         case KVS_CMD_REXIST:
-            kvs_logInfo("REXIST key(%zu bytes) value(%zu bytes)");
+            kvs_logInfo("REXIST key(%zu bytes) value(%zu bytes)", key->len, value->len);
             ret = kvs_rbtree_exist(&rbtree_engine, key);
             if (ret > 0) {
                 add_reply_exist(c, 1);
@@ -502,7 +502,7 @@ int kvs_protocol(struct conn* c) {
             }
             break;
         case KVS_CMD_SSET:
-            kvs_logInfo("SSET key(%zu bytes) value(%zu bytes)");
+            kvs_logInfo("SSET key(%zu bytes) value(%zu bytes)", key->len, value->len);
             ret = kvs_skiplist_set(&skiplist_engine, key, value);
             if (ret < 0) {
                 add_reply_error(c, "ERROR");
@@ -516,7 +516,7 @@ int kvs_protocol(struct conn* c) {
             }
             break;
         case KVS_CMD_SGET:
-            kvs_logInfo("SGET key(%zu bytes) value(%zu bytes)");
+            kvs_logInfo("SGET key(%zu bytes) value(%zu bytes)", key->len, value->len);
             gotValue = kvs_skiplist_get(&skiplist_engine, key);
             if (gotValue == NULL) {
                 add_reply_error(c, "ERROR / Not Exist");
@@ -525,7 +525,7 @@ int kvs_protocol(struct conn* c) {
             }
             break;
         case KVS_CMD_SDEL:
-            kvs_logInfo("SDEL key(%zu bytes) value(%zu bytes)");
+            kvs_logInfo("SDEL key(%zu bytes) value(%zu bytes)", key->len, value->len);
             ret = kvs_skiplist_del(&skiplist_engine, key);
             if (ret < 0) {
                 add_reply_error(c, "ERROR");
@@ -539,7 +539,7 @@ int kvs_protocol(struct conn* c) {
             }
             break;
         case KVS_CMD_SMOD:
-            kvs_logInfo("SMOD key(%zu bytes) value(%zu bytes)");
+            kvs_logInfo("SMOD key(%zu bytes) value(%zu bytes)", key->len, value->len);
             ret = kvs_skiplist_mod(&skiplist_engine, key, value);
             if (ret < 0) {
                 add_reply_error(c, "ERROR");
@@ -553,7 +553,7 @@ int kvs_protocol(struct conn* c) {
             }
             break;
         case KVS_CMD_SEXIST:
-            kvs_logInfo("SEXIST key(%zu bytes) value(%zu bytes)");
+            kvs_logInfo("SEXIST key(%zu bytes) value(%zu bytes)", key->len, value->len);
             ret = kvs_skiplist_exist(&skiplist_engine, key);
             if (ret > 0) {
                 add_reply_exist(c, 1);
@@ -565,7 +565,7 @@ int kvs_protocol(struct conn* c) {
             break;
 #else
         case KVS_CMD_SET:
-            kvs_logInfo("SET key(%zu bytes) value(%zu bytes)");
+            kvs_logInfo("SET key(%zu bytes) value(%zu bytes)", key->len, value->len);
             ret = kvs_main_set(&global_main_engine, key, value);
             if (ret < 0) {
                 add_reply_error(c, "ERROR");
@@ -577,7 +577,7 @@ int kvs_protocol(struct conn* c) {
             }
             break;
         case KVS_CMD_GET:
-            kvs_logInfo("GET key(%zu bytes) value(%zu bytes)");
+            kvs_logInfo("GET key(%zu bytes) value(%zu bytes)", key->len, value->len);
             gotValue = kvs_main_get(&global_main_engine, key);
             if (gotValue == NULL) {
                 add_reply_error(c, "ERROR / Not Exist");
@@ -586,7 +586,7 @@ int kvs_protocol(struct conn* c) {
             }
             break;
         case KVS_CMD_DEL:
-            kvs_logInfo("DEL key(%zu bytes) value(%zu bytes)");
+            kvs_logInfo("DEL key(%zu bytes) value(%zu bytes)", key->len, value->len);
             ret = kvs_main_del(&global_main_engine, key);
             if (ret < 0) {
                 add_reply_error(c, "ERROR");
@@ -598,7 +598,7 @@ int kvs_protocol(struct conn* c) {
             }
             break;
         case KVS_CMD_MOD:
-            kvs_logInfo("MOD key(%zu bytes) value(%zu bytes)");
+            kvs_logInfo("MOD key(%zu bytes) value(%zu bytes)", key->len, value->len);
             ret = kvs_main_mod(&global_main_engine, key, value);
             if (ret < 0) {
                 add_reply_error(c, "ERROR");
@@ -610,7 +610,7 @@ int kvs_protocol(struct conn* c) {
             }
             break;
         case KVS_CMD_EXIST:
-            kvs_logInfo("EXIST key(%zu bytes) value(%zu bytes)");
+            kvs_logInfo("EXIST key(%zu bytes) value(%zu bytes)", key->len, value->len);
             ret = kvs_main_exist(&global_main_engine, key);
             if (ret > 0) {
                 add_reply_exist(c, 1);

@@ -21,7 +21,7 @@
 #define CHUNK_SIZE 256
 #define MAX_PAYLOAD 65536
 //  定义哈希表大小，建议为 2 的幂次方
-#define HASH_SIZE 1024
+#define HASH_SIZE 16384
 
 #define EVENT_HEADER 1
 #define EVENT_DATA 2
