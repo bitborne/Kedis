@@ -93,6 +93,15 @@ int mirror_forward(struct __sk_buff *skb)
         de->offset = cur_offset;
         de->chunk_len = final_len;
 
+        // ============================================
+        // [修复点] data-event 也必须填充五元组信息，否则用户态无法归类
+        // ============================================
+        de->src_ip = ip->saddr;
+        de->dst_ip = ip->daddr;
+        de->src_port = bpf_ntohs(tcp->source);
+        de->dst_port = bpf_ntohs(tcp->dest);
+        // ============================================
+
         // 这里使用 final_len，验证器现在可以推导出 R4 属于 [1, 256]
         bpf_skb_load_bytes(skb, data_offset + cur_offset, de->data, final_len);
         bpf_ringbuf_submit(de, 0);

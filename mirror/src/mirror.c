@@ -135,7 +135,7 @@ static void get_timestamp(char* buf, size_t len) {
 }
 
 static void flush_buffer(struct reassembly_buffer *buf) {
-  if (!buf || !buf->active || !buf->received_len == 0) return;
+  if (!buf || !buf->active || buf->received_len == 0) return;
 
   char src_str[16], dst_str[16];
   inet_ntop(AF_INET, &buf->src_ip, src_str, sizeof(src_str));
@@ -348,13 +348,14 @@ int main(int argc, char** argv) {
   }
 
   opts_ingress.prog_fd = bpf_program__fd(skel->progs.mirror_forward);
+  opts_ingress.flags = BPF_TC_F_REPLACE; // 强制替换现有的程序，不要因为“位置被占了”而报错
   err = bpf_tc_attach(&hook, &opts_ingress);
   if (err) {
     mirror_logError("Failed to attach TC: %d", err);
     goto cleanup;
   }
 
-  mirror_logInfo("Running on %s. Press Ctrl+C to exit.", argv[1]);
+  fprintf(stderr, "Running on %s. Press Ctrl+C to exit.", argv[1]);
 
   while (!exiting) {
     err = ring_buffer__poll(rb, 100);
@@ -368,7 +369,7 @@ int main(int argc, char** argv) {
   cleanup_flows();
 
   
-  mirror_logInfo("\nDetaching...");
+  fprintf(stderr, "\nDetaching...");
 
 //   if (log_fd >= 0) {
 //     get_timestamp(timestamp, sizeof(timestamp));
@@ -378,6 +379,7 @@ int main(int argc, char** argv) {
 
   opts_ingress.flags = opts_ingress.prog_fd = opts_ingress.prog_id = 0;
   bpf_tc_detach(&hook, &opts_ingress);
+  bpf_tc_hook_destroy(&hook);
 
 cleanup:
 //   if (log_fd >= 0) close(log_fd);
