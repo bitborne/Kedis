@@ -6,48 +6,82 @@ from base import KVServerBase
 class TestKVAof(KVServerBase):
     """
     AOF 持久化可靠性测试
-    验证 AOF 在崩溃场景下的数据完整性和指令重放能力
+    通过多次重启和崩溃，完整覆盖 SET -> MOD -> DEL 的 AOF 记录与重放。
     """
     def tearDown(self):
         self._stop_server()
 
-    def test_aof_recovery(self):
-        """验证 AOF 持久化: 全引擎写入 -> Crash (无手动保存) -> AOF重放验证"""
-        self._cleanup_files()
-        self._start_server("tests/config_aof.conf")
-        client = self._get_client()
-        pairs = self.load_test_pairs()
-        engines = ['A', 'H', 'R', 'S']
-
-        # 1. 全引擎连续操作: SET -> MOD
-        for pair in pairs:
-            key = self._to_bytes(self._eval_expr(pair['key_expr']))
-            val = self._to_bytes(self._eval_expr(pair['value_expr']))
-            mod_val = self._to_bytes(self._eval_expr(pair['mod_value_expr']))
-            for engine in engines:
-                client._engine_cmd(engine, 'SET', key, val)
-                client._engine_cmd(engine, 'MOD', key, mod_val)
-
-        # 2. 等待 AOF 刷盘策略 (通常是每秒 fsync) 执行完毕
-        time.sleep(3) 
-        self._crash_server()
-
-        # 3. 重启触发 AOF 重放
-        self._start_server("tests/config_aof.conf")
-        client = self._get_client()
-        
-        # 4. 全引擎验证 AOF 重放后的最终状态
+    def _verify_state(self, phase, client, pairs, engines, expected_value_type):
+        """
+        【重构】将重复的验证逻辑封装成辅助函数，提高代码复用性
+        :param phase: 当前测试阶段 (e.g., "after-set", "after-mod")
+        :param expected_value_type: 'val' (初始), 'mod_val' (修改后), 'non_existent' (删除后)
+        """
         for pair in pairs:
             p_name = pair['name']
             key = self._to_bytes(self._eval_expr(pair['key_expr']))
+            
+            for engine in engines:
+                with self.subTest(phase=phase, pair=p_name, engine=engine):
+                    try:
+                        if expected_value_type == 'non_existent':
+                            existence = client._engine_cmd(engine, 'EXIST', key)
+                            self.assertEqual(existence, 0, f"Key should not exist after DEL in phase '{phase}'")
+                        else:
+                            expected_val = self._to_bytes(self._eval_expr(pair[expected_value_type]))
+                            recovered = client._engine_cmd(engine, 'GET', key)
+                            self.assertEqual(recovered, expected_val, f"Value mismatch in phase '{phase}'")
+                    except redis.exceptions.ResponseError as e:
+                        self.fail(f"AOF recovery failed (Key missing or Error) in phase '{phase}' for {p_name} on {engine}: {e}")
+
+    def test_aof_full_lifecycle_recovery(self):
+        """
+        验证 AOF 持久化: SET -> Crash -> Verify -> MOD -> Crash -> Verify -> DEL -> Crash -> Verify
+        这个测试更完整地模拟了服务的生命周期，确保 AOF 在每个环节都能正确工作。
+        """
+        self._cleanup_files()
+        pairs = self.load_test_pairs()
+        engines = ['A', 'H', 'R', 'S']
+        
+        # === 阶段 1: SET 并验证 ===
+        self._start_server("tests/config_aof.conf")
+        client = self._get_client()
+        for pair in pairs:
+            key = self._to_bytes(self._eval_expr(pair['key_expr']))
+            val = self._to_bytes(self._eval_expr(pair['value_expr']))
+            for engine in engines:
+                client._engine_cmd(engine, 'SET', key, val)
+        time.sleep(3)
+        self._crash_server()
+
+        self._start_server("tests/config_aof.conf")
+        client = self._get_client()
+        self._verify_state("after-set", client, pairs, engines, 'value_expr')
+        
+        # === 阶段 2: MOD 并验证 ===
+        for pair in pairs:
+            key = self._to_bytes(self._eval_expr(pair['key_expr']))
             mod_val = self._to_bytes(self._eval_expr(pair['mod_value_expr']))
             for engine in engines:
-                with self.subTest(pair=p_name, engine=engine):
-                    try:
-                        recovered = client._engine_cmd(engine, 'GET', key)
-                        self.assertEqual(recovered, mod_val, f"AOF recovery value mismatch for {p_name} on {engine}")
-                    except redis.exceptions.ResponseError as e:
-                        self.fail(f"AOF recovery failed (Key missing or Error) for {p_name} on {engine}: {e}")
+                client._engine_cmd(engine, 'MOD', key, mod_val)
+        time.sleep(3)
+        self._crash_server()
+
+        self._start_server("tests/config_aof.conf")
+        client = self._get_client()
+        self._verify_state("after-mod", client, pairs, engines, 'mod_value_expr')
+
+        # === 阶段 3: DEL 并验证 ===
+        for pair in pairs:
+            key = self._to_bytes(self._eval_expr(pair['key_expr']))
+            for engine in engines:
+                client._engine_cmd(engine, 'DEL', key)
+        time.sleep(3)
+        self._crash_server()
+        
+        self._start_server("tests/config_aof.conf")
+        client = self._get_client()
+        self._verify_state("after-del", client, pairs, engines, 'non_existent')
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
