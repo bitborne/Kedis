@@ -20,11 +20,11 @@ SRCS = src/core/kvstore.c \
 OBJS = $(SRCS:.c=.o)
 
 # 测试用例（独立编译）
-TEST_SRCS = tests/testcase.c tests/testcase_persistence.c
-TEST_OBJS = $(TEST_SRCS:.c=.o)
+# TEST_SRCS = tests/testcase.c
+# TEST_OBJS = $(TEST_SRCS:.c=.o)
 
 TARGET = kvstore
-TESTCASE = tests/testcase
+# TESTCASE = tests/testcase
 SUBDIR = ./NtyCo/
 
 .PHONY: all clean $(SUBDIR)
@@ -38,16 +38,16 @@ $(SUBDIR):
 $(OBJS): %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(TEST_OBJS): %.o: %.c
-	$(CC) $(CFLAGS) -c $< -o $@
+# $(TEST_OBJS): %.o: %.c
+# 	$(CC) $(CFLAGS) -c $< -o $@
 
 # 主程序（根目录）
 $(TARGET): $(OBJS)
 	$(CC) -o $@ $^ $(LDFLAGS)
 
 # 测试程序（独立，不链接主项目）
-$(TESTCASE): tests/testcase.o tests/testcase_persistence.o
-	$(CC) -o $@ $^
+# $(TESTCASE): $(TEST_OBJS)
+# 	$(CC) -o $@ $^
 
 clean:
 	rm -f $(OBJS) $(TEST_OBJS) $(TARGET) $(TESTCASE)

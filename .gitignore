@@ -52,5 +52,5 @@ mirror/.output/
 ebpf_example/
 vmlinux.h
 *.log
-report_hybrid_*
+report/
 tests/image/uv.lock
