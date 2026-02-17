@@ -2,7 +2,7 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
 
-#define CHUNK_SIZE 256
+#define CHUNK_SIZE 1024
 #define EVENT_HEADER 1
 #define EVENT_DATA   2
 
@@ -75,17 +75,21 @@ int mirror_forward(struct __sk_buff *skb)
     #pragma unroll
     for (int i = 0; i < 1000; i++) {
         __u32 cur_offset = i * CHUNK_SIZE;
-        if (cur_offset >= payload_len) break;
+        if (cur_offset >= payload_len) break; //-> chunk_len 必 > 0
 
         __u32 remaining = payload_len - cur_offset;
-        __u32 chunk_len = remaining;
-        if (chunk_len > CHUNK_SIZE) chunk_len = CHUNK_SIZE;
+        __u32 chunk_len = remaining;  // 计算剩余数据有多少
+        if (chunk_len > CHUNK_SIZE) chunk_len = CHUNK_SIZE; 
+        // 如果超过CHUNK_LEN, 那么先发CHUNK_LEN, 剩下的交给下一次循环
 
+        // 0. 目前,我们人类知道,运行时已经确保了 0 < chunk_len <= CHUNK_SIZE
         // 1. 即使验证器不确定 chunk_len 的最小边界
-        // 2. 我们通过 (len - 1) & 0xFF 确保结果在 0-255
-        // 3. 再 + 1，确保结果在 1-256
-        __u32 final_len = ((chunk_len - 1) & 0xFF) + 1;
-
+        // 2. 我们通过 (len - 1) & 0x3FF 确保结果在 0-1023 (0-CHUNK_SIZE)
+        // 3. 再 + 1，确保结果在 1-1024 
+        __u32 final_len = ((chunk_len - 1) & 0x3FF) + 1;
+        // 这样验证器就知道, final_len 一定不是0
+        // 而 final_len 就等于 chunk_len,就是我们要发送的数据大小
+        
         struct packet_event *de = bpf_ringbuf_reserve(&rb, sizeof(*de), 0);
         if (!de) continue;
 
