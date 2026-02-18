@@ -2,21 +2,7 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
 
-#define CHUNK_SIZE 1024
-#define EVENT_HEADER 1
-#define EVENT_DATA   2
-
-struct packet_event {
-    __u32 type;
-    __u32 src_ip;
-    __u32 dst_ip;
-    __u16 src_port;
-    __u16 dst_port;
-    __u32 payload_len;
-    __u32 offset;
-    __u32 chunk_len;
-    __u8 data[CHUNK_SIZE];
-};
+#include "mirror_common.h"
 
 #define ETH_P_IP 0x0800
 
@@ -52,8 +38,9 @@ int mirror_forward(struct __sk_buff *skb)
     if (tcp_hdr_len < 20 || tcp_hdr_len > 60) return 0;
 
     __u32 data_offset = sizeof(struct ethhdr) + ip_hdr_len + tcp_hdr_len;
+    
     // 显式检查偏移量
-    if (data_offset > 1500) return 0; 
+    // if (data_offset > 1500) return 0; 
     if (data_offset > skb->len) return 0;
     
     __u32 payload_len = skb->len - data_offset;

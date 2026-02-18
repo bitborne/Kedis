@@ -1,3 +1,6 @@
+#include "mirror_log.h"
+#include "mirror.skel.h"
+
 #include <arpa/inet.h>
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
@@ -13,34 +16,18 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "mirror_log.h"
-#include "mirror.skel.h"
+#include "mirror_common.h"
 
 // #define SLAVE_IP "172.20.10.2"
 // #define SLAVE_PORT 9999
-#define CHUNK_SIZE 256
-#define MAX_PAYLOAD 65536
+// #define CHUNK_SIZE 1024
+
 //  定义哈希表大小，建议为 2 的幂次方
 #define HASH_SIZE 16384
-
-#define EVENT_HEADER 1
-#define EVENT_DATA 2
+#define MAX_PAYLOAD 131017
 
 long long total_complete = 0;
 long long total_sent = 0;
-
-
-struct packet_event {
-  __u32 type;
-  __u32 src_ip;
-  __u32 dst_ip;
-  __u16 src_port;
-  __u16 dst_port;
-  __u32 payload_len;
-  __u32 offset;
-  __u32 chunk_len;
-  __u8 data[CHUNK_SIZE];
-};
 
 // 重组缓冲区
 struct reassembly_buffer {
