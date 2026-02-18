@@ -36,7 +36,7 @@ class TestKVSnapshot(KVServerBase):
 
     def test_snapshot_full_lifecycle_recovery(self):
         """
-        【重构】验证快照持久化: SET -> BGSAVE -> Crash -> Verify -> MOD -> BGSAVE -> Crash -> Verify -> DEL -> BGSAVE -> Crash -> Verify
+        验证快照持久化: SET -> BGSAVE -> Crash -> Verify -> MOD -> BGSAVE -> Crash -> Verify -> DEL -> BGSAVE -> Crash -> Verify
         """
         self._cleanup_files()
         pairs = self.load_test_pairs()
