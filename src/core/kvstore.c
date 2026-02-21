@@ -175,8 +175,8 @@ const char*
                  "SEXIST", "SAVE", "BGSAVE", "SYNC"};    // 添加SAVE和BGSAVE命令
 
 // 自动保存参数：save seconds changes
-static int save_params_seconds = 300;        // 5分钟
-static int save_params_changes = 100;        // 100次变化
+// static int save_params_seconds = 300;        // 5分钟
+// static int save_params_changes = 100;        // 100次变化
 static time_t last_save_time = 0;                // 上次保存时间
 static int changes_since_last_save = 0;    // 自上次保存以来的变化次数
 
@@ -203,13 +203,12 @@ int is_write_command(const char* command) {
 
 // 检查是否需要执行自动快照保存（根据save参数）
 void check_and_perform_autosave() {
-    time_t current_time = time(0);
+    time_t current_time = time(0); 
 
     // 检查是否满足自动保存条件：时间间隔达到且写入次数达到阈值
-    if (current_time - last_save_time >= save_params_seconds &&
-            changes_since_last_save >= save_params_changes) {
-        printf("触发自动快照保存：已超过 %d 秒且发生 %d 次变化\n",
-                     save_params_seconds, save_params_changes);
+    if (current_time - last_save_time >= g_config.auto_save_seconds && changes_since_last_save >= g_config.auto_save_changes) {
+
+        kvs_logWarn("触发自动快照保存：已超过 %d 秒且发生 %d 次变化", g_config.auto_save_seconds, g_config.auto_save_changes);
 
         // 更新最后保存时间
         last_save_time = current_time;
@@ -243,7 +242,7 @@ static void add_reply_status(struct conn* c, const char* status) {
         c->send_st = ST_SEND_SMALL;
 }
 
-static void add_reply_bulk(struct conn* c, const char* str) {
+static void add_reply_bulk(struct conn* c, char* str) {
         // 如果 str 为 NULL，返回 Null Bulk String
         if (str == NULL) {
                 add_reply_str(c, "$-1\r\n"); // Null Bulk String
@@ -639,29 +638,20 @@ int kvs_protocol(struct conn* c) {
         case KVS_CMD_SYNC:
             kvs_logError("SYNC 命令暂未实现\n");
             add_reply_error(c, "SYNC 命令暂未实现");
-            // if (handle_sync_command(current_processing_fd) == 0) {
-                // SYNC 处理可能特殊，暂不做修改，或者假设 handle_sync_command 自己写了 fd？
-                // 原始代码: return 0; // Response sent by handler
-                // 这里保持原样
-                // pthread_mutex_unlock(&global_kvs_lock);
             return 0;
-            // } else {
-            //     add_reply_error(c, "ERROR SYNC");
-            // }
             break;
         default:
             add_reply_error(c, "UNKNOWN COMMAND");
     }
+    
 
-    // 检查是否需要计数（自动保存）
-    if (is_write_command(cmd_name)) {
-        changes_since_last_save++;
+    if (g_config.auto_save_enabled) {
+
+        // 检查是否需要计数（自动保存）
+        changes_since_last_save += is_write_command(cmd_name);    
+        check_and_perform_autosave();
     }
-    
-    check_and_perform_autosave();
-    // pthread_mutex_unlock(&global_kvs_lock);    // UNLOCK
-    
-    // fprintf(stderr, "c->wlen == %d\n", c->wlen);
+
     return c->wlen;
 }
 

@@ -63,6 +63,9 @@ typedef struct kv_config {
     
     /* 持久化 */
     bool aof_enabled;           /* 是否开启AOF */
+    bool auto_save_enabled;
+    int auto_save_seconds;
+    int auto_save_changes;
     
 } kv_config;
 

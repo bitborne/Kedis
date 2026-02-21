@@ -88,6 +88,24 @@ static config_option config_table[] = {
         .default_value = "no",
         .description = "是否开启AOF持久化: yes/no"
     },
+    /* 自动快照保存设置 */
+    {
+        "auto-save-enabled", CONFIG_TYPE_BOOL, &g_config.auto_save_enabled,
+        .default_value = "yes",
+        .description = "是否开启自动快照保存: yes/no"
+    },
+    { /* 多少秒内变化超过多少次执行快照保存 */
+        "auto-save-seconds", CONFIG_TYPE_INT, &g_config.auto_save_seconds,
+        .limit.i = {1, INT32_MAX},
+        .default_value = "300",
+        .description = "自动快照保存的时间窗口长度(单位: s)"
+    },
+    { /* 多少秒内变化超过多少次执行快照保存 */
+        "auto-save-changes", CONFIG_TYPE_INT, &g_config.auto_save_changes,
+        .limit.i = {1, INT32_MAX},
+        .default_value = "100",
+        .description = "每个时间窗口内, 自动执行快照保存的最低变化次数"  
+    },
     /* 结束标记 */
     {NULL}
 };
