@@ -47,7 +47,50 @@
 #include "memory_pool.h"
 #include "kvs_log.h"
 
+enum {
+    KVS_CMD_START = 0,
+    // 统一的KV操作命令（单引擎模式）
+    KVS_CMD_SET = KVS_CMD_START,
+    KVS_CMD_GET,
+    KVS_CMD_DEL,
+    KVS_CMD_MOD,
+    KVS_CMD_EXIST,
 
+    // 多引擎模式 - Array 引擎命令
+    KVS_CMD_ASET,
+    KVS_CMD_AGET,
+    KVS_CMD_ADEL,
+    KVS_CMD_AMOD,
+    KVS_CMD_AEXIST,
+
+    // 多引擎模式 - Hash 引擎命令
+    KVS_CMD_HSET,
+    KVS_CMD_HGET,
+    KVS_CMD_HDEL,
+    KVS_CMD_HMOD,
+    KVS_CMD_HEXIST,
+
+    // 多引擎模式 - RBTREE 引擎命令
+    KVS_CMD_RSET,
+    KVS_CMD_RGET,
+    KVS_CMD_RDEL,
+    KVS_CMD_RMOD,
+    KVS_CMD_REXIST,
+
+    // 多引擎模式 - Skiplist 引擎命令
+    KVS_CMD_SSET,
+    KVS_CMD_SGET,
+    KVS_CMD_SDEL,
+    KVS_CMD_SMOD,
+    KVS_CMD_SEXIST,
+
+    // 通用命令（两种模式都支持）
+    KVS_CMD_SAVE,
+    KVS_CMD_BGSAVE,
+    KVS_CMD_SYNC,
+
+    KVS_CMD_COUNT
+};
 
 void* kvs_calloc(size_t num, size_t size);
 void *kvs_malloc(size_t size);

@@ -48,7 +48,7 @@ class KVServerBase(unittest.TestCase):
         for _ in range(50):
             try:
                 with socket.create_connection((self.host, self.port), timeout=0.1):
-                    time.sleep(0.3) # 预留时间让引擎完成初始化
+                    time.sleep(1) # 预留时间让引擎完成初始化
                     return
             except (ConnectionRefusedError, socket.timeout):
                 time.sleep(0.1)
