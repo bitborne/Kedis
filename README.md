@@ -363,6 +363,13 @@ memtier_benchmark \
 
 #### 测试结果
 
+```bash
+# 图表生成
+cd tests && python3 gen_charts.py ./sset_benchmark_results 
+```
+
+
+
 <img src="README.assets/image-20260221204018087.png" alt="image-20260221204018087" style="zoom: 67%;" />
 
 <img src="README.assets/image-20260221204037592.png" alt="image-20260221204037592" style="zoom: 67%;" />
