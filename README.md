@@ -300,6 +300,10 @@ e 60 --data-size 128 --key-minimum 1 --key-maximum 524288 --hit-rate 0.8
 
 ### 持久化性能数据
 
+> 测试时间: 2026年2月21日
+>
+> `commit: dc8a0bffd93ea637f459fe37d0254229d98d1230`
+
 #### 配置文件选项
 
 仅列出可能影响性能的选项
@@ -333,10 +337,6 @@ KEY_MAX=1000000
 # 计算每个连接需要处理的请求数
 REQUESTS_PER_CONN=$((TOTAL_KEYS / (THREADS * CONNECTIONS_PER_THREAD)))
 
-# 输出目录
-OUTPUT_DIR="./sset_benchmark_results"
-mkdir -p "${OUTPUT_DIR}"
-
 # 使用SSET作为测试命令
 TEST_CMD="SSET"
 
@@ -365,7 +365,7 @@ memtier_benchmark \
 
 ```bash
 # 图表生成
-cd tests && python3 gen_charts.py ./sset_benchmark_results 
+cd tests && python3 gen_charts.py ./pers_sset_benchmark_results 
 ```
 
 

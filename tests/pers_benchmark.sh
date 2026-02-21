@@ -23,7 +23,7 @@ KEY_MAX=1000000
 REQUESTS_PER_CONN=$((TOTAL_KEYS / (THREADS * CONNECTIONS_PER_THREAD)))
 
 # 输出目录
-OUTPUT_DIR="./sset_benchmark_results"
+OUTPUT_DIR="./pers_sset_benchmark_results"
 mkdir -p "${OUTPUT_DIR}"
 
 # 使用SSET作为测试命令

@@ -9,7 +9,7 @@ SSET持久化配置对比图表生成脚本 - 单图版本
     python3 generate_charts_separate.py <结果目录>
     
     示例:
-    python3 generate_charts_separate.py ./sset_benchmark_results
+    python3 generate_charts_separate.py ./pers_sset_benchmark_results
 """
 
 import json
@@ -353,7 +353,7 @@ def create_summary_table(output_dir, configs):
 def main():
     if len(sys.argv) < 2:
         print("用法: python3 generate_charts_separate.py <结果目录>")
-        print("示例: python3 generate_charts_separate.py ./sset_benchmark_results")
+        print("示例: python3 generate_charts_separate.py ./pers_sset_benchmark_results")
         sys.exit(1)
     
     result_dir = sys.argv[1]
