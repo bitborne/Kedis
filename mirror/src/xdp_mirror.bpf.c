@@ -2,7 +2,7 @@
 #include <bpf/bpf_endian.h>
 #include <bpf/bpf_helpers.h>
 
-#include "mirror_common.h"
+#include "xdp_mirror_common.h"
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
@@ -53,33 +53,18 @@ int xdp_mirror_forward(struct xdp_md* ctx) {
   __u32 tcp_hdr_len = tcp->doff * 4;
   if (tcp_hdr_len < 20 || tcp_hdr_len > 60) return XDP_PASS;
 
+  // 确保数据偏移合法
   __u32 data_offset = sizeof(struct ethhdr) + ip_hdr_len + tcp_hdr_len;
-
-  // 显式检查偏移量
-  // if (data_offset > 1500) return XDP_PASS;
   __u32 ctx_len = ctx->data_end - ctx->data;
   if (data_offset > ctx_len) return XDP_PASS;
 
   __u32 payload_len = ctx_len - data_offset;
   if (payload_len == 0) return XDP_PASS;
-  // 限制最大处理长度，防止验证器爆炸 (不这么做)
-  // if (payload_len > 2560) payload_len = 2560;
 
-  // 发送 Header
-  struct packet_event* e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
-  if (e) {
-    e->type = EVENT_HEADER;
-    e->src_ip = ip->saddr;
-    e->dst_ip = ip->daddr;
-    e->src_port = bpf_ntohs(tcp->source);
-    e->dst_port = bpf_ntohs(tcp->dest);
-    e->payload_len = payload_len;
-    e->offset = 0;
-    e->chunk_len = 0;
-    bpf_ringbuf_submit(e, 0);
-  }
+  // [新增] 提取 TCP 序列号，注意网络字节序到主机字节序的转换
+  __u32 tcp_seq = bpf_ntohl(tcp->seq);
 
-// 发送 Data
+  // 发送 Data 分块 (移除了 EVENT_HEADER 的发送)
 #pragma unroll
   for (int i = 0; i < 1000; i++) {
     __u32 cur_offset = i * CHUNK_SIZE;
@@ -102,16 +87,15 @@ int xdp_mirror_forward(struct xdp_md* ctx) {
     if (!de) continue;
 
     de->type = EVENT_DATA;
-    de->offset = cur_offset;
-    de->chunk_len = final_len;
-
-    // ============================================
-    // [修复点] data-event 也必须填充五元组信息，否则用户态无法归类
-    // ============================================
     de->src_ip = ip->saddr;
     de->dst_ip = ip->daddr;
     de->src_port = bpf_ntohs(tcp->source);
     de->dst_port = bpf_ntohs(tcp->dest);
+
+    // [新增] 计算当前 Chunk 的绝对序列号
+    de->seq = tcp_seq + cur_offset; 
+    de->chunk_len = final_len;
+
     // ============================================
 
     // 这里使用 final_len，验证器现在可以推导出 R4 属于 [1, 256]

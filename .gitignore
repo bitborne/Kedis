@@ -18,7 +18,6 @@
 
 
 # === 根目录无后缀可执行文件 ===
-testcase
 kvstore
 .vscode
 *.excalidraw
@@ -29,8 +28,6 @@ openspec/
 !README.md
 massif*
 *.csv
-ksf.c.backup
-mul_test
 .iflow
 demo*
 *.txt
@@ -39,13 +36,6 @@ demo*
 client/test_resp.rs
 client/test_resp
 tests/test_constants
-test_1mb_packet
-test_4mb_packet
-test_4mb_simple
-test_large_packet
-test_large_packet_30k
-test_streaming_recv
-debug_streaming
 __pycache__/
 mirror/src/mirror
 mirror/.output/

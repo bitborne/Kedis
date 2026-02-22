@@ -1,5 +1,5 @@
-#ifndef __MIRROR_H__
-#define __MIRROR_H__
+#ifndef __MIRROR_COMMON_H__
+#define __MIRROR_COMMON_H__
 
 #define CHUNK_SIZE 1024
 #define EVENT_HEADER 1
