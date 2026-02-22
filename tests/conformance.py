@@ -1,4 +1,4 @@
-from resp_client import RawRedisClient
+import redis
 from dataclasses import dataclass, asdict, field
 from typing import List, Dict, Any, Optional
 import json
@@ -145,44 +145,49 @@ class ConformanceTest:
     def _execute_single_engine(self, pair: TestPair, engine: str,
                               phase: str, port: int) -> tuple[bool, Optional[str], Any]:
         """执行单引擎，返回(成功, 错误信息, 原始响应)"""
-        key = to_redis_str(self._eval_expr(pair.key_expr))
+        key = self._eval_expr(pair.key_expr)
         # 根据阶段决定期望值
         target_val_expr = pair.mod_value_expr if phase == 'get_mod' else pair.value_expr
-        expected_value = to_redis_str(self._eval_expr(target_val_expr))
+        expected_value = self._eval_expr(target_val_expr)
         
         cmd = pair.get_cmd_for_engine(engine, phase)
-        client = RawRedisClient(self.host, port)
+        # 使用 redis-py 客户端
+        client = redis.Redis(host=self.host, port=port, decode_responses=False)
         
         try:
-            client.connect()
-            
             if phase == 'set' or phase == 'mod':
                 val_expr = pair.value_expr if phase == 'set' else pair.mod_value_expr
-                val = to_redis_str(self._eval_expr(val_expr))
-                resp = client.execute(cmd, key, val)
+                val = self._eval_expr(val_expr)
+                resp = client.execute_command(cmd, key, val)
                 if resp is None: return False, "无响应", None
-                if resp[0] == 'error': return False, resp[1], resp
-                # MOD和SET成功都应返回 simple_string (+)
-                return resp[0] == 'simple_string', None, resp
+                # redis-py 对于 simple string OK 返回 b'OK' 或 True
+                if resp == b'OK' or resp is True:
+                    return True, None, resp
+                return False, f"意外响应: {resp}", resp
                 
             elif phase == 'del':
-                resp = client.execute(cmd, key)
+                resp = client.execute_command(cmd, key)
                 if resp is None: return False, "无响应", None
-                if resp[0] == 'error': return False, resp[1], resp
-                return resp[0] == 'simple_string', None, resp
+                if resp == b'OK' or resp is True or resp == 1:
+                    return True, None, resp
+                return False, f"意外响应: {resp}", resp
                 
             else: # get 或 get_mod
-                resp = client.execute(cmd, key)
-                if resp is None: return False, "无响应", None
-                if resp[0] == 'error': return False, resp[1], resp
-                if resp[0] == 'bulk_string':
-                    got = resp[1] if resp[1] is not None else ""
-                    if got == expected_value:
-                        return True, None, resp
-                    return False, f"值不匹配 (期望: {format_value(expected_value)}, 实际: {format_value(got)})", resp
-                return False, f"意外响应类型: {resp[0]}", resp
-        except Exception as e:
-            return False, str(e), None
+                resp = client.execute_command(cmd, key)
+                # KVStore 对于不存在的 key 可能返回 None (Bulk String -1)
+                got = resp
+                
+                # 统一转为 bytes 比较，因为 _eval_expr 结果可能是 str/int
+                def to_bytes(v):
+                    if v is None: return None
+                    if isinstance(v, bytes): return v
+                    return str(v).encode('utf-8')
+
+                if to_bytes(got) == to_bytes(expected_value):
+                    return True, None, resp
+                return False, f"值不匹配 (期望: {format_value(expected_value)}, 实际: {format_value(got)})", resp
+        except redis.exceptions.ResponseError as e:
+            return False, f"Redis 错误: {str(e)}", None
         finally:
             client.close()
     
