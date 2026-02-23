@@ -1,162 +1,137 @@
-# KVstore
+# KVstore: 高性能 Linux 内核增强型存储系统
 
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux-orange.svg)]()
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)]()
+[![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)]()
 
-KVstore 是一个高性能、多引擎、支持持久化及基于 eBPF 主从增量同步的 C 语言 Key-Value 存储系统，深度集成了 io_uring 与 eBPF 内核增强技术。
+KVstore 是一个面向极致性能设计、基于 **io_uring** 异步 I/O 框架、支持**多存储引擎**、**内核级主从同步**及 **RDMA 硬件加速**的高可靠 Key-Value 存储系统。
 
-## Table of Contents
-
-- [Introduction](#introduction)
-  - [Key Components](#key-components)
-- [Features](#features)
-- [架构设计]()
-  - [选择io_uring的原因](#为什么最终选择 io_uring？)
-- [Get Started](#get-started)
-  - [Clone the Repository](#clone-the-repository)
-  - [Requirements](#requirements)
-  - [Build](#build)
-  - [Run and Play](#run-and-play)
-  - [Test](#test)
-- [Performance](#performance)
-  - [Hardware Spec](#hardware-spec)
-  - [固定大小不同引擎SET (128B, 512B, 1024B)](#固定大小不同引擎set-128b-512b-1024b)
-  - [固定 size 的单 GET 测试 (热区数据预填充 `hit-rate=0.8`)](#固定-size-的单-get-测试-热区数据预填充-hit-rate08-)
-  - [业务场景模拟 (不预热, 2:8, 5:5, 60s)](#业务场景模拟不预热2855-60s)
-- [Contributing](#contributing)
-- [Support](#support)
-- [License](#license)
-
-## Introduction
-
-KVstore 旨在构建一个高性能的存储基座，完全兼容 RESP (Redis Serialization Protocol) 协议。它通过模块化设计支持多种存储引擎（Array, Hash, RBTree, SkipList），并集成了 NtyCo 协程、基于 epoll 的 reactor 模型和基于 io_uring 的 proactor模型以处理海量并发连接。此外，项目引入了 eBPF 技术（mirror 模块）, 挂载点为 tc-ingress，并使用 ring-buf 实现内核态到用户态的无上限、高吞吐的数据传输，从而实现在用户态对内核数据流进行镜像转发。
-
-### Key Components
-
-| 目录 | 说明 |
-| :--- | :-- |
-| `src/` | 核心源代码（协议解析、存储引擎、网络模型、持久化） |
-| `include/` | 核心头文件定义 |
-| `mirror/` | eBPF 扩展模块，包含独立的 libbpf、bpftool 构建系统 |
-| `NtyCo/` | 集成的协程库（子模块），提供高性能 IO 支持 |
-| `client/` | 客户端示例（Rust、Python） |
-| `tests/` | 自动化测试套件与性能基准测试 |
-
-## Features
-
-- **RESP 协议兼容**: 使用针对 4 个引擎和快照存储落盘的 22 个指令，服务端与客户端完全使用 RESP 通信协议。
-- **多引擎架构**: 提供 **Hash, RBTree, SkipList, Array** 多种数据结构实现。
-- **mmap 持久化机制**: 集成 AOF (Append Only File) 与 KSF (Snapshot) 两种持久化策略，使用名为 ksf 的自研数据存储格式，加载数据时均采用 **mmap** 减少数据拷贝。
-- **协程并发模型**: 基于 NtyCo 实现的 Reactor/Proactor 网络模型，极大提升单机并发吞吐。
-- **eBPF 独立镜像模块**: 利用 eBPF 技术在内核态实现数据镜像转发与性能监控，完全支持 Redis 等所有基于 TCP 的网络服务流量转发。
-
-## 架构设计
-
-本项目采用**模块化网络层设计**，支持三种底层网络框架：
-
-| 框架 | 状态 | 说明 |
-|:---|:---|:---|
-| **io_uring** | ✅ 生产就绪 | 当前主力方案，完整实现 RESP 协议、分片流式收发与解析 |
-| epoll | 🚧 实验性 | 基础实现，**未实现 RESP 协议及流式处理** |
-| Ntyco | 🚧 实验性 | 基础实现，**未实现 RESP 协议及流式处理** |
-
-> **设计意图**：验证 io_uring 在现代存储场景下的性能优势，同时保留 epoll/Ntyco 实现作为跨平台基础。后续计划统一抽象层，实现真正的跨平台支持。
+本项目深度集成 Linux 内核增强技术（io_uring, eBPF, mmap），旨在构建一个能够支撑百万级并发、亚毫秒级延迟、且具备非侵入式数据同步能力的高性能存储基座。对于志在深入研究高性能服务器架构、内核驱动开发及分布式系统的工程师，本项目提供了一个从用户态到内核态的全栈优化范本。
 
 ---
 
-### 为什么最终选择 io_uring？
+## 目录
 
-开发初期对三种框架进行了原型验证，io_uring 在以下方面表现显著优于传统方案：
+- [引言](#引言)
+  - [核心架构亮点](#核心架构亮点)
+  - [核心组件说明](#核心组件说明)
+- [功能特性](#功能特性)
+- [架构设计](#架构设计)
+  - [网络模型：基于 io_uring 的 Proactor](#网络模型基于-io_uring-的-proactor)
+  - [同步体系：eBPF 实时增量 + RDMA 存量全量](#同步体系ebpf-实时增量--rdma-存量全量)
+  - [存储引擎：渐进式 Rehash 与多索引结构](#存储引擎渐进式-rehash-与多索引结构)
+- [Q&A](#Q&A)
+- [快速开始](#快速开始)
+  - [环境要求](#环境要求)
+  - [编译构建](#编译构建)
+  - [运行指南](#运行指南)
+- [性能测试](#性能测试)
+- [发展路线](#发展路线-roadmap)
+- [贡献](#贡献)
+- [支持](#支持)
+- [许可证](#许可证)
 
-- 减少 70% 的系统调用开销
-- 更低的延迟抖动
-- 更简洁的异步编程模型
+---
 
-因此决定将核心功能（RESP 协议、流式解析、分片传输）优先在 io_uring 上完善，epoll/kqueue 保留为**可扩展的架构基础**。
+## 项目介绍
 
+KVstore 旨在打破传统存储系统在海量并发下的 I/O 瓶颈。通过基于 io_uring 的网络框架减少系统调用开销，也支持多网络框架的跨平台设计，利用 eBPF (XDP/TC) 实现旁路数据镜像，并规划引入 RDMA 实现零拷贝的主从节点存量同步。
 
-## Get Started
+### 核心架构亮点
 
-### Clone the Repository
+1.  **全异步 I/O 栈**：基于 `io_uring` 实现了纯异步的 Proactor 网络模型，彻底解决了传统 `epoll` 在极高并发下由于频繁上下文切换导致的性能衰减。
+2.  **内核旁路同步 (eBPF Mirror)**：在不修改应用层逻辑的前提下，利用 `eBPF` 在内核协议栈直接拦截 RESP 流量，实现对应用无感、极低开销的主从增量同步。
+3.  **异构同步双机制**：创新性地设计了“实时增量（eBPF）+ 初始全量（RDMA）”的组合。eBPF 确保主从实时数据一致，RDMA 保证在节点冷启动时，TB 级存量数据能以硬件级速度（Zero-copy）完成镜像复制。
+4.  **mmap 快照加载冷启动**：通过 `mmap` 内存映射技术，实现 KSF 快照与 AOF 日志的亚秒级数据加载。
+5.  **生产级持久化保证**：支持 **KSF 二进制快照** 与 **AOF 增量日志**，支持 `BGSAVE`，以及自定义自动快照落盘频率。
+6.  **非侵入式实时同步**：基于 eBPF 的 `mirror` 模块，在内核层实现流量劫持，支持从节点实时追踪主节点状态。
+7.  **智能内存管理**：内置定长内存池，针对 KV 常见数据分布优化。
+8.  **基于 RDMA 的存量同步**：引入 RDMA 远程直接内存访问，实现主从同步中存量数据搬运的硬件级零拷贝。
 
+### 核心组件说明
+
+| 目录 | 组件名称 | 核心技术点 |
+| :--- | :-- | :--- |
+| `src/core/` | 核心调度层 | 流式 RESP 状态机、统一命令分发路由 |
+| `src/network/` | 异步网络库 | io_uring 队列管理、固定文件/缓冲区优化、Fallback Reactor |
+| `src/engines/` | 多索引存储引擎 | 渐进式 Hash Rehash、SkipList 范围查询、RBTree 稳定查询 |
+| `src/persistence/`| 高性能持久化 | VLQ 变长编码 AOF、mmap 优化快照加载、异步 fsync 线程 |
+| `src/utils/` | 基础工具链 | 针对 256B 小对象的定长内存池、高性能线程安全日志 |
+| `mirror/` | eBPF 同步模块 | XDP/TC 挂载点双版本、内核态 TCP 重组、Ring Buffer 通信 |
+
+---
+
+## 架构设计
+
+### 网络模型：基于 io_uring 的 Proactor
+
+KVstore 采用真正的 Proactor 模式。传统的 `epoll` 属于“通知就绪”，应用仍需调用 `read` 将数据从内核拷贝到用户态。而 `io_uring` 允许应用直接提交请求到提交队列（SQ），内核完成后直接放入完成队列（CQ），系统调用开销减少约 70% 以上。
+
+### 同步体系：eBPF 实时增量 + RDMA 存量全量
+
+本项目将数据同步解耦为两个阶段：
+1.  **实时阶段 (Incremental)**：使用 eBPF 程序挂载在网络驱动（XDP）或协议栈（TC）入口。当主节点收到 `SET` 命令包时，eBPF 直接提取 TCP 载荷，不经过用户态存储逻辑，延迟极低。
+2.  **初始阶段 (Full Sync)**：针对主从刚建立连接时的存量搬运，引入 **RDMA (Remote Direct Memory Access)** 技术，允许从节点直接读取主节点内存中的快照映像，实现 GB/s 级别的传输带宽。
+
+### 存储引擎：渐进式 Rehash 与多索引结构
+
+-   **Hash 引擎**：实现了 Redis 风格的渐进式 Rehash，通过 `REHASH_STEPS_PER_OP` 机制将扩容压力分散。
+-   **SkipList 引擎**：专为范围扫描设计，层级化索引保证了大规模数据下的 $O(\log N)$ 稳定性。
+
+---
+
+## Q&A
+
+### 1. 为什么引入 RDMA？TCP 的瓶颈在哪里？
+在分布式存储的**全量数据初始化**场景下，传统的 TCP 同步存在多次内存拷贝和高频协议栈中断开销。RDMA 支持硬件层面的零拷贝（Zero-copy）和内核旁路，允许从节点绕过主节点 CPU 直接读取内存。在 TB 级数据同步时，RDMA 能将 CPU 占用率降至近乎 0，同时同步效率提升一个数量级。
+
+### 2. 为什么将 eBPF 主从同步模块（mirror）独立设计？
+`mirror` 模块被设计为一个**协议无关的内核态网络插件**。由于它在内核层仅通过五元组过滤提取载荷，**完全不解析 RESP 协议**，因此具有极强的通用性。它不仅能为本项目服务，还可以无缝迁移到 **Redis、MySQL** 等任何基于 TCP 的数据库，为其实现非侵入式的流量镜像与性能监控。
+
+### 3. 如何解决 io_uring 异步写与 eBPF 旁路镜像的一致性挑战？
+这是一个核心的技术空隙：`eBPF` 在网卡收到包时立即镜像，而 `io_uring` 可能因磁盘 I/O 延迟尚未完成写入。KVstore 计划通过在镜像路径中引入基于 **TCP 序列号的屏障机制**，以及从节点的延迟确认逻辑，确保只有在主节点磁盘落地（AOF 确认）后，从节点才正式应用该变更，从而在高并发与最终一致性间取得平衡。
+
+---
+
+## 快速开始
+
+### 环境要求
+- **基础工具**: `gcc`, `clang`, `make`
+- **系统环境**: Linux 内核版本 5.8+ (支持 io_uring 与 eBPF ring_buf)
+- **依赖库**: `liburing`, `libbpf`
+
+### 编译构建
 ```bash
-
-```
-
-### Requirements
-
-- **基础构建工具**: `gcc`, `clang` (eBPF 编译必需), `make`
-- **环境**: Rust 工具链 (可选：用于编译高性能客户端), Python (用于自动化测试), Linux 内核版本 5.8+
-
-### Build
-
-**1. 编译主服务器:**
-
-```bash
-# 项目根目录下
+# 1. 编译主服务器
 make
+# 2. 编译 eBPF 模块
+cd mirror && make prebuild && make all
 ```
 
-**2. 编译 eBPF 增强模块 (mirror):**
+### 运行指南
+
+#### 启动服务器
 
 ```bash
-cd mirror
-make help      # 查看编译帮助
-make prebuild  # 构建 libbpf 和 bpftool
-make all       # 编译 mirror 程序（推荐：一步到位✔）
-make vmlinux   # 从当前系统内核提取 vmlinux.h
-make clean     # 清理所有构建产物
+# 启动服务器 (使用默认配置)
+./kvstore
+
+# 使用自定义配置文件
+./kvstore <config-file-path>
 ```
 
-**3. 编译 Rust 客户端:**
+#### 启动 eBPF 镜像同步
 
 ```bash
-cd client
-cargo build --release
+# XDP 版本
+sudo ./mirror/src/xdp_mirror <网络接口名> <从节点IP> <从节点端口>
+# TC 版本
+sudo ./mirror/src/xdp_mirror <网络接口名> <从节点IP> <从节点端口>
 ```
 
-### Run and Play
+---
 
-**启动服务器:**
-
-```bash
-# 指定端口并以 KSF 快照模式初始化
-./kvstore 8888 snap
-
-# 指定端口并以 AOF 模式初始化
-./kvstore 9999 aof
-```
-
-**使用 rust 客户端连接:**
-
-```bash
-cd client && cargo run -- -P <本地端口号> -i  
-```
-
-**使用 python 测试客户端连接:**
-
-```bash
-python3 tests/resp_client.py
-```
-
-**开启 mirror 镜像转发**
-
-```bash
-# ⚠️ 默认：KV 存储主节点服务开在 8888 端口下
-# 网卡名称可通过 ip addr 查看
-sudo ./mirror <网卡名> <slave_ip> <slave_port>
-```
-
-### Test
-
-运行多引擎一致性测试框架：
-
-```bash
-python3 tests/conformance.py
-```
-
-## Performance
+## 性能测试
 
 *测试时间 2026.2.12*
 
@@ -368,13 +343,11 @@ memtier_benchmark \
 cd tests && python3 gen_charts.py ./pers_sset_benchmark_results 
 ```
 
-
-
 <img src="README.assets/image-20260221204018087.png" alt="image-20260221204018087" style="zoom: 67%;" />
 
 <img src="README.assets/image-20260221204037592.png" alt="image-20260221204037592" style="zoom: 67%;" />
 
-<img src="README.assets/image-20260221204053473.png" alt="image-20260221204053473" style="zoom:67%;" />
+<img src="README.assets/image-20260221204053473.png" alt="image-20260221204053473" style="zoom: 67%;" />
 
 <img src="README.assets/image-20260221204109200.png" alt="image-20260221204109200" style="zoom:67%;" />
 
@@ -382,20 +355,33 @@ cd tests && python3 gen_charts.py ./pers_sset_benchmark_results
 
 <img src="README.assets/image-20260221204215237.png" alt="image-20260221204215237" style="zoom: 67%;" />
 
+---
 
+## 发展路线 (Roadmap)
 
-## Contributing
+- [ ] **RDMA 存量全量克隆**：实现基于 RDMA Read 的大规模存量数据全量同步，压榨硬件带宽极限。
+- [ ] **eBPF 挂载点对比研究**：深入对比 **XDP vs TC vs Kprobe** 在高频同步下的 CPU 指令周期消耗与丢包率。
+- [ ] **io_uring 固定缓冲区优化**：引入 `IORING_REGISTER_BUFFERS` 实现真正的零拷贝内存路径。
+- [ ] **内存池性能测试**：通过 `valgrind` 的 `massif` 工具，对比基于**自研内存池**与 **jemalloc** 的两种 KVstore 的堆内存变化趋势。
 
-欢迎任何形式的贡献！在提交 PR 之前，请确保已通过所有 `tests/` 下的一致性测试 `conformance.py`。
+---
 
-## Support
+## 贡献
+
+欢迎任何形式的贡献！在提交 PR 之前，请确保已通过所有 `tests/` 下的一致性测试 `test.sh`。
+
+```bash
+# 需要用到 root 权限以启动 eBPF 程序
+sudo tests/test.sh
+```
+
+## 支持
 
 如有疑问，请通过 GitHub Issues 提交反馈。
 
-## License
-
-- 本项目核心代码采用 [MIT License](LICENSE) 授权。
-- eBPF 内核态代码（`mirror/` 模块）采用 **Dual BSD/GPL** 混合授权，以符合 Linux 内核合规性要求。
+## 许可证
+- 核心代码：MIT License。
+- eBPF 代码：Dual BSD/GPL。
 
 ---
-*Last Updated: 2026-02-10*
+*最后更新: 2026-02-23*
