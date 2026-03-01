@@ -1,6 +1,6 @@
 CC = gcc
 CFLAGS = -I./NtyCo/core/ -O2 -Wall
-LDFLAGS = -L./NtyCo/ -lntyco -lpthread -luring -ldl -ljemalloc
+LDFLAGS = -L./NtyCo/ -lntyco -lpthread -luring -ldl -ljemalloc -lrdmacm -libverbs
 
 # 主项目源文件
 SRCS = src/core/kvstore.c \
@@ -8,6 +8,7 @@ SRCS = src/core/kvstore.c \
 	   src/core/config.c \
        src/network/ntyco.c \
        src/network/proactor.c \
+       src/network/rdma_sync.c \
        src/engines/kvs_array.c \
        src/engines/kvs_rbtree.c \
        src/engines/kvs_hash.c \

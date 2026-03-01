@@ -11,7 +11,7 @@ kv_config g_config;
 
 /* 枚举选项定义(用于.conf解析) */
 static const char *init_mode_options[] = {"snapshot", "aof", "none", NULL};
-static const char *replica_mode_options[] = {"master", "slave", NULL};
+static const char *replica_mode_options[] = {"none", "master", "slave", NULL};
 
 /* 临时存储枚举值的变量（用于表驱动绑定） */
 static int init_mode_value;
@@ -57,8 +57,8 @@ static config_option config_table[] = {
     {
         "replica-mode", CONFIG_TYPE_ENUM, &g_config.replica_mode,
         .limit.e = {replica_mode_options, &replica_mode_value},
-        .default_value = "master",
-        .description = "节点角色: master/slave"
+        .default_value = "none",
+        .description = "节点角色: none/master/slave"
     },
     {
         "master-host", CONFIG_TYPE_STRING, g_config.master_host,
@@ -414,6 +414,6 @@ char *kv_config_get(const char *name) {
 
 /* 辅助函数：获取主从模式字符串 */
 const char *kv_config_replica_mode_str(void) {
-    const char *modes[] = {"master", "slave"};
+    const char *modes[] = {"none", "master", "slave"};
     return modes[g_config.replica_mode];
 }

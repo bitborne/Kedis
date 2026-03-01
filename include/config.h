@@ -37,7 +37,8 @@ typedef enum {
 
 /* 主从模式枚举 */
 typedef enum {
-    REPLICA_MODE_MASTER = 0,    /* 主节点 */
+    REPLICA_MODE_NONE = 0,      /* 独立节点 */
+    REPLICA_MODE_MASTER,        /* 主节点 */
     REPLICA_MODE_SLAVE          /* 从节点 */
 } replica_mode_t;
 

@@ -45,3 +45,4 @@ vmlinux.h
 report/
 tests/image/uv.lock
 mirror/src/xdp_mirror
+docs/

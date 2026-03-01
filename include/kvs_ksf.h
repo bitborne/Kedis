@@ -17,4 +17,13 @@ int ksfLoadAll(void);  // 加载所有引擎的KSF快照
 // mmap 优化版本
 int ksfLoadAll_mmap(void);  // 使用 mmap 加载所有 KSF 快照
 
+// 单个引擎写入函数（用于 RDMA 同步）
+int ksfWriteArray(int fd);
+int ksfWriteRbtree(int fd);
+int ksfWriteHash(int fd);
+int ksfWriteSkiplist(int fd);
+
+// 从内存缓冲区加载引擎数据（用于 RDMA 同步）
+int ksf_load_engine_from_buffer(int engine_type, void *buffer, size_t length);
+
 #endif // __KVS_KSF_H__
