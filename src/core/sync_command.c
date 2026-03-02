@@ -100,7 +100,7 @@ int kvs_cmd_sync(struct conn *c) {
         return 0;
     }
 
-    /* 启动同步 */
+    /* 正常: 启动同步 */
     if (start_slave_sync() < 0) {
         add_reply_error(c, "Failed to start sync");
         return 0;
@@ -116,7 +116,7 @@ int kvs_cmd_sync(struct conn *c) {
  * 语法: REPLICAOF <host> <port>
  *       REPLICAOF NO ONE  (取消主从关系)
  */
-int kvs_cmd_replicaof(struct conn *c, int argc, struct robj *argv) {
+int kvs_cmd_replicaof(struct conn *c, int argc, robj *argv) {  // robj 定义在 kvs_network.h
     if (argc < 3) {
         add_reply_error(c, "Wrong number of arguments for 'replicaof' command");
         return 0;
@@ -159,7 +159,7 @@ int kvs_cmd_replicaof(struct conn *c, int argc, struct robj *argv) {
     g_config.master_port = port;
     g_config.replica_mode = REPLICA_MODE_SLAVE;
 
-    /* 启动同步 */
+    /* 立即启动同步 */
     if (start_slave_sync() < 0) {
         /* 恢复配置 */
         g_config.master_host[0] = '\0';

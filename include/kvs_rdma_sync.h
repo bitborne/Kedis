@@ -353,6 +353,13 @@ const char* rdma_sync_engine_name(rdma_engine_type_t type);
  * ============================================================================ */
 
 /*
+ * 同步模块初始化和清理
+ * 在 main() 中调用，用于启动和停止 RDMA 同步服务
+ */
+int sync_module_init(void);       // 初始化同步模块：主节点启动 RDMA 服务器，从节点准备客户端
+void sync_module_cleanup(void);   // 清理同步模块：关闭连接，释放资源
+
+/*
  * SYNC 命令处理函数
  * 在 proactor.c 中调用，处理客户端发来的 SYNC 命令
  *
@@ -366,8 +373,9 @@ int kvs_cmd_sync(struct conn *c);
 /*
  * REPLICAOF 命令处理函数
  * 用于动态设置/取消主从关系
+ * 语法: REPLICAOF <host> <port>  或  REPLICAOF NO ONE
  */
-int kvs_cmd_replicaof(struct conn *c, const char *host, int port);
+int kvs_cmd_replicaof(struct conn *c, int argc, robj *argv);  // robj 定义在 kvs_network.h 中
 
 /*
  * 检查当前节点是否正在进行存量同步

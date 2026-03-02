@@ -1,4 +1,5 @@
 #include "../../include/kvstore.h"
+#include "../../include/kvs_rdma_sync.h"  // RDMA 同步功能头文件，提供 kvs_cmd_sync() 和 kvs_cmd_replicaof()
 
 #include <assert.h>
 #include <fcntl.h>
@@ -172,7 +173,7 @@ const char*
                  "AGET", "ADEL", "AMOD", "AEXIST", "HSET", "HGET",
                  "HDEL", "HMOD", "HEXIST", "RSET", "RGET", "RDEL",
                  "RMOD", "REXIST", "SSET", "SGET", "SDEL", "SMOD",
-                 "SEXIST", "SAVE", "BGSAVE", "SYNC"};    // 添加SAVE和BGSAVE命令
+                 "SEXIST", "SAVE", "BGSAVE", "SYNC", "REPLICAOF"};    // 添加SAVE、BGSAVE、SYNC和REPLICAOF命令
 
 // 自动保存参数：save seconds changes
 // static int save_params_seconds = 300;        // 5分钟
@@ -220,7 +221,8 @@ void check_and_perform_autosave() {
 }
 
 /* ---------------- RESP 响应辅助函数 ---------------- */
-static void add_reply_str(struct conn* c, const char* str) {
+// 发送原始字符串到回复缓冲区，供命令处理使用
+void add_reply_str(struct conn* c, const char* str) {
         if (!str) return;
         size_t len = strlen(str);
         if (c->wlen + len > RESP_BUF_SIZE) return; // 简单保护
@@ -228,21 +230,24 @@ static void add_reply_str(struct conn* c, const char* str) {
         c->wlen += len;
 }
 
-static void add_reply_error(struct conn* c, const char* err) {
+// 发送错误回复 (-ERR ...)，供命令处理使用
+void add_reply_error(struct conn* c, const char* err) {
         add_reply_str(c, "-");
         add_reply_str(c, err);
         add_reply_str(c, "\r\n");
         c->send_st = ST_SEND_SMALL;
-    }
-    
-static void add_reply_status(struct conn* c, const char* status) {
+}
+
+// 发送状态回复 (+OK ...)，供命令处理使用
+void add_reply_status(struct conn* c, const char* status) {
         add_reply_str(c, "+");
         add_reply_str(c, status);
         add_reply_str(c, "\r\n");
         c->send_st = ST_SEND_SMALL;
 }
 
-static void add_reply_bulk(struct conn* c, char* str) {
+// 发送批量字符串回复 ($len...)，供命令处理使用
+void add_reply_bulk(struct conn* c, char* str) {
         // 如果 str 为 NULL，返回 Null Bulk String
         if (str == NULL) {
                 add_reply_str(c, "$-1\r\n"); // Null Bulk String
@@ -636,10 +641,17 @@ int kvs_protocol(struct conn* c) {
             add_reply_status(c, "Background saving started");
             break;
         case KVS_CMD_SYNC:
-            kvs_logError("SYNC 命令暂未实现\n");
-            add_reply_error(c, "SYNC 命令暂未实现");
-            return 0;
-            break;
+            // SYNC 命令：触发从节点向主节点执行 RDMA 存量同步
+            // 仅可在从节点上执行，主节点会返回错误
+            return kvs_cmd_sync(c);  // 调用 sync_command.c 中实现的命令处理函数
+        case KVS_CMD_REPLICAOF:
+            // REPLICAOF 命令：设置或取消主从复制关系
+            // 用法: REPLICAOF <host> <port>  或  REPLICAOF NO ONE
+            if (c->argc < 3) {
+                add_reply_error(c, "wrong number of arguments for 'replicaof' command");
+                return 0;
+            }
+            return kvs_cmd_replicaof(c, c->argc, c->argv);  // 调用 sync_command.c 中的处理函数
         default:
             add_reply_error(c, "UNKNOWN COMMAND");
     }
@@ -717,6 +729,9 @@ void dest_kvengine(void) {
         mem_pool_destroy(g_mem_pool);
         g_mem_pool = NULL;
     }
+
+    // 清理同步模块（关闭 RDMA 连接、释放资源）
+    sync_module_cleanup();
 }
 
 // 信号处理函数
@@ -760,6 +775,27 @@ int main(int argc, char* argv[]) {
     }
 
     init_kvengine();
+
+    /* 4. 初始化同步模块（RDMA 主从复制）
+     * 如果是主节点，启动 RDMA 服务器等待从节点连接
+     * 如果是从节点，准备 RDMA 客户端资源
+     */
+    if (sync_module_init() < 0) {
+        kvs_logError("[main] 同步模块初始化失败\n");
+        return -1;
+    }
+
+    /* 5. 如果是从节点且配置了主节点，自动启动存量同步 */
+    if (g_config.replica_mode == REPLICA_MODE_SLAVE &&
+        g_config.master_host[0] != '\0') {
+        kvs_logInfo("[main] 从节点配置检测到主节点 %s:%d，启动自动同步\n",
+                    g_config.master_host, g_config.master_port);
+        extern int start_slave_sync(void);  // 来自 sync_command.c
+        if (start_slave_sync() < 0) {
+            kvs_logError("[main] 自动同步启动失败\n");
+            /* 不返回错误，允许用户手动重试 */
+        }
+    }
 
         if (g_config.init_mode == INIT_MODE_AOF) {
 #if ENABLE_MULTI_ENGINE

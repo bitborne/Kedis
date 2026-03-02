@@ -88,6 +88,7 @@ enum {
     KVS_CMD_SAVE,
     KVS_CMD_BGSAVE,
     KVS_CMD_SYNC,
+    KVS_CMD_REPLICAOF,  // 设置/取消主从复制关系: REPLICAOF <host> <port> 或 REPLICAOF NO ONE
 
     KVS_CMD_COUNT
 };

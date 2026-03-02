@@ -23,6 +23,7 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <pthread.h>
+#include <ctype.h>  // isspace, isdigit 等字符处理函数
 
 /* ============================================================================
  * 外部引擎变量声明（来自 kvstore.c）
@@ -1028,6 +1029,232 @@ int rdma_sync_poll_completion(struct rdma_client_context *ctx,
  * TCP 队列处理
  * ============================================================================ */
 
+/*
+ * 从 RESP 协议数据中提取整数（用于解析 *<argc> 和 $<len>）
+ * @param p 指向数字开始位置的指针
+ * @param end 指向数据结尾的指针
+ * @param out_val 输出解析后的整数值
+ * @return 成功返回下一个字符位置，失败返回 NULL
+ */
+static const char* parse_resp_integer(const char *p, const char *end, int *out_val) {
+    /* 跳过空白字符 */
+    while (p < end && isspace((unsigned char)*p)) p++;
+    if (p >= end) return NULL;
+
+    /* 解析数字 */
+    int val = 0;
+    int sign = 1;
+    if (*p == '-') {
+        sign = -1;
+        p++;
+    }
+    if (p >= end || !isdigit((unsigned char)*p)) return NULL;
+
+    while (p < end && isdigit((unsigned char)*p)) {
+        val = val * 10 + (*p - '0');
+        p++;
+    }
+
+    *out_val = val * sign;
+    return p;
+}
+
+/*
+ * 执行积压的 RESP 命令
+ * 专用解析器，假设数据是完整的 RESP Array 格式，不处理 TCP 粘包
+ *
+ * 输入格式示例:
+ *   *3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$5\r\nvalue\r\n
+ *
+ * @param data RESP 协议数据
+ * @param len 数据长度
+ * @return 0成功，-1失败
+ */
+static int rdma_sync_execute_cmd(const char *data, size_t len) {
+    const char *p = data;
+    const char *end = data + len;
+
+    /* 步骤1: 解析 Array 头部 (*<argc>\r\n) */
+    if (p >= end || *p != '*') {
+        kvs_logError("[TCP Queue] 无效 RESP: 期望 '*' 开头\n");
+        return -1;
+    }
+    p++; /* 跳过 '*' */
+
+    int argc = 0;
+    p = parse_resp_integer(p, end, &argc);
+    if (!p || argc <= 0 || argc > 8) { /* 最多支持 8 个参数 */
+        kvs_logError("[TCP Queue] 无效 RESP: argc=%d\n", argc);
+        return -1;
+    }
+
+    /* 跳过 \r\n */
+    if (p + 2 > end || p[0] != '\r' || p[1] != '\n') {
+        kvs_logError("[TCP Queue] 无效 RESP: 期望 \\r\\n 在 argc 后\n");
+        return -1;
+    }
+    p += 2;
+
+    /* 步骤2: 解析每个 Bulk String 参数 ($<len>\r\n<data>\r\n) */
+    char *argv[8] = {NULL};  /* 最多 8 个参数 */
+    size_t argv_len[8] = {0};
+    int i;
+
+    for (i = 0; i < argc; i++) {
+        if (p >= end || *p != '$') {
+            kvs_logError("[TCP Queue] 无效 RESP: 期望 '$' 开头 (arg %d)\n", i);
+            goto cleanup;
+        }
+        p++; /* 跳过 '$' */
+
+        int str_len = 0;
+        p = parse_resp_integer(p, end, &str_len);
+        if (!p || str_len < 0) {
+            kvs_logError("[TCP Queue] 无效 RESP: 无效长度 (arg %d)\n", i);
+            goto cleanup;
+        }
+
+        /* 跳过 \r\n */
+        if (p + 2 > end || p[0] != '\r' || p[1] != '\n') {
+            kvs_logError("[TCP Queue] 无效 RESP: 期望 \\r\\n 在长度后 (arg %d)\n", i);
+            goto cleanup;
+        }
+        p += 2;
+
+        /* 检查数据是否完整 */
+        if (p + str_len + 2 > end) {
+            kvs_logError("[TCP Queue] 无效 RESP: 数据不完整 (arg %d)\n", i);
+            goto cleanup;
+        }
+
+        /* 复制参数数据（引擎需要以 null 结尾的字符串） */
+        argv[i] = kvs_malloc(str_len + 1);
+        if (!argv[i]) {
+            kvs_logError("[TCP Queue] 内存分配失败\n");
+            goto cleanup;
+        }
+        memcpy(argv[i], p, str_len);
+        argv[i][str_len] = '\0';
+        argv_len[i] = str_len;
+
+        p += str_len;
+
+        /* 跳过 \r\n */
+        if (p[0] != '\r' || p[1] != '\n') {
+            kvs_logError("[TCP Queue] 无效 RESP: 期望 \\r\\n 在数据后 (arg %d)\n", i);
+            goto cleanup;
+        }
+        p += 2;
+    }
+
+    /* 步骤3: 执行命令 */
+    if (argc < 1) {
+        kvs_logError("[TCP Queue] 无效命令: 空参数\n");
+        goto cleanup;
+    }
+
+    const char *cmd = argv[0];
+    int ret = -1;
+
+    kvs_logDebug("[TCP Queue] 执行命令: %s, argc=%d\n", cmd, argc);
+
+#if ENABLE_MULTI_ENGINE
+    /* 多引擎模式: 根据命令前缀选择引擎 */
+    if (strcasecmp(cmd, "SET") == 0 && argc >= 3) {
+        ret = kvs_rbtree_set(&rbtree_engine,
+                             &(robj){.ptr = argv[1], .len = argv_len[1]},
+                             &(robj){.ptr = argv[2], .len = argv_len[2]});
+    } else if (strcasecmp(cmd, "GET") == 0 && argc >= 2) {
+        char *val = kvs_rbtree_get(&rbtree_engine,
+                                   &(robj){.ptr = argv[1], .len = argv_len[1]});
+        if (val) kvs_free(val); /* 引擎返回的数据需要释放 */
+        ret = (val != NULL) ? 0 : -1;
+    } else if (strcasecmp(cmd, "DEL") == 0 && argc >= 2) {
+        ret = kvs_rbtree_del(&rbtree_engine,
+                             &(robj){.ptr = argv[1], .len = argv_len[1]});
+    } else if (strcasecmp(cmd, "MOD") == 0 && argc >= 3) {
+        ret = kvs_rbtree_mod(&rbtree_engine,
+                             &(robj){.ptr = argv[1], .len = argv_len[1]},
+                             &(robj){.ptr = argv[2], .len = argv_len[2]});
+    }
+    /* Array 引擎命令 */
+    else if (strcasecmp(cmd, "ASET") == 0 && argc >= 3) {
+        ret = kvs_array_set(&array_engine,
+                            &(robj){.ptr = argv[1], .len = argv_len[1]},
+                            &(robj){.ptr = argv[2], .len = argv_len[2]});
+    } else if (strcasecmp(cmd, "ADEL") == 0 && argc >= 2) {
+        ret = kvs_array_del(&array_engine,
+                            &(robj){.ptr = argv[1], .len = argv_len[1]});
+    } else if (strcasecmp(cmd, "AMOD") == 0 && argc >= 3) {
+        ret = kvs_array_mod(&array_engine,
+                            &(robj){.ptr = argv[1], .len = argv_len[1]},
+                            &(robj){.ptr = argv[2], .len = argv_len[2]});
+    }
+    /* Hash 引擎命令 */
+    else if (strcasecmp(cmd, "HSET") == 0 && argc >= 3) {
+        ret = kvs_hash_set(&hash_engine,
+                           &(robj){.ptr = argv[1], .len = argv_len[1]},
+                           &(robj){.ptr = argv[2], .len = argv_len[2]});
+    } else if (strcasecmp(cmd, "HDEL") == 0 && argc >= 2) {
+        ret = kvs_hash_del(&hash_engine,
+                           &(robj){.ptr = argv[1], .len = argv_len[1]});
+    } else if (strcasecmp(cmd, "HMOD") == 0 && argc >= 3) {
+        ret = kvs_hash_mod(&hash_engine,
+                           &(robj){.ptr = argv[1], .len = argv_len[1]},
+                           &(robj){.ptr = argv[2], .len = argv_len[2]});
+    }
+    /* Skiplist 引擎命令 */
+    else if (strcasecmp(cmd, "SSET") == 0 && argc >= 3) {
+        ret = kvs_skiplist_set(&skiplist_engine,
+                               &(robj){.ptr = argv[1], .len = argv_len[1]},
+                               &(robj){.ptr = argv[2], .len = argv_len[2]});
+    } else if (strcasecmp(cmd, "SDEL") == 0 && argc >= 2) {
+        ret = kvs_skiplist_del(&skiplist_engine,
+                               &(robj){.ptr = argv[1], .len = argv_len[1]});
+    } else if (strcasecmp(cmd, "SMOD") == 0 && argc >= 3) {
+        ret = kvs_skiplist_mod(&skiplist_engine,
+                               &(robj){.ptr = argv[1], .len = argv_len[1]},
+                               &(robj){.ptr = argv[2], .len = argv_len[2]});
+    }
+#else
+    /* 单引擎模式 */
+    if (strcasecmp(cmd, "SET") == 0 && argc >= 3) {
+        ret = kvs_main_set(&global_main_engine,
+                           &(robj){.ptr = argv[1], .len = argv_len[1]},
+                           &(robj){.ptr = argv[2], .len = argv_len[2]});
+    } else if (strcasecmp(cmd, "GET") == 0 && argc >= 2) {
+        char *val = kvs_main_get(&global_main_engine,
+                                 &(robj){.ptr = argv[1], .len = argv_len[1]});
+        if (val) kvs_free(val);
+        ret = (val != NULL) ? 0 : -1;
+    } else if (strcasecmp(cmd, "DEL") == 0 && argc >= 2) {
+        ret = kvs_main_del(&global_main_engine,
+                           &(robj){.ptr = argv[1], .len = argv_len[1]});
+    } else if (strcasecmp(cmd, "MOD") == 0 && argc >= 3) {
+        ret = kvs_main_mod(&global_main_engine,
+                           &(robj){.ptr = argv[1], .len = argv_len[1]},
+                           &(robj){.ptr = argv[2], .len = argv_len[2]});
+    }
+#endif
+    else {
+        kvs_logWarn("[TCP Queue] 未知或不支持的命令: %s\n", cmd);
+    }
+
+    if (ret != 0) {
+        kvs_logDebug("[TCP Queue] 命令执行失败: %s (ret=%d)\n", cmd, ret);
+    }
+
+    /* 步骤4: 清理分配的内存 */
+cleanup:
+    for (i = 0; i < argc; i++) {
+        if (argv[i]) {
+            kvs_free(argv[i]);
+        }
+    }
+
+    return (ret == 0) ? 0 : -1;
+}
+
 void rdma_sync_enqueue_tcp_cmd(const char *data, size_t len) {
     if (!g_client_ctx) {
         return;
@@ -1040,14 +1267,14 @@ void rdma_sync_enqueue_tcp_cmd(const char *data, size_t len) {
     }
 
     /* 分配节点 */
-    struct cmd_buffer *cmd = malloc(sizeof(struct cmd_buffer));
+    struct cmd_buffer *cmd = kvs_malloc(sizeof(struct cmd_buffer));
     if (!cmd) {
         return;
     }
 
-    cmd->data = malloc(len);
+    cmd->data = kvs_malloc(len);
     if (!cmd->data) {
-        free(cmd);
+        kvs_free(cmd);
         return;
     }
 
@@ -1094,11 +1321,16 @@ void rdma_sync_drain_tcp_queue(void) {
         pthread_mutex_unlock(&g_client_ctx->cmd_queue_lock);
 
         /* 解析并执行命令 */
-        /* TODO: 调用协议解析函数 */
-        kvs_logDebug("执行积压命令 (%zu bytes)\n", cmd->len);
+        /* 调用专用解析器执行积压命令，不处理 TCP 粘包，直接执行 */
+        int ret = rdma_sync_execute_cmd(cmd->data, cmd->len);
+        if (ret < 0) {
+            kvs_logWarn("[TCP Queue] 命令执行失败 (%zu bytes)\n", cmd->len);
+        } else {
+            kvs_logDebug("[TCP Queue] 命令执行成功 (%zu bytes)\n", cmd->len);
+        }
 
-        free(cmd->data);
-        free(cmd);
+        kvs_free(cmd->data);
+        kvs_free(cmd);
         count++;
     }
 
@@ -1252,11 +1484,11 @@ void rdma_sync_client_disconnect(void) {
         g_client_ctx->mr_recv = NULL;
     }
     if (g_client_ctx->ctrl_send_buf) {
-        free(g_client_ctx->ctrl_send_buf);
+        kvs_free(g_client_ctx->ctrl_send_buf);
         g_client_ctx->ctrl_send_buf = NULL;
     }
     if (g_client_ctx->ctrl_recv_buf) {
-        free(g_client_ctx->ctrl_recv_buf);
+        kvs_free(g_client_ctx->ctrl_recv_buf);
         g_client_ctx->ctrl_recv_buf = NULL;
     }
     if (g_client_ctx->recv_buf) {
@@ -1286,7 +1518,7 @@ void rdma_sync_client_disconnect(void) {
 
     pthread_mutex_destroy(&g_client_ctx->cmd_queue_lock);
 
-    free(g_client_ctx);
+    kvs_free(g_client_ctx);
     g_client_ctx = NULL;
 
     kvs_logInfo("RDMA 连接已断开\n");

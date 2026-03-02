@@ -74,4 +74,10 @@ extern int reactor_start(unsigned short port, msg_handler handler);
 extern int proactor_start(unsigned short port, msg_handler handler);
 extern int ntyco_start(unsigned short port, msg_handler handler);
 
+// RESP 协议回复函数声明（供命令处理使用）
+extern void add_reply_error(struct conn* c, const char* err);    // 发送错误回复 (-ERR ...)
+extern void add_reply_status(struct conn* c, const char* status); // 发送状态回复 (+OK ...)
+extern void add_reply_bulk(struct conn* c, char* data);   // 发送批量字符串回复 ($len...)
+extern void add_reply_str(struct conn* c, const char* str);     // 发送原始字符串
+
 #endif // __KVS_NETWORK_H__
