@@ -1611,6 +1611,22 @@ int rdma_sync_client_connect(const char *master_host,
         kvs_logError("[客户端] 查询QP状态失败: %s\n", strerror(errno));
     }
 
+    /* 预注册接收缓冲区的 MR
+     * 这样可以避免在大数据量传输时动态注册 MR 失败
+     * 注册整个 256MB 缓冲区，使用 LOCAL_WRITE 权限 */
+    g_client_ctx->mr_recv = ibv_reg_mr(g_client_ctx->pd,
+                                        g_client_ctx->recv_buf,
+                                        g_client_ctx->recv_buf_size,
+                                        IBV_ACCESS_LOCAL_WRITE);
+    if (!g_client_ctx->mr_recv) {
+        kvs_logError("ibv_reg_mr (recv_buf) 失败: %s (errno=%d)\n",
+                     strerror(errno), errno);
+        kvs_logError("  尝试注册 %zu bytes 失败\n", g_client_ctx->recv_buf_size);
+        goto err_mr_ctrl;
+    }
+    kvs_logInfo("[客户端] 接收缓冲区 MR 注册成功，lkey=%u，size=%zu\n",
+                g_client_ctx->mr_recv->lkey, g_client_ctx->recv_buf_size);
+
     return 0;
 
 err_mr_ctrl:
@@ -1796,30 +1812,37 @@ int rdma_sync_recv_ctrl_msg(struct rdma_client_context *ctx,
 
 /**
  * @brief 执行 RDMA Read 操作
+ *
+ * 【修改】使用预注册的 MR (ctx->mr_recv)，避免大数据量时动态注册失败
  */
 int rdma_sync_post_read(struct rdma_client_context *ctx,
                         uint64_t remote_addr,
                         uint32_t remote_rkey,
                         void *local_buf,
                         size_t length) {
-    /* 注册本地接收缓冲区 */
-    struct ibv_mr *mr = ibv_reg_mr(ctx->pd, local_buf, length,
-                                   IBV_ACCESS_LOCAL_WRITE);
-    if (!mr) {
-        kvs_logError("ibv_reg_mr (recv) 失败\n");
+    /* 使用预注册的 MR */
+    if (!ctx->mr_recv) {
+        kvs_logError("mr_recv 未注册\n");
         return -1;
     }
 
-    /* 构建 SGE */
+    /* 检查数据是否在预注册缓冲区内 */
+    if (local_buf < ctx->recv_buf ||
+        (char*)local_buf + length > (char*)ctx->recv_buf + ctx->recv_buf_size) {
+        kvs_logError("local_buf 超出预注册缓冲区范围\n");
+        return -1;
+    }
+
+    /* 构建 SGE，使用预注册 MR 的 lkey */
     struct ibv_sge sge = {
         .addr = (uint64_t)local_buf,
         .length = length,
-        .lkey = mr->lkey
+        .lkey = ctx->mr_recv->lkey
     };
 
     /* 构建 RDMA Read WR */
     struct ibv_send_wr wr = {
-        .wr_id = (uint64_t)mr,      /* 保存 MR 指针以便后续释放 */
+        .wr_id = 1,                  /* 使用简单 wr_id */
         .opcode = IBV_WR_RDMA_READ,  /* RDMA Read 操作 */
         .send_flags = IBV_SEND_SIGNALED,
         .num_sge = 1,
@@ -1830,8 +1853,7 @@ int rdma_sync_post_read(struct rdma_client_context *ctx,
 
     struct ibv_send_wr *bad_wr;
     if (ibv_post_send(ctx->qp, &wr, &bad_wr)) {
-        kvs_logError("ibv_post_send (RDMA Read) 失败\n");
-        ibv_dereg_mr(mr);
+        kvs_logError("ibv_post_send (RDMA Read) 失败: %s\n", strerror(errno));
         return -1;
     }
 
@@ -1862,15 +1884,8 @@ int rdma_sync_poll_completion(struct rdma_client_context *ctx,
         return -1;
     }
 
-    /* 如果是 Send 操作，释放 MR */
-    if (wc->opcode == IBV_WC_SEND) {
-        struct ibv_mr *mr = (struct ibv_mr *)wc->wr_id;
-        if (mr) {
-            void *buf = mr->addr;
-            ibv_dereg_mr(mr);
-            free(buf);
-        }
-    }
+    /* 注意: 我们使用预注册的 MR，不需要在这里释放
+     * 原来用于动态注册 MR 的清理代码已移除 */
 
     return ret;
 }
@@ -2318,8 +2333,9 @@ void rdma_sync_client_disconnect(void) {
         return;
     }
 
-    /* 断开 RDMA 连接 */
-    if (g_client_ctx->cm_id) {
+    /* 断开 RDMA 连接 - 只有状态为 CONNECTING 或更高时才需要断开
+     * 如果连接从未建立，跳过断开操作以避免段错误 */
+    if (g_client_ctx->cm_id && g_client_ctx->state >= SYNC_STATE_CONNECTING) {
         rdma_disconnect(g_client_ctx->cm_id);
     }
 
