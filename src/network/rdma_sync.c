@@ -274,6 +274,22 @@ int rdma_sync_master_prepare_engine(struct rdma_sync_context *ctx,
     void *mmap_addr = NULL;
     struct ibv_mr *mr = NULL;
 
+    /* 确保临时目录存在 */
+    struct stat st = {0};
+    if (stat(RDMA_SYNC_TEMP_DIR, &st) == -1) {
+        if (mkdir(RDMA_SYNC_TEMP_DIR, 0755) == -1) {
+            kvs_logError("创建临时目录失败: %s\n", strerror(errno));
+            /* 尝试创建父目录 */
+            if (mkdir("./data", 0755) == -1 && errno != EEXIST) {
+                kvs_logError("创建父目录失败: %s\n", strerror(errno));
+            } else {
+                if (mkdir(RDMA_SYNC_TEMP_DIR, 0755) == -1 && errno != EEXIST) {
+                    kvs_logError("创建临时目录仍然失败: %s\n", strerror(errno));
+                }
+            }
+        }
+    }
+
     /* 构建临时文件路径 */
     snprintf(path, sizeof(path), "%s/" RDMA_SYNC_TEMP_FILE,
              RDMA_SYNC_TEMP_DIR, rdma_sync_engine_name(engine_type));
