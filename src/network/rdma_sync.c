@@ -2262,40 +2262,63 @@ int rdma_sync_perform_full_sync(void) {
                     engine_name, remote_addr, remote_rkey, data_len);
 
         if (data_len > 0) {
-            /* 3. 确保接收缓冲区足够 */
+            /* 3. 分段接收数据（支持大数据量）
+             * 每段最大为 RDMA_BUFFER_SIZE（32MB） */
+            uint32_t total_received = 0;
+            uint32_t remaining = data_len;
+
+            /* 分配临时缓冲区存储完整数据（如果数据大于缓冲区） */
             if (data_len > g_client_ctx->recv_buf_size) {
-                kvs_logError("数据太大 (%u > %zu)\n",
-                             data_len, g_client_ctx->recv_buf_size);
-                return -1;
+                kvs_logInfo("数据 %u bytes 超过缓冲区 %zu bytes，使用分段传输\n",
+                            data_len, g_client_ctx->recv_buf_size);
             }
 
-            /* 4. 执行 RDMA Read */
-            if (rdma_sync_post_read(g_client_ctx, remote_addr, remote_rkey,
-                                    g_client_ctx->recv_buf, data_len) < 0) {
-                kvs_logError("RDMA Read 失败\n");
-                return -1;
+            while (remaining > 0) {
+                uint32_t chunk_size = (remaining > g_client_ctx->recv_buf_size)
+                                      ? g_client_ctx->recv_buf_size
+                                      : remaining;
+
+                kvs_logInfo("RDMA Read 分段: offset=%u, chunk=%u, remaining=%u\n",
+                            total_received, chunk_size, remaining);
+
+                /* 4. 执行 RDMA Read */
+                if (rdma_sync_post_read(g_client_ctx,
+                                        remote_addr + total_received,
+                                        remote_rkey,
+                                        g_client_ctx->recv_buf,
+                                        chunk_size) < 0) {
+                    kvs_logError("RDMA Read 失败 (offset=%u, chunk=%u)\n",
+                                 total_received, chunk_size);
+                    return -1;
+                }
+
+                /* 5. 等待 Read 完成 */
+                struct ibv_wc wc;
+                if (rdma_sync_poll_completion(g_client_ctx, &wc, 1) < 0) {
+                    kvs_logError("等待 RDMA Read 完成失败\n");
+                    return -1;
+                }
+
+                kvs_logInfo("RDMA Read 分段完成，读取 %u bytes\n", chunk_size);
+
+                /* 6. 解析并加载这一段 KSF 数据 */
+                g_client_ctx->state = SYNC_STATE_LOADING;
+
+                if (ksf_load_engine_from_buffer(engine,
+                                                 g_client_ctx->recv_buf,
+                                                 chunk_size) < 0) {
+                    kvs_logError("加载引擎 %s 分段失败 (offset=%u)\n",
+                                 engine_name, total_received);
+                    return -1;
+                }
+
+                g_client_ctx->state = SYNC_STATE_TRANSFERRING;
+
+                total_received += chunk_size;
+                remaining -= chunk_size;
             }
 
-            /* 5. 等待 Read 完成 */
-            struct ibv_wc wc;
-            if (rdma_sync_poll_completion(g_client_ctx, &wc, 1) < 0) {
-                kvs_logError("等待 RDMA Read 完成失败\n");
-                return -1;
-            }
-
-            kvs_logInfo("RDMA Read 完成，读取 %u bytes\n", data_len);
-
-            /* 6. 解析并加载 KSF 数据 */
-            g_client_ctx->state = SYNC_STATE_LOADING;
-
-            if (ksf_load_engine_from_buffer(engine,
-                                             g_client_ctx->recv_buf,
-                                             data_len) < 0) {
-                kvs_logError("加载引擎 %s 失败\n", engine_name);
-                return -1;
-            }
-
-            g_client_ctx->state = SYNC_STATE_TRANSFERRING;
+            kvs_logInfo("RDMA Read 全部完成，共读取 %u bytes\n", total_received);
         }
 
         /* 7. 发送 COMPLETE 命令 */

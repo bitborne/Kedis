@@ -20,8 +20,9 @@
 /* RDMA 端口偏移量 */
 #define RDMA_PORT_OFFSET    10000
 
-/* 默认 RDMA 缓冲区大小：256MB（用于存储单个引擎的 KSF 数据） */
-#define RDMA_BUFFER_SIZE    (256 * 1024 * 1024)
+/* 默认 RDMA 缓冲区大小：32MB（减小以避免内存分配失败）
+ * 如果数据大于此大小，使用分段传输 */
+#define RDMA_BUFFER_SIZE    (32 * 1024 * 1024)
 
 /* 最大的 scatter-gather 元素数量 */
 #define RDMA_MAX_SGE        1
