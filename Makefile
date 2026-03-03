@@ -15,6 +15,7 @@ SRCS = src/core/kvstore.c \
        src/engines/kvs_hash.c \
        src/engines/kvs_skiplist.c \
        src/persistence/ksf.c \
+       src/persistence/ksf_stream.c \
        src/persistence/aof.c \
        src/utils/memory_pool.c \
 	   src/utils/kvs_log.c

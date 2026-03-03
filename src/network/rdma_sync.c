@@ -2263,15 +2263,23 @@ int rdma_sync_perform_full_sync(void) {
 
         if (data_len > 0) {
             /* 3. 分段接收数据（支持大数据量）
-             * 每段最大为 RDMA_BUFFER_SIZE（32MB） */
+             * 使用流式 KSF 解析器，边接收边解析 */
             uint32_t total_received = 0;
             uint32_t remaining = data_len;
 
-            /* 分配临时缓冲区存储完整数据（如果数据大于缓冲区） */
+            /* 初始化流式解析器 */
+            struct ksf_stream_parser *parser = ksf_stream_parser_init(engine);
+            if (!parser) {
+                kvs_logError("流式解析器初始化失败\n");
+                return -1;
+            }
+
             if (data_len > g_client_ctx->recv_buf_size) {
                 kvs_logInfo("数据 %u bytes 超过缓冲区 %zu bytes，使用分段传输\n",
                             data_len, g_client_ctx->recv_buf_size);
             }
+
+            g_client_ctx->state = SYNC_STATE_TRANSFERRING;
 
             while (remaining > 0) {
                 uint32_t chunk_size = (remaining > g_client_ctx->recv_buf_size)
@@ -2289,6 +2297,7 @@ int rdma_sync_perform_full_sync(void) {
                                         chunk_size) < 0) {
                     kvs_logError("RDMA Read 失败 (offset=%u, chunk=%u)\n",
                                  total_received, chunk_size);
+                    ksf_stream_parser_free(parser);
                     return -1;
                 }
 
@@ -2296,19 +2305,21 @@ int rdma_sync_perform_full_sync(void) {
                 struct ibv_wc wc;
                 if (rdma_sync_poll_completion(g_client_ctx, &wc, 1) < 0) {
                     kvs_logError("等待 RDMA Read 完成失败\n");
+                    ksf_stream_parser_free(parser);
                     return -1;
                 }
 
                 kvs_logInfo("RDMA Read 分段完成，读取 %u bytes\n", chunk_size);
 
-                /* 6. 解析并加载这一段 KSF 数据 */
+                /* 6. 【流式解析】将数据块喂入解析器
+                 * 解析器自动处理跨块的不完整 entry */
                 g_client_ctx->state = SYNC_STATE_LOADING;
 
-                if (ksf_load_engine_from_buffer(engine,
-                                                 g_client_ctx->recv_buf,
-                                                 chunk_size) < 0) {
-                    kvs_logError("加载引擎 %s 分段失败 (offset=%u)\n",
-                                 engine_name, total_received);
+                if (ksf_stream_parser_feed(parser,
+                                           g_client_ctx->recv_buf,
+                                           chunk_size) < 0) {
+                    kvs_logError("流式解析数据失败 (offset=%u)\n", total_received);
+                    ksf_stream_parser_free(parser);
                     return -1;
                 }
 
@@ -2318,7 +2329,17 @@ int rdma_sync_perform_full_sync(void) {
                 remaining -= chunk_size;
             }
 
-            kvs_logInfo("RDMA Read 全部完成，共读取 %u bytes\n", total_received);
+            /* 检查解析器是否完成 */
+            if (ksf_stream_parser_finish(parser) < 0) {
+                kvs_logError("流式解析器完成检查失败\n");
+                ksf_stream_parser_free(parser);
+                return -1;
+            }
+
+            kvs_logInfo("RDMA Read 全部完成，共解析 %lu 个 entry\n",
+                        (unsigned long)ksf_stream_parser_get_count(parser));
+
+            ksf_stream_parser_free(parser);
         }
 
         /* 7. 发送 COMPLETE 命令 */
