@@ -17,19 +17,19 @@ typedef int KEY_TYPE;
 #endif
 
 
-typedef struct _rbtree_node {
-  unsigned char color;
-  struct _rbtree_node* right;
-  struct _rbtree_node* left;
-  struct _rbtree_node* parent;
-  KEY_TYPE key;
-  void* value;
-} rbtree_node;
+// typedef struct _rbtree_node {
+//   unsigned char color;
+//   struct _rbtree_node* right;
+//   struct _rbtree_node* left;
+//   struct _rbtree_node* parent;
+//   KEY_TYPE key;
+//   void* value;
+// } rbtree_node;
 
-typedef struct _rbtree {
-  rbtree_node* root;
-  rbtree_node* nil;
-} rbtree;
+// typedef struct _rbtree {
+//   rbtree_node* root;
+//   rbtree_node* nil;
+// } rbtree;
 
 rbtree_node* rbtree_mini(rbtree* T, rbtree_node* x) {
   while (x->left != T->nil) {
