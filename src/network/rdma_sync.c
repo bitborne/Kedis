@@ -773,11 +773,14 @@ int rdma_sync_child_server(int tcp_fd, rdma_engine_type_t engine_type) {
         goto err_id;
     }
 
-    /* 接受连接 */
+    /* 接受连接
+     * 注意: 连接参数必须与客户端匹配
+     * responder_resources >= initiator_depth */
     struct rdma_conn_param conn_param = {
-        .responder_resources = 1,
-        .initiator_depth = 1,
-        .retry_count = 5
+        .responder_resources = 1,  /* 响应方资源 */
+        .initiator_depth = 1,       /* 发起方深度 */
+        .retry_count = 5,
+        .rnr_retry_count = 5        /* RNR (Receiver Not Ready) 重试次数 */
     };
 
     if (rdma_accept(cm_id, &conn_param)) {
@@ -798,6 +801,31 @@ int rdma_sync_child_server(int tcp_fd, rdma_engine_type_t engine_type) {
     rdma_ack_cm_event(event);
 
     kvs_logInfo("[子进程] RDMA连接已建立\n");
+    kvs_logInfo("[子进程] QP状态检查: qp=%p, pd=%p, cq=%p\n",
+                (void*)ctx.qp, (void*)ctx.pd, (void*)ctx.cq);
+
+    /* 验证 QP 状态 */
+    struct ibv_qp_attr qp_attr;
+    struct ibv_qp_init_attr init_attr;
+    if (ibv_query_qp(ctx.qp, &qp_attr, IBV_QP_STATE, &init_attr) == 0) {
+        const char *state_str = "UNKNOWN";
+        switch (qp_attr.qp_state) {
+            case IBV_QPS_RESET: state_str = "RESET"; break;
+            case IBV_QPS_INIT: state_str = "INIT"; break;
+            case IBV_QPS_RTR: state_str = "RTR"; break;
+            case IBV_QPS_RTS: state_str = "RTS"; break;
+            case IBV_QPS_SQD: state_str = "SQD"; break;
+            case IBV_QPS_SQE: state_str = "SQE"; break;
+            case IBV_QPS_ERR: state_str = "ERR"; break;
+            default: state_str = "UNKNOWN"; break;
+        }
+        kvs_logInfo("[子进程] QP状态: %s (%d)\n", state_str, qp_attr.qp_state);
+        if (qp_attr.qp_state != IBV_QPS_RTS) {
+            kvs_logError("[子进程] QP未处于RTS状态，无法传输数据!\n");
+        }
+    } else {
+        kvs_logError("[子进程] 查询QP状态失败: %s\n", strerror(errno));
+    }
 
     /*
      * ============================================================
@@ -1502,11 +1530,13 @@ int rdma_sync_client_connect(const char *master_host,
         goto err_mr_ctrl;
     }
 
-    /* 10. 发送连接请求 */
+    /* 10. 发送连接请求
+     * 注意: 连接参数必须与服务器端匹配 */
     struct rdma_conn_param conn_param = {
         .responder_resources = 1,
         .initiator_depth = 1,
-        .retry_count = 5
+        .retry_count = 5,
+        .rnr_retry_count = 5
     };
 
     if (rdma_connect(cm_id, &conn_param)) {
@@ -1552,6 +1582,31 @@ int rdma_sync_client_connect(const char *master_host,
     (void)engine_type; /* 避免未使用警告，实际用于扩展 */
     kvs_logInfo("RDMA 连接已建立到 %s:%d (引擎类型: %d)\n",
                 master_host, master_port, engine_type);
+
+    /* 验证 QP 状态 */
+    struct ibv_qp_attr query_attr;
+    struct ibv_qp_init_attr query_init_attr;
+    if (ibv_query_qp(g_client_ctx->qp, &query_attr, IBV_QP_STATE, &query_init_attr) == 0) {
+        enum ibv_qp_state state = query_attr.qp_state;
+        const char *state_str = "UNKNOWN";
+        switch (state) {
+            case IBV_QPS_RESET: state_str = "RESET"; break;
+            case IBV_QPS_INIT: state_str = "INIT"; break;
+            case IBV_QPS_RTR: state_str = "RTR"; break;
+            case IBV_QPS_RTS: state_str = "RTS"; break;
+            case IBV_QPS_SQD: state_str = "SQD"; break;
+            case IBV_QPS_SQE: state_str = "SQE"; break;
+            case IBV_QPS_ERR: state_str = "ERR"; break;
+            default: state_str = "UNKNOWN"; break;
+        }
+        kvs_logInfo("[客户端] QP状态: %s (%d)\n", state_str, state);
+        if (state != IBV_QPS_RTS) {
+            kvs_logError("[客户端] QP未处于RTS状态，无法传输数据!\n");
+        }
+    } else {
+        kvs_logError("[客户端] 查询QP状态失败: %s\n", strerror(errno));
+    }
+
     return 0;
 
 err_mr_ctrl:
