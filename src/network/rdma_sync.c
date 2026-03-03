@@ -1292,23 +1292,57 @@ int rdma_sync_client_connect(const char *master_host,
     return 0;
 
 err_mr_ctrl:
-    if (g_client_ctx->mr_ctrl_send) ibv_dereg_mr(g_client_ctx->mr_ctrl_send);
-    if (g_client_ctx->mr_ctrl_recv) ibv_dereg_mr(g_client_ctx->mr_ctrl_recv);
+    /* 清理已注册的内存区域 */
+    if (g_client_ctx->mr_ctrl_send) {
+        ibv_dereg_mr(g_client_ctx->mr_ctrl_send);
+        g_client_ctx->mr_ctrl_send = NULL;
+    }
+    if (g_client_ctx->mr_ctrl_recv) {
+        ibv_dereg_mr(g_client_ctx->mr_ctrl_recv);
+        g_client_ctx->mr_ctrl_recv = NULL;
+    }
 err_ctrl_buf:
-    if (g_client_ctx->ctrl_send_buf) free(g_client_ctx->ctrl_send_buf);
-    if (g_client_ctx->ctrl_recv_buf) free(g_client_ctx->ctrl_recv_buf);
+    /* 清理控制缓冲区 */
+    if (g_client_ctx->ctrl_send_buf) {
+        kvs_free(g_client_ctx->ctrl_send_buf);
+        g_client_ctx->ctrl_send_buf = NULL;
+    }
+    if (g_client_ctx->ctrl_recv_buf) {
+        kvs_free(g_client_ctx->ctrl_recv_buf);
+        g_client_ctx->ctrl_recv_buf = NULL;
+    }
 err_qp:
-    rdma_destroy_qp(cm_id);
+    /* 销毁队列对 - 只有在成功创建后才需要 */
+    if (g_client_ctx->qp) {
+        rdma_destroy_qp(cm_id);
+        g_client_ctx->qp = NULL;
+    }
 err_cq:
-    ibv_destroy_cq(g_client_ctx->cq);
+    /* 销毁完成队列 */
+    if (g_client_ctx->cq) {
+        ibv_destroy_cq(g_client_ctx->cq);
+        g_client_ctx->cq = NULL;
+    }
 err_comp_channel:
-    ibv_destroy_comp_channel(g_client_ctx->comp_channel);
+    /* 销毁完成事件通道 */
+    if (g_client_ctx->comp_channel) {
+        ibv_destroy_comp_channel(g_client_ctx->comp_channel);
+        g_client_ctx->comp_channel = NULL;
+    }
 err_pd:
-    ibv_dealloc_pd(g_client_ctx->pd);
+    /* 释放保护域 */
+    if (g_client_ctx->pd) {
+        ibv_dealloc_pd(g_client_ctx->pd);
+        g_client_ctx->pd = NULL;
+    }
 err_id:
-    if (cm_id) rdma_destroy_id(cm_id);
+    /* 销毁CM ID - cm_id是局部变量，需要检查 */
+    if (cm_id) {
+        rdma_destroy_id(cm_id);
+    }
 err_channel:
-    if (g_client_ctx->cm_channel) {
+    /* 销毁事件通道 */
+    if (g_client_ctx && g_client_ctx->cm_channel) {
         rdma_destroy_event_channel(g_client_ctx->cm_channel);
         g_client_ctx->cm_channel = NULL;
     }
