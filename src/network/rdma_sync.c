@@ -183,31 +183,11 @@ static int setup_connection_resources(struct rdma_sync_context *ctx) {
         goto err_ctrl_buf;
     }
 
-    /* 9. 预投递接收请求（Receive WR）
-     * 这样从节点一连接就可以发送控制消息 */
-    struct ibv_sge sge = {
-        .addr = (uint64_t)ctx->ctrl_buf,
-        .length = sizeof(struct rdma_ctrl_msg),
-        .lkey = ctx->mr_ctrl->lkey
-    };
-
-    struct ibv_recv_wr wr = {
-        .wr_id = 0,
-        .num_sge = 1,
-        .sg_list = &sge
-    };
-    struct ibv_recv_wr *bad_wr;
-
-    if (ibv_post_recv(ctx->qp, &wr, &bad_wr)) {
-        kvs_logError("ibv_post_recv 失败\n");
-        goto err_mr_ctrl;
-    }
+    /* 注意: 接收请求在同步循环中按需投递，不在此处预投递 */
 
     kvs_logInfo("RDMA 连接资源创建成功\n");
     return 0;
 
-err_mr_ctrl:
-    ibv_dereg_mr(ctx->mr_ctrl);
 err_ctrl_buf:
     free(ctx->ctrl_buf);
 err_qp:
@@ -339,7 +319,17 @@ int rdma_sync_master_prepare_engine(struct rdma_sync_context *ctx,
 
     if (file_size == 0) {
         kvs_logInfo("引擎 %s 为空\n", rdma_sync_engine_name(engine_type));
-        /* 空引擎也是合法的 */
+        /* 空引擎也是合法的 - 跳过 mmap 和 MR 注册 */
+        ctx->data_buf = NULL;
+        ctx->data_buf_size = 0;
+        ctx->mr_data = NULL;
+        ctx->temp_fd = fd;
+        strncpy(ctx->temp_path, path, sizeof(ctx->temp_path));
+        ctx->current_engine = engine_type;
+        ctx->state = SYNC_STATE_PREPARE;
+        kvs_logInfo("引擎 %s 快照准备完成 (空引擎)\n",
+                    rdma_sync_engine_name(engine_type));
+        return 0;
     }
 
     kvs_logInfo("引擎 %s 快照大小: %ld bytes\n",
@@ -836,10 +826,27 @@ int rdma_sync_child_server(int tcp_fd, rdma_engine_type_t engine_type) {
                     rdma_sync_engine_name(current_engine));
 
         /*
-         * 步骤1: 等待 PREPARE 命令
+         * 步骤1: 投递接收请求并等待 PREPARE 命令
          */
         struct ibv_wc wc;
         int ret;
+
+        /* 投递接收请求以接收 PREPARE 命令 */
+        memset(ctx.ctrl_buf, 0, sizeof(struct rdma_ctrl_msg));
+        struct ibv_recv_wr recv_wr = {
+            .wr_id = 1,
+            .num_sge = 1,
+            .sg_list = &(struct ibv_sge){
+                .addr = (uint64_t)ctx.ctrl_buf,
+                .length = sizeof(struct rdma_ctrl_msg),
+                .lkey = ctx.mr_ctrl->lkey
+            }
+        };
+        struct ibv_recv_wr *bad_recv_wr;
+        if (ibv_post_recv(ctx.qp, &recv_wr, &bad_recv_wr)) {
+            kvs_logError("[子进程] 投递 PREPARE 接收请求失败\n");
+            goto err_conn;
+        }
 
         do {
             ret = ibv_poll_cq(ctx.cq, 1, &wc);
@@ -860,7 +867,8 @@ int rdma_sync_child_server(int tcp_fd, rdma_engine_type_t engine_type) {
         if (req->cmd != CTRL_CMD_PREPARE) {
             kvs_logError("[子进程] 预期 PREPARE 命令, 收到: %d\n", req->cmd);
             /* 重新投递接收请求并继续等待 */
-            struct ibv_recv_wr recv_wr = {
+            memset(ctx.ctrl_buf, 0, sizeof(struct rdma_ctrl_msg));
+            struct ibv_recv_wr retry_wr = {
                 .wr_id = 1,
                 .num_sge = 1,
                 .sg_list = &(struct ibv_sge){
@@ -869,8 +877,8 @@ int rdma_sync_child_server(int tcp_fd, rdma_engine_type_t engine_type) {
                     .lkey = ctx.mr_ctrl->lkey
                 }
             };
-            struct ibv_recv_wr *bad_recv_wr;
-            ibv_post_recv(ctx.qp, &recv_wr, &bad_recv_wr);
+            struct ibv_recv_wr *bad_retry_wr;
+            ibv_post_recv(ctx.qp, &retry_wr, &bad_retry_wr);
             eng--;
             continue;
         }
@@ -956,7 +964,7 @@ int rdma_sync_child_server(int tcp_fd, rdma_engine_type_t engine_type) {
 
         /* 重新投递接收请求 */
         memset(ctx.ctrl_buf, 0, sizeof(struct rdma_ctrl_msg));
-        struct ibv_recv_wr recv_wr = {
+        struct ibv_recv_wr complete_wr = {
             .wr_id = 1,
             .num_sge = 1,
             .sg_list = &(struct ibv_sge){
@@ -965,8 +973,8 @@ int rdma_sync_child_server(int tcp_fd, rdma_engine_type_t engine_type) {
                 .lkey = ctx.mr_ctrl->lkey
             }
         };
-        struct ibv_recv_wr *bad_recv_wr;
-        if (ibv_post_recv(ctx.qp, &recv_wr, &bad_recv_wr)) {
+        struct ibv_recv_wr *bad_complete_wr;
+        if (ibv_post_recv(ctx.qp, &complete_wr, &bad_complete_wr)) {
             kvs_logError("[子进程] 重新投递接收请求失败\n");
             rdma_sync_master_cleanup(&ctx);
             goto err_conn;
@@ -1002,7 +1010,17 @@ int rdma_sync_child_server(int tcp_fd, rdma_engine_type_t engine_type) {
         if (eng == engine_end - 1) {
             /* 重新投递接收请求，等待 DONE 命令 */
             memset(ctx.ctrl_buf, 0, sizeof(struct rdma_ctrl_msg));
-            if (ibv_post_recv(ctx.qp, &recv_wr, &bad_recv_wr)) {
+            struct ibv_recv_wr done_wr = {
+                .wr_id = 1,
+                .num_sge = 1,
+                .sg_list = &(struct ibv_sge){
+                    .addr = (uint64_t)ctx.ctrl_buf,
+                    .length = sizeof(struct rdma_ctrl_msg),
+                    .lkey = ctx.mr_ctrl->lkey
+                }
+            };
+            struct ibv_recv_wr *bad_done_wr;
+            if (ibv_post_recv(ctx.qp, &done_wr, &bad_done_wr)) {
                 kvs_logError("[子进程] 投递接收请求失败\n");
                 goto err_conn;
             }
