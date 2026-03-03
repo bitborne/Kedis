@@ -1307,10 +1307,11 @@ int rdma_sync_client_init(void) {
         return -1;
     }
 
-    pthread_mutex_init(&g_client_ctx->cmd_queue_lock, NULL);
+    /* 先分配缓冲区，成功后初始化互斥锁
+     * 这样如果分配失败，无需清理互斥锁 */
     g_client_ctx->full_sync_done = 0;
     g_client_ctx->state = SYNC_STATE_IDLE;
-    g_client_ctx->cm_channel = NULL;  /* 确保初始化为 NULL */
+    g_client_ctx->cm_channel = NULL;
     g_client_ctx->cm_id = NULL;
     g_client_ctx->recv_buf = NULL;
 
@@ -1323,6 +1324,9 @@ int rdma_sync_client_init(void) {
         g_client_ctx = NULL;
         return -1;
     }
+
+    /* 缓冲区分配成功后才初始化互斥锁 */
+    pthread_mutex_init(&g_client_ctx->cmd_queue_lock, NULL);
 
     kvs_logInfo("RDMA 同步客户端初始化完成\n");
     return 0;
@@ -2370,7 +2374,11 @@ void rdma_sync_client_disconnect(void) {
         g_client_ctx->cm_channel = NULL;
     }
 
-    pthread_mutex_destroy(&g_client_ctx->cmd_queue_lock);
+    /* 只有当 recv_buf 不为 NULL 时，才表示互斥锁已被初始化
+     * 这防止在初始化未完成时销毁未初始化的互斥锁 */
+    if (g_client_ctx->recv_buf) {
+        pthread_mutex_destroy(&g_client_ctx->cmd_queue_lock);
+    }
 
     kvs_free(g_client_ctx);
     g_client_ctx = NULL;
