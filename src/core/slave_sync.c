@@ -220,6 +220,7 @@ int slave_sync_get_state(void) {
     __sync_synchronize();
     int state = g_sync_state;
     __sync_synchronize();  /* 再次屏障，确保读取不被重排到后面 */
+    kvs_logInfo("[slave_sync_get_state] 读取到状态: %d (地址: %p)\n", state, (void*)&g_sync_state);
     return state;
 }
 
@@ -248,7 +249,8 @@ int slave_sync_start(const char *master_host, uint16_t master_port) {
     /* 设置状态为同步中 */
     g_sync_state = SLAVE_STATE_SYNCING;
     __sync_synchronize();  /* 内存屏障：确保状态更新对其他 CPU 核心可见 */
-    kvs_logInfo("[Slave Sync] 状态设置为 SYNCING");
+    kvs_logInfo("[Slave Sync] 状态设置为 SYNCING (地址: %p, 值: %d)\n",
+                (void*)&g_sync_state, g_sync_state);
 
     /* 创建 RDMA 线程 */
     pthread_t thread;
