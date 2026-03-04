@@ -108,6 +108,7 @@ static void *rdma_sync_thread_fn(void *arg) {
 
         /* 重置状态为 IDLE，允许下次重新同步 */
         g_sync_state = SLAVE_STATE_IDLE;
+        __sync_synchronize();  /* 内存屏障：确保状态更新可见 */
     } else {
         kvs_logInfo("[RDMA Thread] 存量同步成功完成\n");
 
@@ -204,7 +205,22 @@ int slave_sync_get_eventfd(void) {
 
 /* 获取当前状态 */
 int slave_sync_get_state(void) {
-    return g_sync_state;
+    /* 【v3.0 内存可见性修复】
+     * 问题：虽然 g_sync_state 是 volatile，但跨线程访问时，
+     * x86_64 架构下编译器可能优化掉内存读取，导致主线程看不到
+     * RDMA 线程的最新写入。
+     *
+     * 解决：使用 __sync_synchronize() 内存屏障，确保：
+     * 1. 在此之前的所有内存操作都已完成
+     * 2. 从内存中重新读取 g_sync_state，而不是使用寄存器缓存
+     * 3. 后续的内存操作在此之后执行
+     *
+     * 注意：这是 GCC 内置的 full memory barrier，x86_64 下生成 mfence 指令
+     */
+    __sync_synchronize();
+    int state = g_sync_state;
+    __sync_synchronize();  /* 再次屏障，确保读取不被重排到后面 */
+    return state;
 }
 
 /* 启动存量同步（创建 RDMA 线程） */
@@ -231,6 +247,7 @@ int slave_sync_start(const char *master_host, uint16_t master_port) {
 
     /* 设置状态为同步中 */
     g_sync_state = SLAVE_STATE_SYNCING;
+    __sync_synchronize();  /* 内存屏障：确保状态更新对其他 CPU 核心可见 */
     kvs_logInfo("[Slave Sync] 状态设置为 SYNCING");
 
     /* 创建 RDMA 线程 */
