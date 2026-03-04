@@ -169,6 +169,14 @@ static void *rdma_sync_thread_fn(void *arg) {
 
 /* 初始化从节点同步系统 */
 int slave_sync_init(void) {
+    /* 【v3.0 修复】避免重复创建 eventfd
+     * 如果已经初始化过，直接返回已有的 fd
+     */
+    if (g_event_fd >= 0) {
+        kvs_logInfo("[Slave Sync] eventfd=%d 已存在，跳过重复初始化\n", g_event_fd);
+        return g_event_fd;
+    }
+
     /* 创建 eventfd */
     g_event_fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
     if (g_event_fd < 0) {
@@ -186,12 +194,12 @@ int slave_sync_init(void) {
      * 然后再调用 proactor_start()，后者又会调用 slave_sync_init()。
      * 如果此时状态已经是 SYNCING，重置为 IDLE 会导致命令处理逻辑错误。
      */
-    if (g_sync_state == SLAVE_STATE_IDLE) {
-        /* 只有初始状态为 IDLE 时才保持 IDLE，否则不覆盖 */
-        g_sync_state = SLAVE_STATE_IDLE;
-    } else {
-        kvs_logInfo("[Slave Sync] 状态已经是 %d，保持现有状态不重置\n", g_sync_state);
-    }
+    // if (g_sync_state == SLAVE_STATE_IDLE) {
+    //     /* 只有初始状态为 IDLE 时才保持 IDLE，否则不覆盖 */
+    //     g_sync_state = SLAVE_STATE_IDLE;
+    // } else {
+    //     kvs_logInfo("[Slave Sync] 状态已经是 %d，保持现有状态不重置\n", g_sync_state);
+    // }
 
     kvs_logInfo("[Slave Sync] 初始化完成，event_fd=%d, 当前状态=%d\n", g_event_fd, g_sync_state);
     return g_event_fd;  /* 返回 eventfd，让 proactor 注册 */

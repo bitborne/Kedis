@@ -233,10 +233,26 @@ int proactor_start(unsigned short port, msg_handler handler) {
   io_uring_queue_init(RING_ENTRIES, &g_ring, 0);
   post_accept(&g_ring, listenfd);
 
-  /* 初始化从节点同步系统（如果是从节点） */
+  /* 初始化从节点同步系统（如果是从节点）
+   *
+   * 【v3.0 架构】检查是否已初始化
+   * 在主函数中，slave_sync_init() 可能在 proactor_start() 之前调用，
+   * 以确保 eventfd 在 RDMA 线程启动前创建。
+   * 这里通过 slave_sync_get_eventfd() 检查是否已初始化。
+   */
   if (g_config.replica_mode == REPLICA_MODE_SLAVE) {
-    extern int slave_sync_init(void);
-    g_event_fd = slave_sync_init();
+    extern int slave_sync_get_eventfd(void);
+    g_event_fd = slave_sync_get_eventfd();
+
+    if (g_event_fd < 0) {
+      /* 尚未初始化，进行初始化 */
+      extern int slave_sync_init(void);
+      g_event_fd = slave_sync_init();
+      kvs_logWarn("Proactor: 在 proactor_start 中初始化 eventfd=%d", g_event_fd);
+    } else {
+      kvs_logInfo("Proactor: 检测到 eventfd=%d 已初始化，直接注册到 io_uring", g_event_fd);
+    }
+
     if (g_event_fd >= 0) {
       /* 创建 eventfd 对应的 conn 结构 */
       g_event_conn = kvs_calloc(1, sizeof(struct conn));

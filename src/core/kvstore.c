@@ -983,7 +983,7 @@ int main(int argc, char* argv[]) {
     kv_config_print_all();
     unsigned short port = g_config.port;
 
-    // fprintf(stderr, "0-->\n");
+    
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
 
@@ -1002,11 +1002,34 @@ int main(int argc, char* argv[]) {
         return -1;
     }
 
-    /* 5. 如果是从节点且配置了主节点，自动启动存量同步 */
+    /* 5. 如果是从节点且配置了主节点，自动启动存量同步
+     *
+     * 【v3.0 架构调整】先初始化 slave_sync，再启动同步
+     *
+     * 原因：slave_sync_init() 创建 eventfd，用于 RDMA 线程通知主线程。
+     * 如果先启动同步，RDMA 线程可能在 eventfd 创建前完成，导致通知丢失，
+     * 积压队列无法回放。
+     *
+     * 正确顺序：
+     *   1. slave_sync_init() - 创建 eventfd
+     *   2. start_slave_sync() - 启动 RDMA 线程
+     *   3. RDMA 完成时通过已创建的 eventfd 通知
+     */
     if (g_config.replica_mode == REPLICA_MODE_SLAVE &&
         g_config.master_host[0] != '\0') {
-        kvs_logInfo("[main] 从节点配置检测到主节点 %s:%d，启动自动同步\n",
+        kvs_logInfo("[main] 从节点配置检测到主节点 %s:%d\n",
                     g_config.master_host, g_config.master_port);
+
+        /* 先初始化从节点同步系统（创建 eventfd） */
+        extern int slave_sync_init(void);
+        int event_fd = slave_sync_init();
+        if (event_fd < 0) {
+            kvs_logError("[main] 从节点同步系统初始化失败\n");
+            return -1;
+        }
+        kvs_logInfo("[main] 从节点同步系统初始化完成，event_fd=%d\n", event_fd);
+
+        /* 再启动存量同步（创建 RDMA 线程） */
         extern int start_slave_sync(void);  // 来自 sync_command.c
         if (start_slave_sync() < 0) {
             kvs_logError("[main] 自动同步启动失败\n");
