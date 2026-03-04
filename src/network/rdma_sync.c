@@ -2162,46 +2162,43 @@ void rdma_sync_enqueue_tcp_cmd(const char *data, size_t len) {
     pthread_mutex_unlock(&g_client_ctx->cmd_queue_lock);
 }
 
+/* ============================================================================
+ * 【v3.0 废弃】旧积压队列处理函数
+ *
+ * 废弃原因：
+ *   新架构使用 slave_sync.c 中的 g_backlog 链表队列，通过 eventfd
+ *   通知主线程回放。此函数使用的 g_client_ctx->cmd_queue 已不再使用。
+ *
+ * 保留目的：
+ *   兼容性，避免链接错误。函数内部仅打印日志，不执行实际操作。
+ * ============================================================================ */
 void rdma_sync_drain_tcp_queue(void) {
     if (!g_client_ctx) {
         return;
     }
 
-    kvs_logInfo("开始处理积压的 TCP 命令...\n");
+    kvs_logWarn("[废弃] rdma_sync_drain_tcp_queue 被调用，请使用 slave_sync_drain_backlog\n");
 
+    /* v3.0: 仅清理旧队列内存，不执行命令（命令已由主线程的 g_backlog 处理） */
     int count = 0;
+    pthread_mutex_lock(&g_client_ctx->cmd_queue_lock);
 
-    while (1) {
-        pthread_mutex_lock(&g_client_ctx->cmd_queue_lock);
-
-        struct cmd_buffer *cmd = g_client_ctx->cmd_queue_head;
-        if (!cmd) {
-            pthread_mutex_unlock(&g_client_ctx->cmd_queue_lock);
-            break;
-        }
-
-        g_client_ctx->cmd_queue_head = cmd->next;
-        if (!g_client_ctx->cmd_queue_head) {
-            g_client_ctx->cmd_queue_tail = NULL;
-        }
-
-        pthread_mutex_unlock(&g_client_ctx->cmd_queue_lock);
-
-        /* 解析并执行命令 */
-        /* 调用专用解析器执行积压命令，不处理 TCP 粘包，直接执行 */
-        int ret = rdma_sync_execute_cmd(cmd->data, cmd->len);
-        if (ret < 0) {
-            kvs_logWarn("[TCP Queue] 命令执行失败 (%zu bytes)\n", cmd->len);
-        } else {
-            kvs_logDebug("[TCP Queue] 命令执行成功 (%zu bytes)\n", cmd->len);
-        }
-
+    struct cmd_buffer *cmd = g_client_ctx->cmd_queue_head;
+    while (cmd) {
+        struct cmd_buffer *next = cmd->next;
         kvs_free(cmd->data);
         kvs_free(cmd);
+        cmd = next;
         count++;
     }
+    g_client_ctx->cmd_queue_head = NULL;
+    g_client_ctx->cmd_queue_tail = NULL;
 
-    kvs_logInfo("共处理 %d 条积压命令\n", count);
+    pthread_mutex_unlock(&g_client_ctx->cmd_queue_lock);
+
+    if (count > 0) {
+        kvs_logWarn("[废弃] 清理 %d 条旧队列命令（未执行）\n", count);
+    }
 }
 
 /* ============================================================================
@@ -2363,8 +2360,20 @@ int rdma_sync_perform_full_sync(void) {
 
     kvs_logInfo("RDMA 存量同步全部完成！\n");
 
-    /* 处理积压的 TCP 命令 */
-    rdma_sync_drain_tcp_queue();
+    /* -------------------------------------------------------------------------
+     * 【v3.0 架构变更】积压队列处理已移至主线程
+     *
+     * 旧架构：在此处直接调用 rdma_sync_drain_tcp_queue() 处理积压
+     * 新架构：通过 eventfd 通知主线程，由主线程调用 slave_sync_drain_backlog()
+     *
+     * 原因：
+     *   1. 线程安全：积压队列 (g_backlog) 仅主线程访问，无锁设计
+     *   2. 状态一致性：主线程检查 READY 状态后才回放，避免竞态
+     *   3. 架构清晰：RDMA 线程只负责同步，命令执行回归主线程
+     *
+     * 实际流程：
+     *   RDMA 线程完成 -> 写入 eventfd -> 主线程收到通知 -> 回放积压队列
+     * ------------------------------------------------------------------------- */
 
     return 0;
 }
