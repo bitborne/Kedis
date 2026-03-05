@@ -6,7 +6,7 @@
 /* ---------------- 常量定义 ---------------- */
 #define IOP_SIZE (4 * 1024)               // 每次 recv/send 的帧大小（16 KB）
 #define MAX_ARGC (8)                        // 最大参数个数
-#define RESP_BUF_SIZE (1024)          // 响应缓冲区大小
+#define RESP_BUF_SIZE (4 * 1024)          // 响应缓冲区大小
 #define MAX_SEG_SIZE (1024 * 1024 * 1024)  // 单段最大 1 GB
 
 /* ---------------- 连接状态机 ---------------- */

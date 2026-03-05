@@ -225,144 +225,129 @@ cd tests && python3 gen_charts.py ./pers_sset_benchmark_results
 <img src="README.assets/image-20260221204215237.png" alt="image-20260221204215237" style="zoom: 67%;" />
 
 
-### 固定大小不同引擎SET (128B, 512B, 1024B)
+### 引擎性能对比测试 (SET/GET)
 
-*测试时间 2026.2.12*
+*测试时间: 2026年3月5日*
 
-```bash
-python benchmark.py -t 8 -c 5 --command "<A/R/H/S>SET __key__ __value__" --test-time 30 --data-size <128/512/1024> --key-minimum 1 --key-maximum 1048576
-```
-
-#### Array
-
-##### 128
-
-![image-20260212162917115](README.assets/image-20260212162917115.png)
-
-##### 512
-
-![image-20260212162934970](README.assets/image-20260212162934970.png)
-
-##### 1024
-
-![image-20260212162950146](README.assets/image-20260212162950146.png)
-
-#### RBtree
-
-##### 128
-
-![image-20260212163047276](README.assets/image-20260212163047276.png)
-
-##### 512
-
-![image-20260212163247599](README.assets/image-20260212163247599.png)
-
-##### 1024
-
-![image-20260212163346868](README.assets/image-20260212163346868.png)
-
-#### Hash
-
-##### 128
-
-![image-20260212174535454](README.assets/image-20260212174535454.png)
-
-##### 512
-
-![image-20260212174648558](README.assets/image-20260212174648558.png)
-
-##### 1024
-
-![image-20260212174742342](README.assets/image-20260212174742342.png)
-
-#### SkipList
-
-##### 128
-
-![image-20260212165105784](README.assets/image-20260212165105784.png)
-
-##### 512
-
-![image-20260212165156867](README.assets/image-20260212165156867.png)
-
-##### 1024
-
-![image-20260212164956516](README.assets/image-20260212164956516.png)
-
-### 固定 size 的单 GET 测试 (热区数据预填充 `hit-rate=0.8` )
-
-*测试时间 2026.2.12*
+#### 测试脚本
 
 ```bash
-python benchmark.py -t 8 -c 5 --command "<A/R/H/S>GET __key__ __value__" --test-time 30 --data-size 128 --key-minimum 1 --key-maximum 32768 --populate --hit-rate 0.8
+cd tests && ./run_full_benchmark_suite.sh --engine
 ```
 
-#### Array
+#### 测试配置参数
 
-![image-20260212171228478](README.assets/image-20260212171228478.png)
+| 参数 | 值 |
+|------|-----|
+| 引擎 | Array, RBTree, Hash, SkipList |
+| 数据大小 | 128B, 512B, 1024B |
+| 键空间 | 10K, 50K |
+| 线程数 | 8 |
+| 连接数 | 50 |
+| 测试时间 | 30s |
+| 测试模式 | 每个测试点独立 kvstore 实例 |
 
-#### RBtree
+---
 
-![image-20260212171238432](README.assets/image-20260212171238432.png)
+#### SET 操作性能
 
-#### Hash
+##### 吞吐量对比
 
-![image-20260212174918128](README.assets/image-20260212174918128.png)
+![SET 吞吐量对比](README.assets/set_throughput_comparison.png)
 
-#### SkipList
+##### 平均延迟对比
 
-![image-20260212175036469](README.assets/image-20260212175036469.png)
+![SET 平均延迟](README.assets/set_average_latency.png)
 
-### 业务场景模拟(不预热,2:8,5:5, 60s)
+##### P99 延迟对比
 
-*测试时间 2026.2.12*
+![SET P99延迟](README.assets/set_p99_latency.png)
 
-#### 2:8
+##### 延迟百分位数
+
+![SET 延迟百分位数](README.assets/set_latency_percentiles_all.png)
+
+---
+
+#### GET 操作性能
+
+##### 吞吐量对比
+
+![GET 吞吐量对比](README.assets/get_throughput_comparison.png)
+
+##### 平均延迟对比
+
+![GET 平均延迟](README.assets/get_average_latency.png)
+
+![GET 平均延迟(排除Array)](README.assets/get_average_latency_detail.png)
+
+##### P99 延迟对比
+
+![GET P99延迟](README.assets/get_p99_latency.png)
+
+![GET P99延迟(排除Array)](README.assets/get_p99_latency_detail.png)
+
+##### 延迟百分位数
+
+![GET 延迟百分位数](README.assets/get_latency_percentiles_all.png)
+
+![GET 延迟百分位数(排除Array)](README.assets/get_latency_percentiles_detail.png)
+
+---
+
+#### 引擎综合性能雷达图
+
+![引擎性能雷达图](README.assets/engine_radar_chart.png)
+
+#### 性能汇总表
+
+![引擎性能汇总表](README.assets/engine_summary_table.png)
+
+---
+
+### 混合负载性能测试
+
+*测试时间: 2026年3月5日*
+
+#### 测试脚本
 
 ```bash
-python benchmark.py -t 8 -c 5 --ratio "<a/r/h/s>set:2,<a/r/h/s>get:8" --test-tim
-e 60 --data-size 128 --key-minimum 1 --key-maximum 524288 --hit-rate 0.8
+cd tests && ./run_full_benchmark_suite.sh --mixed
 ```
 
-##### Array
+#### 测试配置参数
 
-![image-20260212185701984](README.assets/image-20260212185701984.png)
+| 参数 | 值 |
+|------|-----|
+| 引擎 | Array, RBTree, Hash, SkipList |
+| 数据大小 | 128B |
+| 键空间 | 50K |
+| 线程数 | 8 |
+| 连接数 | 50 |
+| 测试时间 | 30s |
+| 测试场景 | Write_Heavy(100%SET), Write_Read_8:2, Balanced_5:5, Read_Cache_2:8, Read_Heavy(100%GET) |
 
-##### RBtree
+#### 吞吐量对比
 
-![image-20260212185526358](README.assets/image-20260212185526358.png)
+![混合负载吞吐量对比](README.assets/mixed_throughput_comparison.png)
 
-##### Hash
+#### 延迟对比
 
-![image-20260212190041363](README.assets/image-20260212190041363.png)
+![混合负载延迟对比(排除Array)](README.assets/image-20260305115647954.png)
 
-##### SkipList
+#### 性能热力图
 
-![image-20260212190214645](README.assets/image-20260212190214645.png)
+![混合负载热力图](README.assets/mixed_throughput_heatmap.png)
 
-#### 5:5
+#### 性能汇总表
 
-##### Array
-
-![image-20260212190817121](README.assets/image-20260212190817121.png)
-
-##### RBtree
-
-![image-20260212190651963](README.assets/image-20260212190651963.png)
-
-##### Hash
-
-![image-20260212190949494](README.assets/image-20260212190949494.png)
-
-##### SkipList
-
-![image-20260212191116300](README.assets/image-20260212191116300.png)
+![混合负载汇总表](README.assets/mixed_summary_table.png)
 
 ---
 
 ## 发展路线 (Roadmap)
 
-- [ ] **RDMA 存量全量克隆**：实现基于 RDMA Read 的大规模存量数据全量同步，压榨硬件带宽极限。
+- [x] **RDMA 存量全量克隆**：实现基于 RDMA Read 的大规模存量数据全量同步，压榨硬件带宽极限。
 - [ ] **eBPF 挂载点对比研究**：深入对比 **XDP vs TC vs Kprobe** 在高频同步下的 CPU 指令周期消耗与丢包率。
 - [ ] **io_uring 固定缓冲区优化**：引入 `IORING_REGISTER_BUFFERS` 实现真正的零拷贝内存路径。
 - [ ] **内存池性能测试**：通过 `valgrind` 的 `massif` 工具，对比基于**自研内存池**与 **jemalloc** 的两种 Kedis 的堆内存变化趋势。
@@ -371,7 +356,7 @@ e 60 --data-size 128 --key-minimum 1 --key-maximum 524288 --hit-rate 0.8
 
 ## 贡献
 
-欢迎任何形式的贡献！在提交 PR 之前，请确保已通过所有 `tests/` 下的一致性测试 `test.sh`。
+欢迎任何形式的贡献！在提交 PR 之前，请确保已通过所有 `tests/` 下的基本测试 `test.sh`。
 
 ```bash
 # 需要用到 root 权限以启动 eBPF 程序
@@ -387,4 +372,4 @@ sudo tests/test.sh
 - eBPF 代码：Dual BSD/GPL。
 
 ---
-*最后更新: 2026-02-23*
+*最后更新: 2026-03-05*

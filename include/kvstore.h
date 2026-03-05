@@ -11,6 +11,9 @@
 #include <pthread.h>
 #include <unistd.h>
 
+// jemalloc 开关
+// #define HAVE_JEMALLOC
+
 // 引擎启用开关
 #define ENABLE_ARRAY		1
 #define ENABLE_RBTREE		1
