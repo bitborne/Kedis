@@ -1,7 +1,7 @@
 #ifndef __XDP_MIRROR_COMMON_H__
 #define __XDP_MIRROR_COMMON_H__
 
-#define CHUNK_SIZE 4096
+#define CHUNK_SIZE 65536
 #define EVENT_HEADER 1
 #define EVENT_DATA 2
 

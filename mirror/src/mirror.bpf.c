@@ -17,7 +17,7 @@ char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
 struct {
     __uint(type, BPF_MAP_TYPE_RINGBUF);
-    __uint(max_entries, 8 * 1024 * 1024); // 用户态消费跟不上生产:256*1024 -> 8*1024*1024
+    __uint(max_entries, 32 * 1024 * 1024); // 用户态消费跟不上生产:256*1024 -> 8*1024*1024
 } rb SEC(".maps");
 
 SEC("tc")
@@ -80,7 +80,7 @@ int mirror_forward(struct __sk_buff *skb)
         // 1. 即使验证器不确定 chunk_len 的最小边界
         // 2. 我们通过 (len - 1) & 0x3FF 确保结果在 0-1023 (0-CHUNK_SIZE)
         // 3. 再 + 1，确保结果在 1-1024 
-        __u32 final_len = ((chunk_len - 1) & 0xFFF) + 1;
+        __u32 final_len = ((chunk_len - 1) & 0xFFFF) + 1;
         // 这样验证器就知道, final_len 一定不是0
         // 而 final_len 就等于 chunk_len,就是我们要发送的数据大小
         

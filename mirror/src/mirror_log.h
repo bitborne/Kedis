@@ -6,7 +6,7 @@
 #include <unistd.h>
 
 /* 日志级别 */
-#define MIRROR_LOG_LEVEL 2
+#define MIRROR_LOG_LEVEL 0
 
 #define MIRROR_DEBUG    0
 #define MIRROR_INFO     1
