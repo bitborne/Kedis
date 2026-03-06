@@ -414,25 +414,6 @@ cd tests && ./run_full_benchmark_suite.sh --mixed
 ⚠️ **通用场景**: 对象大小分布不可预测，需要灵活的内存管理  
 ⚠️ **多线程高并发**: 极端并发下，jemalloc 的 per-thread 缓存能减少锁竞争
 
-#### 代码实现亮点
-
-```c
-// kmem 的核心设计：slab 分配器 + 智能大小类路由
-static inline int kmem_size_class(size_t size) {
-    if (size <= 64) return KMEM_CLASS_64B;
-    if (size <= 128) return KMEM_CLASS_128B;
-    if (size <= 256) return KMEM_CLASS_256B;
-    // ... 定长策略消除内部碎片
-}
-
-// 大块内存直接归还 OS，避免内存膨胀
-void kmem_slab_free_batch(...) {
-    if (slab->free_blocks > BATCH_RETURN_THRESHOLD) {
-        munmap(chunk->memory, chunk->size);  // 立即归还
-    }
-}
-```
-
 完整测试脚本与可视化代码位于 `tests/gen_mem_allocator_charts.py`，可复用于其他内存分配器对比研究。
 
 ---
