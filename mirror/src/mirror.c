@@ -228,13 +228,13 @@ static void flush_buffer(struct reassembly_buffer *buf) {
                    src_str, buf->src_port, dst_str, buf->dst_port);
   }
 
-  // [修改] 关闭连接并从链表移除
-  if (buf->slave_fd >= 0) {
-    close(buf->slave_fd);
-    buf->slave_fd = -1;
-  }
-  
-  remove_flow(buf);
+  // [修复] 保持长连接，不关闭 slave_fd
+  // 连接将在流超时清理或程序退出时关闭
+
+  // 重置缓冲区状态（但保留连接和流在哈希表中）
+  buf->active = 0;
+  buf->total_len = 0;
+  buf->received_len = 0;
 }
 
 static int handle_event(void* ctx, void* data, size_t data_sz) {
@@ -267,13 +267,15 @@ static int handle_event(void* ctx, void* data, size_t data_sz) {
         buf->total_len = MAX_PAYLOAD;
     }
 
-    // [新增] 为该流建立独立的从节点连接
-    buf->slave_fd = connect_slave_for_flow(buf);
+    // [修复] 只在需要时建立连接（保持长连接）
     if (buf->slave_fd < 0) {
-        mirror_logError("为流 %u -> %u 建立从节点连接失败", 
-                       e->src_port, e->dst_port);
-        buf->active = 0;
-        return 0;
+        buf->slave_fd = connect_slave_for_flow(buf);
+        if (buf->slave_fd < 0) {
+            mirror_logError("为流 %u -> %u 建立从节点连接失败", 
+                           e->src_port, e->dst_port);
+            buf->active = 0;
+            return 0;
+        }
     }
 
     mirror_logInfo("[Header] 流 %u -> %u 期望 %u 字节", 
@@ -316,22 +318,20 @@ static void cleanup_flows() { // 清理整个 table
     mirror_logInfo("Cleaning up remaining flows...");
     int cleaned = 0;
     for (int i = 0; i < HASH_SIZE; i++) {
-        struct reassembly_buffer *curr = flow_table[i];
-        while (curr) {
-            struct reassembly_buffer *next = curr->next;
+        while (flow_table[i]) {
+            struct reassembly_buffer *curr = flow_table[i];
+            // 如果还有未发送的数据，尝试发送
             if (curr->active && curr->received_len > 0) {
-                flush_buffer(curr); // 尝试最后冲刷一次
-            } else {
-                // [修改] 关闭连接再释放
-                if (curr->slave_fd >= 0) {
-                    close(curr->slave_fd);
-                }
-                free(curr);
+                flush_buffer(curr);
             }
+            // 关闭连接
+            if (curr->slave_fd >= 0) {
+                close(curr->slave_fd);
+            }
+            // 使用 remove_flow 正确移除并释放
+            remove_flow(curr);
             cleaned++;
-            curr = next;
         }
-        flow_table[i] = NULL;
     }
     mirror_logInfo("清理了 %d 个流", cleaned);
 }

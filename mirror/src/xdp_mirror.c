@@ -153,15 +153,10 @@ static void flush_buffer(struct reassembly_buffer* buf) {
                        src_str, buf->src_port, dst_str, buf->dst_port);
     }
 
-    // [修改] 关闭连接并清理
-    if (buf->slave_fd >= 0) {
-        shutdown(buf->slave_fd, SHUT_WR);
-        usleep(10000);  // 等待 10ms 让数据发送
-        close(buf->slave_fd);
-        buf->slave_fd = -1;
-    }
+    // [修复] 保持长连接，不关闭 slave_fd
+    // 连接将在流超时清理时关闭
 
-    // 重置缓冲区状态
+    // 重置缓冲区状态（但保留连接）
     buf->active = false;
     buf->total_len = 0;
     buf->received_len = 0;
@@ -231,6 +226,8 @@ static int handle_event(void* ctx, void* data, size_t data_sz) {
                    (e->dst_ip >> 0) & 0xFF, (e->dst_ip >> 8) & 0xFF,
                    (e->dst_ip >> 16) & 0xFF, (e->dst_ip >> 24) & 0xFF, e->dst_port);
 
+    mirror_logDebug("\n==============\n%.*s\n==============\n", data_sz, e->data);
+    
     if (e->type == EVENT_HEADER) {
         // 收到 Header：查找或创建流
         struct reassembly_buffer* buf = get_or_create_flow(
@@ -261,7 +258,7 @@ static int handle_event(void* ctx, void* data, size_t data_sz) {
 
         // 检查从节点连接
         if (buf->slave_fd < 0) {
-            mirror_logInfo("尝试为流 %u -> %u 重新建立从节点连接",
+            mirror_logWarn("尝试为流 %u -> %u 重新建立从节点连接",
                           buf->src_port, buf->dst_port);
             buf->slave_fd = connect_slave();
         }
@@ -474,6 +471,7 @@ cleanup:
     
     mirror_logInfo("已安全退出");
     // [修改] 在销毁 skel 之前打印最终统计
+    print_drop_stats(skel);
     print_stats(skel);
     
     xdp_mirror_bpf__destroy(skel);
