@@ -123,7 +123,7 @@ static void send_to_slave(int fd, const __u8* data, __u32 len,
                    total, len, fd, src_port, dst_port);
 }
 
-// 刷新缓冲区：严格模式检查
+// [修改] 刷新缓冲区：降级模式，不完整也尝试发送
 static void flush_buffer(struct reassembly_buffer* buf) {
     if (!buf || !buf->active) return;
 
@@ -131,36 +131,37 @@ static void flush_buffer(struct reassembly_buffer* buf) {
     inet_ntop(AF_INET, &buf->src_ip, src_str, sizeof(src_str));
     inet_ntop(AF_INET, &buf->dst_ip, dst_str, sizeof(dst_str));
 
-    // 严格模式：必须完整收齐
+    // [修改] 降级模式：不完整也尝试发送已收到的数据
     if (buf->received_len != buf->total_len) {
-        mirror_logWarn("[DROP] 流 %s:%d -> %s:%d 不完整: 期望 %u, 收到 %u",
+        mirror_logWarn("[INCOMPLETE] 流 %s:%d -> %s:%d 不完整: 期望 %u, 收到 %u, 尝试发送部分数据",
                       src_str, buf->src_port, dst_str, buf->dst_port,
                       buf->total_len, buf->received_len);
-        total_dropped += buf->received_len;
-        buf->active = false;
-        if (buf->slave_fd >= 0) {
-            shutdown(buf->slave_fd, SHUT_WR);
-            usleep(10000);  // 等待 10ms 让数据发送
-            close(buf->slave_fd);
-            buf->slave_fd = -1;
-        }
-        return;
-    }
-
-    mirror_logInfo("[COMPLETE] %s:%d -> %s:%d, 总长度 %u 字节",
-                  src_str, buf->src_port, dst_str, buf->dst_port, buf->total_len);
-    total_complete += buf->total_len;
-
-    // 发送完整数据
-    if (buf->slave_fd >= 0) {
-        send_to_slave(buf->slave_fd, buf->data, buf->total_len,
-                     buf->src_port, buf->dst_port);
+        total_dropped += (buf->total_len - buf->received_len);  // 只统计未收到的部分
     } else {
+        mirror_logInfo("[COMPLETE] %s:%d -> %s:%d, 总长度 %u 字节",
+                      src_str, buf->src_port, dst_str, buf->dst_port, buf->total_len);
+    }
+    
+    total_complete += buf->received_len;
+
+    // 发送数据（即使不完整也发送）
+    if (buf->slave_fd >= 0 && buf->received_len > 0) {
+        send_to_slave(buf->slave_fd, buf->data, buf->received_len,
+                     buf->src_port, buf->dst_port);
+    } else if (buf->slave_fd < 0) {
         mirror_logError("[ERROR] 流 %s:%d -> %s:%d 没有有效的从节点连接",
                        src_str, buf->src_port, dst_str, buf->dst_port);
     }
 
-    // 重置缓冲区状态，但不释放，用于下一个请求
+    // [修改] 关闭连接并清理
+    if (buf->slave_fd >= 0) {
+        shutdown(buf->slave_fd, SHUT_WR);
+        usleep(10000);  // 等待 10ms 让数据发送
+        close(buf->slave_fd);
+        buf->slave_fd = -1;
+    }
+
+    // 重置缓冲区状态
     buf->active = false;
     buf->total_len = 0;
     buf->received_len = 0;
@@ -354,10 +355,30 @@ static void cleanup_expired_flows() {
     }
 }
 
+// [新增] 读取 BPF 丢包统计
+static void print_drop_stats(struct xdp_mirror_bpf* skel) {
+    int drop_stats_fd = bpf_map__fd(skel->maps.drop_stats);
+    if (drop_stats_fd < 0) return;
+    
+    __u32 key;
+    __u64 count;
+    
+    key = 0;  // data chunk 丢包
+    if (bpf_map_lookup_elem(drop_stats_fd, &key, &count) == 0 && count > 0) {
+        mirror_logWarn("[DROP STATS] Data chunks dropped: %llu", count);
+    }
+    
+    key = 1;  // header 丢包
+    if (bpf_map_lookup_elem(drop_stats_fd, &key, &count) == 0 && count > 0) {
+        mirror_logWarn("[DROP STATS] Headers dropped: %llu", count);
+    }
+}
+
 // 统计打印
-static void print_stats() {
+static void print_stats(struct xdp_mirror_bpf* skel) {
     mirror_logInfo("[STATS] 完成: %lld, 发送: %lld, 丢弃: %lld bytes",
                   total_complete, total_sent, total_dropped);
+    print_drop_stats(skel);
 }
 
 int main(int argc, char** argv) {
@@ -374,7 +395,7 @@ int main(int argc, char** argv) {
     mirror_logInfo("XDP Mirror 启动");
     mirror_logInfo("网卡: %s", ifname);
     mirror_logInfo("从节点: %s:%d", target_ip, target_port);
-    mirror_logInfo("模式: 严格模式 (必须收齐)");
+    mirror_logInfo("模式: 降级模式 (不完整也发送)");
     mirror_logInfo("Socket: 每五元组独立连接");
     mirror_logInfo("========================================");
 
@@ -434,7 +455,7 @@ int main(int argc, char** argv) {
 
         // 每 10 秒打印统计
         if (now - last_stats > 10) {
-            print_stats();
+            print_stats(skel);
             last_stats = now;
         }
     }
