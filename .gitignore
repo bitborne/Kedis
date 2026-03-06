@@ -48,4 +48,4 @@ mirror/src/xdp_mirror
 docs/
 tests/engine_benchmark_results/charts/
 tests/mixed_workload_results/charts/
-include/kvstore.h
+test_kmem
