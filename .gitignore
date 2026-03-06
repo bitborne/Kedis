@@ -49,3 +49,5 @@ docs/
 tests/engine_benchmark_results/charts/
 tests/mixed_workload_results/charts/
 test_kmem
+allocator_*.png
+old_allocator_*.png
