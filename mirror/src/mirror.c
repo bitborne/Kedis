@@ -134,24 +134,7 @@ static void get_timestamp(char* buf, size_t len) {
   strftime(buf, len, "%Y-%m-%d %H:%M:%S", tm_info);
 }
 
-// [新增] 读取 BPF 丢包统计并打印
-static void print_drop_stats(struct mirror_bpf* skel) {
-  int drop_stats_fd = bpf_map__fd(skel->maps.drop_stats);
-  if (drop_stats_fd < 0) return;
-  
-  __u32 key;
-  __u64 count;
-  
-  key = 0;  // data chunk 丢包
-  if (bpf_map_lookup_elem(drop_stats_fd, &key, &count) == 0 && count > 0) {
-    mirror_logWarn("[DROP STATS] Data chunks dropped: %llu", count);
-  }
-  
-  key = 1;  // header 丢包
-  if (bpf_map_lookup_elem(drop_stats_fd, &key, &count) == 0 && count > 0) {
-    mirror_logWarn("[DROP STATS] Headers dropped: %llu", count);
-  }
-}
+// [删除] print_drop_stats 函数暂时未使用
 
 // [新增] 发送数据到从节点（使用流专属连接）
 static void send_to_slave(struct reassembly_buffer* buf, const __u8* data, __u32 len) {
@@ -255,7 +238,7 @@ static void flush_buffer(struct reassembly_buffer *buf) {
 }
 
 static int handle_event(void* ctx, void* data, size_t data_sz) {
-  struct mirror_bpf* skel = (struct mirror_bpf*)ctx;  // 需要传入 skel 来读取丢包统计
+  (void)ctx;  // 保留用于未来扩展
   struct packet_event *e = data;
   struct reassembly_buffer *buf = NULL;
 
@@ -327,28 +310,7 @@ static int handle_event(void* ctx, void* data, size_t data_sz) {
   return 0;
 }
 
-static int connect_slave(const char* slave_ip, uint16_t slave_port) {
-  int fd = socket(AF_INET, SOCK_STREAM, 0);
-  if (fd < 0) {
-    perror("socket");
-    return -1;
-  }
-
-  struct sockaddr_in addr = {
-      .sin_family = AF_INET,
-      .sin_port = htons(slave_port),
-  };
-  inet_pton(AF_INET, slave_ip, &addr.sin_addr);
-
-  mirror_logInfo("Connecting to slave %s:%d...", slave_ip, slave_port);
-  if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-    perror("connect");
-    close(fd);
-    return -1;
-  }
-  mirror_logInfo("Connected to slave!\n");
-  return fd;
-}
+// [删除] connect_slave 函数已不再使用，改为使用 connect_slave_for_flow
 
 static void cleanup_flows() { // 清理整个 table
     mirror_logInfo("Cleaning up remaining flows...");
@@ -475,8 +437,7 @@ int main(int argc, char** argv) {
   bpf_tc_hook_destroy(&hook);
 
 cleanup:
-//   if (log_fd >= 0) close(log_fd);
-  if (slave_fd >= 0) close(slave_fd);
+  // [修改] 不再需要关闭全局 slave_fd，每个流有自己的连接
   ring_buffer__free(rb);
   mirror_bpf__destroy(skel);
   return err != 0;

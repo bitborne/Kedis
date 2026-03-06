@@ -471,10 +471,12 @@ cleanup:
     cleanup_expired_flows();
 
     ring_buffer__free(rb);
-    xdp_mirror_bpf__destroy(skel);
-
+    
     mirror_logInfo("已安全退出");
-    print_stats();
+    // [修改] 在销毁 skel 之前打印最终统计
+    print_stats(skel);
+    
+    xdp_mirror_bpf__destroy(skel);
 
     return 0;
 }
