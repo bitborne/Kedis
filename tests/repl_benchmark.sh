@@ -40,7 +40,7 @@ echo ""
 echo "  [1] No Mirror    - 无mirror (基准测试)"
 echo "  [2] TC Ingress   - 使用TC Ingress进行增量复制"
 echo "  [3] XDP          - 使用XDP进行增量复制"
-echo "  [4] IORecv       - 使用IORecv进行增量复制"
+echo "  [4] RESP_feed       - 使用RESP_feed进行增量复制"
 echo ""
 echo "  [0] 退出"
 echo ""
@@ -66,8 +66,8 @@ while true; do
             break
             ;;
         4)
-            CONFIG_NAME="IORecv"
-            CONFIG_LABEL="REPL=IORECV"
+            CONFIG_NAME="RESP_feed"
+            CONFIG_LABEL="REPL=RESP_feed"
             break
             ;;
         0)

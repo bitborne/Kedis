@@ -53,3 +53,4 @@ allocator_*.png
 old_allocator_*.png
 mirror/src/kprobe_mirror
 mirror/src/uprobe_mirror
+tests/repl_sset_benchmark_results/charts

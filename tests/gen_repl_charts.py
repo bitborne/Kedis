@@ -35,21 +35,21 @@ STANDARD_CONFIGS = [
     "NoMirror",
     "TC_Ingress",
     "XDP",
-    "IORecv"
+    "RESP_feed"
 ]
 
 CONFIG_LABELS = {
     "NoMirror": "No Mirror\n(REPL=NONE)",
     "TC_Ingress": "TC Ingress\n(REPL=TC_INGRESS)",
     "XDP": "XDP\n(REPL=XDP)",
-    "IORecv": "IORecv\n(REPL=IORECV)"
+    "RESP_feed": "RESP_feed\n(REPL=RESP_feed)"
 }
 
 CONFIG_SHORT = {
     "NoMirror": "No Mirror",
     "TC_Ingress": "TC Ingress",
     "XDP": "XDP",
-    "IORecv": "IORecv"
+    "RESP_feed": "RESP_feed"
 }
 
 # 配色
