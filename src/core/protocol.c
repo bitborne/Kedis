@@ -63,7 +63,8 @@ int kvs_resp_feed(struct conn* c) {
         }
 
         // 查找 \r\n，确定命令头结束位置
-        char* end = find_crlf(c->rbuf + c->parse_done, "\r\n");
+        size_t remaining = c->rlen - c->parse_done;
+        char* end = find_crlf(c->rbuf + c->parse_done, remaining);
         if (!end) {
           // 找不到 \r\n，数据不足，保留未解析的数据在 rbuf 中
           goto continue_recv;  // 需要更多数据
@@ -98,7 +99,8 @@ int kvs_resp_feed(struct conn* c) {
         }
         
         // 查找 \r\n，确定长度头结束位置
-        char* end = find_crlf(c->rbuf + c->parse_done, "\r\n");
+        size_t remaining = c->rlen - c->parse_done;
+        char* end = find_crlf(c->rbuf + c->parse_done, remaining);
         if (!end) {
           // 找不到 \r\n，数据不足
           // 保留未解析的 $<len> 部分在 rbuf 中，下次继续解析
