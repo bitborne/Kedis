@@ -26,8 +26,8 @@ CPU_CORES = 18          # CPU 核心数
 CONNECTIONS = 50        # 每线程连接数
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8888
-TEST_DURATION = 30      # 测试持续时间（秒）
-WARMUP_DURATION = 5     # 预热时间（秒）
+TEST_DURATION = 30      # GET测试持续时间（秒）
+SET_TOTAL_KEYS = 1_000_000  # SET测试固定插入key数量
 DEFAULT_DATA_SIZE = 128         # value 大小（bytes）
 DEFAULT_KEY_MAX = 1_000_000     # key 数量上限
 KEY_PREFIX = "perf_"
@@ -181,32 +181,57 @@ def run_memtier(
         log(f"Exception: {e}", "ERROR")
         return {"error": str(e)}
 
-def run_warmup(engine: str, host: str, port: int, data_size: int, key_max: int) -> bool:
-    """SET 测试前预热：写入 10% 数据"""
-    warmup_keys = key_max // 10
-    log(f"Warming up: writing {warmup_keys} keys...")
+def run_fixed_set(engine: str, host: str, port: int, data_size: int, output_dir: str, tag: str) -> dict:
+    """SET 测试：固定插入 100万 key，使用 -n 指定请求数"""
+    prefix = ENGINE_PREFIX.get(engine, engine)
+    cmd_prefix = f"{prefix}SET"
     
-    tmp_dir = "/tmp/kedis_warmup"
-    os.makedirs(tmp_dir, exist_ok=True)
+    # 计算每连接请求数
+    total_conns = CPU_CORES * CONNECTIONS
+    requests_per_conn = SET_TOTAL_KEYS // total_conns
     
-    result = run_memtier(
-        engine=engine,
-        operation="SET",
-        host=host,
-        port=port,
-        data_size=data_size,
-        key_max=warmup_keys,
-        duration=WARMUP_DURATION,
-        output_dir=tmp_dir,
-        tag="warmup"
-    )
+    log(f"Fixed SET test: inserting {SET_TOTAL_KEYS} keys ({requests_per_conn} per connection)...")
     
-    if "error" in result:
-        log("Warmup failed", "WARN")
-        return False
+    cmd = [
+        "memtier_benchmark",
+        "-s", host,
+        "-p", str(port),
+        "-t", str(CPU_CORES),
+        "-c", str(CONNECTIONS),
+        "-n", str(requests_per_conn),  # 每连接请求数
+        "--data-size", str(data_size),
+        "--key-minimum", "1",
+        "--key-maximum", str(SET_TOTAL_KEYS),
+        "--key-prefix", KEY_PREFIX,
+        "--command", f"{cmd_prefix} __key__ __data__",
+        "--command-ratio", "1",
+        "--command-key-pattern", "P",  # 顺序写入
+        "--json-out-file", os.path.join(output_dir, f"{tag}.json"),
+        "--print-percentiles", "50,90,95,99,99.9",
+        "--hide-histogram",
+    ]
     
-    log(f"Warmup complete: {result.get('ops_sec', 0):.0f} ops/sec")
-    return True
+    result_file = os.path.join(output_dir, f"{tag}.json")
+    log_file = os.path.join(output_dir, f"{tag}.log")
+    
+    try:
+        with open(log_file, "w") as f:
+            f.write(f"Command: {' '.join(cmd)}\n")
+            f.write(f"Time: {datetime.now().isoformat()}\n")
+            f.write(f"Fixed keys: {SET_TOTAL_KEYS}, per conn: {requests_per_conn}\n\n")
+            f.flush()
+            
+            result = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT, text=True)
+        
+        if result.returncode != 0:
+            log(f"memtier failed with code {result.returncode}", "ERROR")
+            return {"error": f"exit code {result.returncode}"}
+        
+        return parse_result(result_file)
+        
+    except Exception as e:
+        log(f"Exception: {e}", "ERROR")
+        return {"error": str(e)}
 
 def run_prepopulate(engine: str, host: str, port: int, data_size: int, key_max: int) -> bool:
     """GET 测试前准备：写入全部数据"""
@@ -245,7 +270,7 @@ def main():
     parser.add_argument("-o", "--operation", choices=["SET", "GET"], required=True)
     parser.add_argument("-d", "--data-size", type=int, default=DEFAULT_DATA_SIZE)
     parser.add_argument("--key-max", type=int, default=DEFAULT_KEY_MAX)
-    parser.add_argument("--no-warmup", action="store_true", help="跳过预热/数据准备")
+    parser.add_argument("--no-warmup", action="store_true", help="GET测试跳过数据准备")
     args = parser.parse_args()
     
     if not check_memtier():
@@ -267,29 +292,38 @@ def main():
         log("Server not ready", "ERROR")
         sys.exit(1)
     
-    # 预热 / 数据准备
-    if not args.no_warmup:
-        if args.operation == "SET":
-            run_warmup(args.engine, DEFAULT_HOST, DEFAULT_PORT, args.data_size, args.key_max)
-        else:  # GET
-            if not run_prepopulate(args.engine, DEFAULT_HOST, DEFAULT_PORT, args.data_size, args.key_max):
-                sys.exit(1)
-    
     # 执行测试
     log(f"\nBenchmark: {args.engine} engine, {args.operation} operation")
-    log(f"Config: {CPU_CORES} threads, {CONNECTIONS} conn/thread, {TEST_DURATION}s")
+    log(f"Config: {CPU_CORES} threads, {CONNECTIONS} conn/thread")
     
-    result = run_memtier(
-        engine=args.engine,
-        operation=args.operation,
-        host=DEFAULT_HOST,
-        port=DEFAULT_PORT,
-        data_size=args.data_size,
-        key_max=args.key_max,
-        duration=TEST_DURATION,
-        output_dir=output_dir,
-        tag=f"{args.engine}_{args.operation}"
-    )
+    if args.operation == "SET":
+        # SET：固定插入100万key，不预热
+        result = run_fixed_set(
+            engine=args.engine,
+            host=DEFAULT_HOST,
+            port=DEFAULT_PORT,
+            data_size=args.data_size,
+            output_dir=output_dir,
+            tag=f"{args.engine}_{args.operation}"
+        )
+    else:  # GET
+        # GET：先写入数据，再测试
+        if not args.no_warmup:
+            if not run_prepopulate(args.engine, DEFAULT_HOST, DEFAULT_PORT, args.data_size, args.key_max):
+                sys.exit(1)
+        
+        log(f"\nGET test duration: {TEST_DURATION}s")
+        result = run_memtier(
+            engine=args.engine,
+            operation="GET",
+            host=DEFAULT_HOST,
+            port=DEFAULT_PORT,
+            data_size=args.data_size,
+            key_max=args.key_max,
+            duration=TEST_DURATION,
+            output_dir=output_dir,
+            tag=f"{args.engine}_{args.operation}"
+        )
     
     # 显示结果
     if "error" in result:
