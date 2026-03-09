@@ -51,10 +51,13 @@ class TestKVAof(KVServerBase):
             val = self._to_bytes(self._eval_expr(pair['value_expr']))
             for engine in engines:
                 client._engine_cmd(engine, 'SET', key, val)
-        time.sleep(3)
+        # 确保AOF数据落盘：发送EXIST触发before_sleep刷新缓冲区，然后等待fsync
+        client._engine_cmd('H', 'EXIST', b'trigger_flush')
+        time.sleep(1.5)  # 等待后台fsync线程刷盘
         self._crash_server()
 
         self._start_server("tests/config_aof.conf")
+        time.sleep(3)
         client = self._get_client()
         self._verify_state("after-set", client, pairs, engines, 'value_expr')
         
@@ -64,10 +67,13 @@ class TestKVAof(KVServerBase):
             mod_val = self._to_bytes(self._eval_expr(pair['mod_value_expr']))
             for engine in engines:
                 client._engine_cmd(engine, 'MOD', key, mod_val)
-        time.sleep(3)
+        # 确保AOF数据落盘：发送EXIST触发before_sleep刷新缓冲区，然后等待fsync
+        client._engine_cmd('A', 'EXIST', b'trigger_flush')
+        time.sleep(1.5)  # 等待后台fsync线程刷盘
         self._crash_server()
 
         self._start_server("tests/config_aof.conf")
+        time.sleep(3)
         client = self._get_client()
         self._verify_state("after-mod", client, pairs, engines, 'mod_value_expr')
 
@@ -76,10 +82,13 @@ class TestKVAof(KVServerBase):
             key = self._to_bytes(self._eval_expr(pair['key_expr']))
             for engine in engines:
                 client._engine_cmd(engine, 'DEL', key)
-        time.sleep(3)
+        # 确保AOF数据落盘：发送EXIST触发before_sleep刷新缓冲区，然后等待fsync
+        client._engine_cmd('A', 'EXIST', b'trigger_flush')
+        time.sleep(1.5)  # 等待后台fsync线程刷盘
         self._crash_server()
         
         self._start_server("tests/config_aof.conf")
+        time.sleep(3)
         client = self._get_client()
         self._verify_state("after-del", client, pairs, engines, 'non_existent')
 

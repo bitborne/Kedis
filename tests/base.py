@@ -28,8 +28,13 @@ class KVServerBase(unittest.TestCase):
         if os.path.exists(clean_script):
             subprocess.run(["bash", clean_script], cwd=cls.root_dir, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    def _start_server(self, config_rel_path: str):
-        """启动服务并等待端口就绪"""
+    def _start_server(self, config_rel_path: str, wait_ready: bool = True):
+        """启动服务并等待端口就绪
+        
+        Args:
+            config_rel_path: 配置文件相对路径
+            wait_ready: 是否等待服务完全就绪（发送PING命令确认）
+        """
         config_path = os.path.join(self.root_dir, config_rel_path)
         executable = os.path.join(self.root_dir, "kvstore")
         
@@ -44,39 +49,83 @@ class KVServerBase(unittest.TestCase):
             stderr=subprocess.DEVNULL
         )
         
-        # 轮询探测端口直到成功连接或超时
-        for _ in range(50):
+        # 第一阶段：轮询探测端口直到成功连接或超时
+        port_ready = False
+        for _ in range(100):  # 增加重试次数
             try:
                 with socket.create_connection((self.host, self.port), timeout=0.1):
-                    time.sleep(1) # 预留时间让引擎完成初始化
-                    return
-            except (ConnectionRefusedError, socket.timeout):
-                time.sleep(0.1)
+                    port_ready = True
+                    break
+            except (ConnectionRefusedError, socket.timeout, OSError):
+                # 检查进程是否已崩溃
+                if self.server_proc.poll() is not None:
+                    raise RuntimeError(f"Server exited immediately with code {self.server_proc.returncode}")
+                time.sleep(0.05)
         
-        if self.server_proc.poll() is not None:
-            raise RuntimeError(f"Server exited immediately with code {self.server_proc.returncode}")
-        raise RuntimeError(f"Server failed to bind to {self.port} within timeout")
+        if not port_ready:
+            self._stop_server()
+            raise RuntimeError(f"Server failed to bind to {self.port} within timeout")
+        
+        # 第二阶段：等待服务完全就绪（可选）
+        if wait_ready:
+            # 尝试发送PING命令确认服务可以处理请求
+            for _ in range(50):
+                try:
+                    client = self._get_client()
+                    client.ping()
+                    # 额外等待一小段时间确保引擎初始化完成
+                    time.sleep(0.2)
+                    return
+                except Exception:
+                    if self.server_proc.poll() is not None:
+                        raise RuntimeError(f"Server exited during startup")
+                    time.sleep(0.05)
+            
+            self._stop_server()
+            raise RuntimeError(f"Server failed to respond to PING within timeout")
 
     def _crash_server(self):
-        """强制强杀进程 (SIGKILL)，用于测试持久化恢复能力"""
+        """强制强杀进程 (SIGKILL)，用于测试持久化恢复能力
+        
+        注意：SIGKILL 会导致进程无法优雅退出，可能导致AOF数据丢失。
+        先用 SIGTERM 尝试优雅退出，超时后再用 SIGKILL。
+        """
         if self.server_proc:
             try:
-                os.kill(self.server_proc.pid, signal.SIGKILL)
-                self.server_proc.wait()
+                # 先尝试优雅退出（SIGTERM）
+                os.kill(self.server_proc.pid, signal.SIGTERM)
+                try:
+                    self.server_proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    # 超时后强制 kill
+                    os.kill(self.server_proc.pid, signal.SIGKILL)
+                    self.server_proc.wait()
             except ProcessLookupError:
-                pass
+                pass  # 进程已经不存在
+            except Exception as e:
+                print(f"Warning: Error during server crash: {e}")
             self.server_proc = None
-            time.sleep(0.5)
+            # 增加等待时间确保端口释放
+            time.sleep(0.8)
 
     def _stop_server(self):
         """优雅关闭服务"""
         if self.server_proc:
+            # 发送 SIGTERM 让服务优雅退出
             self.server_proc.terminate()
             try:
-                self.server_proc.wait(timeout=3)
+                # 等待服务完全退出
+                self.server_proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                self._crash_server()
+                print("Warning: Server did not terminate gracefully, forcing kill...")
+                try:
+                    self.server_proc.kill()
+                    self.server_proc.wait(timeout=5)
+                except Exception as e:
+                    print(f"Warning: Error during force kill: {e}")
             self.server_proc = None
+            # 增加等待时间确保资源释放
+            time.sleep(0.5)
 
     def _get_client(self):
         """获取配置了 hiredis 的 Redis 客户端"""

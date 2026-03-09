@@ -865,6 +865,11 @@ void dest_kvengine(void) {
         return;
     }
     g_dest_already_called = 1;
+
+    // 【重要】停止AOF后台线程，确保数据完整写入
+    if (g_config.aof_enabled) {
+        stop_aof_fsync_process();
+    }
     
 #if ENABLE_MULTI_ENGINE
     ksfSaveAll();

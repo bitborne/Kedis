@@ -53,10 +53,16 @@ class TestKVSnapshot(KVServerBase):
         
         resp = client.execute_command('BGSAVE')
         self.assertIn(resp, [True, b'OK', b'Background saving started'])
-        time.sleep(5) # 确保 BGSAVE 完成
+        # 等待BGSAVE完成（后台进程写入文件需要时间）
+        time.sleep(2.5)
+        # 发送读命令触发事件循环，确保文件写入完成
+        client._engine_cmd('H', 'EXIST', b'check_save')
+        time.sleep(1)
         self._crash_server()
 
         self._start_server("tests/config_snapshot.conf")
+        # 等待服务完全启动和KSF文件加载
+        time.sleep(1.5)
         client = self._get_client()
         self._verify_state("after-set", client, pairs, engines, 'value_expr')
         
@@ -69,10 +75,16 @@ class TestKVSnapshot(KVServerBase):
         
         resp = client.execute_command('BGSAVE')
         self.assertIn(resp, [True, b'OK', b'Background saving started'])
-        time.sleep(5) # 确保 BGSAVE 完成
+        # 等待BGSAVE完成（后台进程写入文件需要时间）
+        time.sleep(2.5)
+        # 发送读命令触发事件循环，确保文件写入完成
+        client._engine_cmd('H', 'EXIST', b'check_save')
+        time.sleep(1)
         self._crash_server()
 
         self._start_server("tests/config_snapshot.conf")
+        # 等待服务完全启动和KSF文件加载
+        time.sleep(1.5)
         client = self._get_client()
         self._verify_state("after-mod", client, pairs, engines, 'mod_value_expr')
 
@@ -84,10 +96,16 @@ class TestKVSnapshot(KVServerBase):
         
         resp = client.execute_command('BGSAVE')
         self.assertIn(resp, [True, b'OK', b'Background saving started'])
-        time.sleep(5) # 确保 BGSAVE 完成
+        # 等待BGSAVE完成（后台进程写入文件需要时间）
+        time.sleep(2.5)
+        # 发送读命令触发事件循环，确保文件写入完成
+        client._engine_cmd('H', 'EXIST', b'check_save')
+        time.sleep(1)
         self._crash_server()
         
         self._start_server("tests/config_snapshot.conf")
+        # 等待服务完全启动和KSF文件加载
+        time.sleep(1.5)
         client = self._get_client()
         self._verify_state("after-del", client, pairs, engines, 'non_existent')
 
