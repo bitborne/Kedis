@@ -183,7 +183,7 @@ class TestInreRepl(KVServerBase):
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL
         )
-        time.sleep(2) # 等待 BPF 程序挂载并生效
+        time.sleep(3) # 等待 BPF 程序挂载并生效
 
         # 5. 开始数据驱动测试
         pairs = self.load_test_pairs()
@@ -201,7 +201,7 @@ class TestInreRepl(KVServerBase):
         # 等待镜像同步 (包含 10MB 大 Key，需要较长等待时间)
         
         # 等待镜像同步完成，发送命令触发缓冲区刷新
-        time.sleep(2)
+        time.sleep(4)
         master_client._engine_cmd('H', 'EXIST', b'check_sync')
         time.sleep(1)
         self._verify_state("after-set", slave_client, pairs, engines, 'value_expr')
@@ -217,7 +217,7 @@ class TestInreRepl(KVServerBase):
         
         # 等待镜像同步
         
-        time.sleep(2)
+        time.sleep(4)
         master_client._engine_cmd('H', 'EXIST', b'check_sync')
         time.sleep(1)
         self._verify_state("after-mod", slave_client, pairs, engines, 'mod_value_expr')
@@ -231,9 +231,9 @@ class TestInreRepl(KVServerBase):
                 master_client._engine_cmd(engine, 'DEL', key)
         
         # 等待镜像同步
-        time.sleep(0.5)
+        time.sleep(3)
         master_client._engine_cmd('H', 'EXIST', b'check_sync')
-        time.sleep(0.5)
+        time.sleep(1)
         self._verify_state("after-del", slave_client, pairs, engines, 'non_existent')
         
         

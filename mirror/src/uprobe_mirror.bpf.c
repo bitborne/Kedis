@@ -110,9 +110,9 @@ int BPF_KPROBE(uprobe_kvs_resp_feed, void *c)
     e->rlen = rlen;
     e->parse_done = parse_done;
     
-    // 【修复】只复制新数据（从 parse_done 开始），避免重复发送历史数据
-    void *rbuf_ptr = (void*)c + CONN_RBUF_OFFSET + parse_done;
-    bpf_probe_read_user(e->data, valid_len, rbuf_ptr);
+    // 读取 rbuf 数据（全部读取，用户态根据 parse_done 处理）
+    void *rbuf_ptr = (void*)c + CONN_RBUF_OFFSET;
+    bpf_probe_read_user(e->data, rlen, rbuf_ptr);
     
     bpf_ringbuf_submit(e, 0);
     

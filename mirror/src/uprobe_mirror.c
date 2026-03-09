@@ -193,7 +193,8 @@ static int handle_event(void* ctx, void* data, size_t data_sz) {
     
     struct uprobe_event* e = data;
     
-    // 计算有效数据长度（BPF 程序已经只复制了新数据，从 parse_done 开始）
+    // 计算有效数据：从 parse_done 到 rlen
+    __u32 valid_offset = e->parse_done;
     __u32 valid_len = e->rlen - e->parse_done;
     
     if (valid_len == 0 || valid_len > IOP_SIZE) {
@@ -222,8 +223,8 @@ static int handle_event(void* ctx, void* data, size_t data_sz) {
         mirror_logInfo("[FLOW ACTIVE] fd=%d -> slave_fd=%d", e->fd, flow->slave_fd);
     }
     
-    // 【修复】BPF 程序已经只复制了新数据到 e->data，直接使用 e->data 而不需要再跳过 parse_done
-    if (send_to_slave(flow->slave_fd, e->data, valid_len) < 0) {
+    // 转发有效数据到从节点（从 parse_done 偏移位置开始）
+    if (send_to_slave(flow->slave_fd, e->data + valid_offset, valid_len) < 0) {
         // 发送失败，关闭连接，下次重试
         close(flow->slave_fd);
         flow->slave_fd = -1;
@@ -235,8 +236,8 @@ static int handle_event(void* ctx, void* data, size_t data_sz) {
     total_sent += valid_len;
     flow->last_active = time(NULL);
     
-    mirror_logDebug("[FORWARD] fd=%d, len=%u (rlen=%u, parse_done=%u), total_sent=%lld", 
-                    e->fd, valid_len, e->rlen, e->parse_done, total_sent);
+    mirror_logDebug("[FORWARD] fd=%d, offset=%u, len=%u (rlen=%u), total_sent=%lld", 
+                    e->fd, valid_offset, valid_len, e->rlen, total_sent);
     
     return 0;
 }
