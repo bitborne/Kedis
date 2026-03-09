@@ -144,7 +144,7 @@ class TestInreRepl(KVServerBase):
             stderr=subprocess.DEVNULL
         )
         self._wait_for_port(self.slave_port)
-        slave_client = KVRedis(host=self.host, port=self.slave_port, decode_responses=False)
+        slave_client = KVRedis(host=self.host, port=self.slave_port, decode_responses=False, lib_name=None, lib_version=None)
 
         # 4. 启动 Mirror 工具
         if self.mirror_type == "uprobe":

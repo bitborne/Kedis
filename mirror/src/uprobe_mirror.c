@@ -18,6 +18,11 @@
 #include "mirror_log.h"
 #include "uprobe_mirror.skel.h"
 
+// 动态获取函数地址
+#include <elf.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+
 #define FD_TABLE_SIZE 1024     // fd 哈希表大小
 #define FLOW_TIMEOUT_SEC 300   // 流超时时间（秒）- 增加到5分钟
 
@@ -48,6 +53,31 @@ static void sig_handler(int sig) {
     mirror_logInfo("统计: events=%lld, bytes=%lld, sent=%lld, dropped=%lld",
                    total_events, total_bytes, total_sent, total_dropped);
     exiting = true;
+}
+
+/**
+ * 从 ELF 文件中获取符号地址
+ * 简单实现：通过读取 nm 命令输出获取地址
+ */
+static size_t get_symbol_offset(const char* path, const char* symbol) {
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "nm '%s' 2>/dev/null | grep ' %s$' | head -1", path, symbol);
+    
+    FILE* fp = popen(cmd, "r");
+    if (!fp) {
+        mirror_logError("无法执行 nm 命令");
+        return 0;
+    }
+    
+    char line[256];
+    size_t addr = 0;
+    if (fgets(line, sizeof(line), fp)) {
+        // 格式: 0000000000006910 T kvs_resp_feed
+        sscanf(line, "%zx", &addr);
+    }
+    
+    pclose(fp);
+    return addr;
 }
 
 static unsigned int hash_fd(int fd) {
@@ -163,12 +193,11 @@ static int handle_event(void* ctx, void* data, size_t data_sz) {
     
     struct uprobe_event* e = data;
     
-    // 计算有效数据：从 parse_done 到 rlen
-    __u32 valid_offset = e->parse_done;
+    // 计算有效数据长度（BPF 程序已经只复制了新数据，从 parse_done 开始）
     __u32 valid_len = e->rlen - e->parse_done;
     
-    if (valid_len == 0) {
-        return 0;  // 没有新数据
+    if (valid_len == 0 || valid_len > IOP_SIZE) {
+        return 0;  // 没有新数据或数据异常
     }
     
     total_events++;
@@ -193,8 +222,8 @@ static int handle_event(void* ctx, void* data, size_t data_sz) {
         mirror_logInfo("[FLOW ACTIVE] fd=%d -> slave_fd=%d", e->fd, flow->slave_fd);
     }
     
-    // 转发有效数据到从节点（从 parse_done 偏移位置开始）
-    if (send_to_slave(flow->slave_fd, e->data + valid_offset, valid_len) < 0) {
+    // 【修复】BPF 程序已经只复制了新数据到 e->data，直接使用 e->data 而不需要再跳过 parse_done
+    if (send_to_slave(flow->slave_fd, e->data, valid_len) < 0) {
         // 发送失败，关闭连接，下次重试
         close(flow->slave_fd);
         flow->slave_fd = -1;
@@ -206,8 +235,8 @@ static int handle_event(void* ctx, void* data, size_t data_sz) {
     total_sent += valid_len;
     flow->last_active = time(NULL);
     
-    mirror_logDebug("[FORWARD] fd=%d, offset=%u, len=%u (rlen=%u), total_sent=%lld", 
-                    e->fd, valid_offset, valid_len, e->rlen, total_sent);
+    mirror_logDebug("[FORWARD] fd=%d, len=%u (rlen=%u, parse_done=%u), total_sent=%lld", 
+                    e->fd, valid_len, e->rlen, e->parse_done, total_sent);
     
     return 0;
 }
@@ -319,16 +348,21 @@ int main(int argc, char** argv) {
     signal(SIGINT, sig_handler);
     signal(SIGTERM, sig_handler);
 
+    // 动态获取 kvs_resp_feed 符号地址
+    size_t func_offset = get_symbol_offset(kvstore_path, "kvs_resp_feed");
+    if (func_offset == 0) {
+        mirror_logError("无法获取 %s 的地址，使用默认地址 0x6910", "kvs_resp_feed");
+        func_offset = 0x6910;  // 后备默认值
+    }
+    
+    mirror_logInfo("函数 %s 的偏移量: 0x%lx", "kvs_resp_feed", func_offset);
+
     // 加载 BPF
     struct uprobe_mirror_bpf* skel = uprobe_mirror_bpf__open_and_load();
     if (!skel) {
         mirror_logError("加载 BPF 程序失败");
         return 1;
     }
-
-    // kvs_resp_feed 符号地址 (来自 nm /home/Schatten/C_C++/0x08_KVstore/9.1-kvstore/kvstore | grep kvs_resp_feed)
-    // 00000000000068d0 T kvs_resp_feed
-    size_t func_offset = 0x68d0;
     
     mirror_logInfo("尝试附加 uprobe: %s + 0x%lx", kvstore_path, func_offset);
     

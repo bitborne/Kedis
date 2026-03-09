@@ -422,8 +422,8 @@ int proactor_start(unsigned short port, msg_handler handler) {
           // 新数据从 c->rbuf + c->rlen 的位置开始写入
 
           // [可以作为最高级日志级别的打印信息]
-        //   debug("r->len == %zu", c->rlen);
-        //   debug("recv (%d bytes):\n%.*s\n====", res, res, c->rbuf + c->rlen);
+        //   kvs_logDebug("r->len == %zu", c->rlen);
+        //   kvs_logDebug("recv (%d bytes):\n%.*s\n====", res, res, c->rbuf + c->rlen);
 
           c->rlen += res;  // 累加接收的字节数（不是覆盖）
           c->parse_done = 0;
