@@ -838,6 +838,63 @@ int start_aof_fsync_process() {
   return 0;
 }
 
+/**
+ * 停止AOF FSYNC后台线程并关闭文件
+ */
+void stop_aof_fsync_process() {
+  if (!fsync_running) {
+    return;  // 线程未运行，无需停止
+  }
+
+  kvs_logInfo("正在停止AOF FSYNC后台线程...");
+
+  // 设置停止标志
+  fsync_running = 0;
+
+  // 等待线程结束
+  pthread_join(fsync_thread, NULL);
+
+  // 关闭所有AOF文件描述符
+#if ENABLE_MULTI_ENGINE
+#if ENABLE_ARRAY
+  if (aof_fd_array != -1) {
+    fsync(aof_fd_array);  // 最后一次同步
+    close(aof_fd_array);
+    aof_fd_array = -1;
+  }
+#endif
+#if ENABLE_HASH
+  if (aof_fd_hash != -1) {
+    fsync(aof_fd_hash);
+    close(aof_fd_hash);
+    aof_fd_hash = -1;
+  }
+#endif
+#if ENABLE_RBTREE
+  if (aof_fd_rbtree != -1) {
+    fsync(aof_fd_rbtree);
+    close(aof_fd_rbtree);
+    aof_fd_rbtree = -1;
+  }
+#endif
+#if ENABLE_SKIPLIST
+  if (aof_fd_skiplist != -1) {
+    fsync(aof_fd_skiplist);
+    close(aof_fd_skiplist);
+    aof_fd_skiplist = -1;
+  }
+#endif
+#else
+  if (aof_fd != -1) {
+    fsync(aof_fd);
+    close(aof_fd);
+    aof_fd = -1;
+  }
+#endif
+
+  kvs_logInfo("AOF FSYNC后台线程已停止");
+}
+
 void before_sleep() {
   // 刷新AOF缓冲区到文件
 #if ENABLE_MULTI_ENGINE
