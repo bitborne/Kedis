@@ -327,8 +327,8 @@ int main(int argc, char** argv) {
     }
 
     // kvs_resp_feed 符号地址 (来自 nm /home/Schatten/C_C++/0x08_KVstore/9.1-kvstore/kvstore | grep kvs_resp_feed)
-    // 00000000000068c0 T kvs_resp_feed
-    size_t func_offset = 0x68c0;
+    // 00000000000068d0 T kvs_resp_feed
+    size_t func_offset = 0x68d0;
     
     mirror_logInfo("尝试附加 uprobe: %s + 0x%lx", kvstore_path, func_offset);
     
