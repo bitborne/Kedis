@@ -68,11 +68,12 @@ class KVServerBase(unittest.TestCase):
         
         # 第二阶段：等待服务完全就绪（可选）
         if wait_ready:
-            # 尝试发送PING命令确认服务可以处理请求
+            # 尝试发送 EXIST 命令确认服务可以处理请求
             for _ in range(50):
                 try:
                     client = self._get_client()
-                    client.ping()
+                    # 使用支持的命令测试服务就绪
+                    client._engine_cmd('H', 'EXIST', b'ready_check')
                     # 额外等待一小段时间确保引擎初始化完成
                     time.sleep(0.2)
                     return
@@ -82,7 +83,7 @@ class KVServerBase(unittest.TestCase):
                     time.sleep(0.05)
             
             self._stop_server()
-            raise RuntimeError(f"Server failed to respond to PING within timeout")
+            raise RuntimeError(f"Server failed to respond to commands within timeout")
 
     def _crash_server(self):
         """强制强杀进程 (SIGKILL)，用于测试持久化恢复能力
