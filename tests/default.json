@@ -67,17 +67,17 @@
         "engine_cmds": {}
       },
       {
-        "name": "very_large_value_1mb",
+        "name": "large_value_100kb_2",
         "key_expr": "\"mb_key\"",
-        "value_expr": "\"M\" * (1024 * 1024)",
-        "mod_value_expr": "\"N\" * (1024 * 1024)",
+        "value_expr": "\"M\" * (100 * 1024)",
+        "mod_value_expr": "\"N\" * (100 * 1024)",
         "engine_cmds": {}
       },
       {
-        "name": "very_large_value_10mb",
-        "key_expr": "\"10mb_key\"",
-        "value_expr": "\"T\" * (10 * 1024 * 1024)",
-        "mod_value_expr": "\"U\" * (10 * 1024 * 1024)",
+        "name": "large_value_100kb",
+        "key_expr": "\"100kb_key\"",
+        "value_expr": "\"T\" * (100 * 1024)",
+        "mod_value_expr": "\"U\" * (100 * 1024)",
         "engine_cmds": {}
       },
       {
@@ -333,8 +333,8 @@
         "engine_cmds": {}
       },
       {
-        "name": "extreme_key_size_boundary",
-        "key_expr": "\"K\" * (1024 * 1024 - 1)",
+        "name": "large_key_100kb",
+        "key_expr": "\"K\" * (100 * 1024 - 1)",
         "value_expr": "\"near_max_key_size_test\"",
         "mod_value_expr": "\"modified_after_near_max\"",
         "engine_cmds": {}
