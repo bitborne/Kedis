@@ -2556,34 +2556,34 @@ int ksf_load_engine_from_buffer(int engine_type,
             pos += val_len;
         }
 
-        /* 根据引擎类型执行SET操作 */
+        /* 根据引擎类型执行SET操作（使用加锁版本，防止与主线程并发访问） */
 #if ENABLE_MULTI_ENGINE
         switch (engine_type) {
         case ENGINE_ARRAY:
 #if ENABLE_ARRAY
-            kvs_array_set(&array_engine, &key, &value);
+            kvs_array_set_safe(&array_engine, &key, &value);
 #endif
             break;
         case ENGINE_RBTREE:
 #if ENABLE_RBTREE
-            kvs_rbtree_set(&rbtree_engine, &key, &value);
+            kvs_rbtree_set_safe(&rbtree_engine, &key, &value);
 #endif
             break;
         case ENGINE_HASH:
 #if ENABLE_HASH
-            kvs_hash_set(&hash_engine, &key, &value);
+            kvs_hash_set_safe(&hash_engine, &key, &value);
 #endif
             break;
         case ENGINE_SKIPLIST:
 #if ENABLE_SKIPLIST
-            kvs_skiplist_set(&skiplist_engine, &key, &value);
+            kvs_skiplist_set_safe(&skiplist_engine, &key, &value);
 #endif
             break;
         default:
             break;
         }
 #else
-        kvs_main_set(&global_main_engine, &key, &value);
+        kvs_main_set_safe(&global_main_engine, &key, &value);
 #endif
 
         /* 释放分配的内存 */

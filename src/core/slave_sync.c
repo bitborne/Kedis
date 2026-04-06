@@ -214,6 +214,10 @@ void slave_sync_cleanup(void) {
 
     /* 清空积压队列 */
     slave_sync_clear_backlog();
+
+    /* 销毁引擎锁（延迟加锁方案） */
+    extern void engine_locks_destroy(void);
+    engine_locks_destroy();
 }
 
 /* 获取 eventfd（供 proactor 注册到 io_uring） */
@@ -263,6 +267,10 @@ int slave_sync_start(const char *master_host, uint16_t master_port) {
     }
     memcpy(args->master_host, master_host, host_len + 1);
     args->master_port = master_port;
+
+    /* 初始化引擎锁（延迟加锁方案） */
+    extern void engine_locks_init(void);
+    engine_locks_init();
 
     /* 设置状态为同步中 */
     g_sync_state = SLAVE_STATE_SYNCING;

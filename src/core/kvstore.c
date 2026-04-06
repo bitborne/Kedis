@@ -29,26 +29,34 @@
 #if ENABLE_MULTI_ENGINE
 #if ENABLE_RBTREE
 kvs_rbtree_t rbtree_engine;
+pthread_rwlock_t rbtree_engine_lock;  // 保护rbtree引擎的读写锁
 #endif
 #if ENABLE_HASH
 kvs_hash_t hash_engine;
+pthread_rwlock_t hash_engine_lock;    // 保护hash引擎的读写锁
 #endif
 #if ENABLE_ARRAY
 kvs_array_t array_engine;
+pthread_rwlock_t array_engine_lock;   // 保护array引擎的读写锁
 #endif
 #if ENABLE_SKIPLIST
 kvs_skiplist_t skiplist_engine;
+pthread_rwlock_t skiplist_engine_lock; // 保护skiplist引擎的读写锁
 #endif
 #else
-// 单引擎模式：根据优先级选择使用的数据结构：红黑树 > 哈希 > 数组
+// 单引擎模式：根据优先级选择使用的数据结构：红黑树 > 哈希 > 跳表 > 数组
 #if ENABLE_RBTREE
 kvs_rbtree_t global_main_engine;
+pthread_rwlock_t main_engine_lock;
 #elif ENABLE_HASH
 kvs_hash_t global_main_engine;
+pthread_rwlock_t main_engine_lock;
 #elif ENABLE_SKIPLIST
 kvs_skiplist_t global_main_engine;
+pthread_rwlock_t main_engine_lock;
 #elif ENABLE_ARRAY
 kvs_array_t global_main_engine;
+pthread_rwlock_t main_engine_lock;
 #else
 #error "至少需要启用一种数据结构"
 #endif
@@ -189,6 +197,335 @@ int is_read_command(const char* command) {
     return 0;
 }
 
+/* ============================================================================
+ * 引擎锁管理 - 延迟加锁方案
+ * 只在RDMA同步期间（SYNCING状态）使用锁，平时无锁运行
+ * ============================================================================ */
+
+/**
+ * @brief 初始化所有引擎的读写锁
+ * 在从节点进入SYNCING状态前调用
+ */
+void engine_locks_init(void) {
+#if ENABLE_MULTI_ENGINE
+#if ENABLE_RBTREE
+    pthread_rwlock_init(&rbtree_engine_lock, NULL);
+#endif
+#if ENABLE_HASH
+    pthread_rwlock_init(&hash_engine_lock, NULL);
+#endif
+#if ENABLE_ARRAY
+    pthread_rwlock_init(&array_engine_lock, NULL);
+#endif
+#if ENABLE_SKIPLIST
+    pthread_rwlock_init(&skiplist_engine_lock, NULL);
+#endif
+#else
+    /* 单引擎模式 */
+    pthread_rwlock_init(&main_engine_lock, NULL);
+#endif
+    kvs_logInfo("[engine_locks_init] 引擎锁初始化完成");
+}
+
+/**
+ * @brief 销毁所有引擎的读写锁
+ * 在从节点回到IDLE状态时调用
+ */
+void engine_locks_destroy(void) {
+#if ENABLE_MULTI_ENGINE
+#if ENABLE_RBTREE
+    pthread_rwlock_destroy(&rbtree_engine_lock);
+#endif
+#if ENABLE_HASH
+    pthread_rwlock_destroy(&hash_engine_lock);
+#endif
+#if ENABLE_ARRAY
+    pthread_rwlock_destroy(&array_engine_lock);
+#endif
+#if ENABLE_SKIPLIST
+    pthread_rwlock_destroy(&skiplist_engine_lock);
+#endif
+#else
+    /* 单引擎模式 */
+    pthread_rwlock_destroy(&main_engine_lock);
+#endif
+    kvs_logInfo("[engine_locks_destroy] 引擎锁已销毁");
+}
+
+/* ============================================================================
+ * 引擎操作的加锁包装函数
+ * RDMA线程和SYNCING期间的主线程使用这些函数
+ * ============================================================================ */
+
+#if ENABLE_MULTI_ENGINE
+
+/* ---------------- Array引擎加锁版本 ---------------- */
+#if ENABLE_ARRAY
+int kvs_array_set_safe(kvs_array_t *inst, robj* key, robj* value) {
+    pthread_rwlock_wrlock(&array_engine_lock);
+    int ret = kvs_array_set(inst, key, value);
+    pthread_rwlock_unlock(&array_engine_lock);
+    return ret;
+}
+char* kvs_array_get_safe(kvs_array_t *inst, robj* key) {
+    pthread_rwlock_rdlock(&array_engine_lock);
+    char *ret = kvs_array_get(inst, key);
+    pthread_rwlock_unlock(&array_engine_lock);
+    return ret;
+}
+int kvs_array_del_safe(kvs_array_t *inst, robj* key) {
+    pthread_rwlock_wrlock(&array_engine_lock);
+    int ret = kvs_array_del(inst, key);
+    pthread_rwlock_unlock(&array_engine_lock);
+    return ret;
+}
+int kvs_array_mod_safe(kvs_array_t *inst, robj* key, robj* value) {
+    pthread_rwlock_wrlock(&array_engine_lock);
+    int ret = kvs_array_mod(inst, key, value);
+    pthread_rwlock_unlock(&array_engine_lock);
+    return ret;
+}
+int kvs_array_exist_safe(kvs_array_t *inst, robj* key) {
+    pthread_rwlock_rdlock(&array_engine_lock);
+    int ret = kvs_array_exist(inst, key);
+    pthread_rwlock_unlock(&array_engine_lock);
+    return ret;
+}
+#endif
+
+/* ---------------- Hash引擎加锁版本 ---------------- */
+#if ENABLE_HASH
+int kvs_hash_set_safe(kvs_hash_t *inst, robj* key, robj* value) {
+    pthread_rwlock_wrlock(&hash_engine_lock);
+    int ret = kvs_hash_set(inst, key, value);
+    pthread_rwlock_unlock(&hash_engine_lock);
+    return ret;
+}
+char* kvs_hash_get_safe(kvs_hash_t *inst, robj* key) {
+    pthread_rwlock_rdlock(&hash_engine_lock);
+    char *ret = kvs_hash_get(inst, key);
+    pthread_rwlock_unlock(&hash_engine_lock);
+    return ret;
+}
+int kvs_hash_del_safe(kvs_hash_t *inst, robj* key) {
+    pthread_rwlock_wrlock(&hash_engine_lock);
+    int ret = kvs_hash_del(inst, key);
+    pthread_rwlock_unlock(&hash_engine_lock);
+    return ret;
+}
+int kvs_hash_mod_safe(kvs_hash_t *inst, robj* key, robj* value) {
+    pthread_rwlock_wrlock(&hash_engine_lock);
+    int ret = kvs_hash_mod(inst, key, value);
+    pthread_rwlock_unlock(&hash_engine_lock);
+    return ret;
+}
+int kvs_hash_exist_safe(kvs_hash_t *inst, robj* key) {
+    pthread_rwlock_rdlock(&hash_engine_lock);
+    int ret = kvs_hash_exist(inst, key);
+    pthread_rwlock_unlock(&hash_engine_lock);
+    return ret;
+}
+#endif
+
+/* ---------------- RBTREE引擎加锁版本 ---------------- */
+#if ENABLE_RBTREE
+int kvs_rbtree_set_safe(kvs_rbtree_t *inst, robj* key, robj* value) {
+    pthread_rwlock_wrlock(&rbtree_engine_lock);
+    int ret = kvs_rbtree_set(inst, key, value);
+    pthread_rwlock_unlock(&rbtree_engine_lock);
+    return ret;
+}
+char* kvs_rbtree_get_safe(kvs_rbtree_t *inst, robj* key) {
+    pthread_rwlock_rdlock(&rbtree_engine_lock);
+    char *ret = kvs_rbtree_get(inst, key);
+    pthread_rwlock_unlock(&rbtree_engine_lock);
+    return ret;
+}
+int kvs_rbtree_del_safe(kvs_rbtree_t *inst, robj* key) {
+    pthread_rwlock_wrlock(&rbtree_engine_lock);
+    int ret = kvs_rbtree_del(inst, key);
+    pthread_rwlock_unlock(&rbtree_engine_lock);
+    return ret;
+}
+int kvs_rbtree_mod_safe(kvs_rbtree_t *inst, robj* key, robj* value) {
+    pthread_rwlock_wrlock(&rbtree_engine_lock);
+    int ret = kvs_rbtree_mod(inst, key, value);
+    pthread_rwlock_unlock(&rbtree_engine_lock);
+    return ret;
+}
+int kvs_rbtree_exist_safe(kvs_rbtree_t *inst, robj* key) {
+    pthread_rwlock_rdlock(&rbtree_engine_lock);
+    int ret = kvs_rbtree_exist(inst, key);
+    pthread_rwlock_unlock(&rbtree_engine_lock);
+    return ret;
+}
+#endif
+
+/* ---------------- SkipList引擎加锁版本 ---------------- */
+#if ENABLE_SKIPLIST
+int kvs_skiplist_set_safe(kvs_skiplist_t *inst, robj* key, robj* value) {
+    pthread_rwlock_wrlock(&skiplist_engine_lock);
+    int ret = kvs_skiplist_set(inst, key, value);
+    pthread_rwlock_unlock(&skiplist_engine_lock);
+    return ret;
+}
+char* kvs_skiplist_get_safe(kvs_skiplist_t *inst, robj* key) {
+    pthread_rwlock_rdlock(&skiplist_engine_lock);
+    char *ret = kvs_skiplist_get(inst, key);
+    pthread_rwlock_unlock(&skiplist_engine_lock);
+    return ret;
+}
+int kvs_skiplist_del_safe(kvs_skiplist_t *inst, robj* key) {
+    pthread_rwlock_wrlock(&skiplist_engine_lock);
+    int ret = kvs_skiplist_del(inst, key);
+    pthread_rwlock_unlock(&skiplist_engine_lock);
+    return ret;
+}
+int kvs_skiplist_mod_safe(kvs_skiplist_t *inst, robj* key, robj* value) {
+    pthread_rwlock_wrlock(&skiplist_engine_lock);
+    int ret = kvs_skiplist_mod(inst, key, value);
+    pthread_rwlock_unlock(&skiplist_engine_lock);
+    return ret;
+}
+int kvs_skiplist_exist_safe(kvs_skiplist_t *inst, robj* key) {
+    pthread_rwlock_rdlock(&skiplist_engine_lock);
+    int ret = kvs_skiplist_exist(inst, key);
+    pthread_rwlock_unlock(&skiplist_engine_lock);
+    return ret;
+}
+#endif
+
+#else /* !ENABLE_MULTI_ENGINE */
+
+/* ---------------- 单引擎模式加锁版本 ---------------- */
+#if ENABLE_RBTREE
+int kvs_main_set_safe(void *inst, robj* key, robj* value) {
+    pthread_rwlock_wrlock(&main_engine_lock);
+    int ret = kvs_rbtree_set((kvs_rbtree_t*)inst, key, value);
+    pthread_rwlock_unlock(&main_engine_lock);
+    return ret;
+}
+char* kvs_main_get_safe(void *inst, robj* key) {
+    pthread_rwlock_rdlock(&main_engine_lock);
+    char *ret = kvs_rbtree_get((kvs_rbtree_t*)inst, key);
+    pthread_rwlock_unlock(&main_engine_lock);
+    return ret;
+}
+int kvs_main_del_safe(void *inst, robj* key) {
+    pthread_rwlock_wrlock(&main_engine_lock);
+    int ret = kvs_rbtree_del((kvs_rbtree_t*)inst, key);
+    pthread_rwlock_unlock(&main_engine_lock);
+    return ret;
+}
+int kvs_main_mod_safe(void *inst, robj* key, robj* value) {
+    pthread_rwlock_wrlock(&main_engine_lock);
+    int ret = kvs_rbtree_mod((kvs_rbtree_t*)inst, key, value);
+    pthread_rwlock_unlock(&main_engine_lock);
+    return ret;
+}
+int kvs_main_exist_safe(void *inst, robj* key) {
+    pthread_rwlock_rdlock(&main_engine_lock);
+    int ret = kvs_rbtree_exist((kvs_rbtree_t*)inst, key);
+    pthread_rwlock_unlock(&main_engine_lock);
+    return ret;
+}
+#elif ENABLE_HASH
+int kvs_main_set_safe(void *inst, robj* key, robj* value) {
+    pthread_rwlock_wrlock(&main_engine_lock);
+    int ret = kvs_hash_set((kvs_hash_t*)inst, key, value);
+    pthread_rwlock_unlock(&main_engine_lock);
+    return ret;
+}
+char* kvs_main_get_safe(void *inst, robj* key) {
+    pthread_rwlock_rdlock(&main_engine_lock);
+    char *ret = kvs_hash_get((kvs_hash_t*)inst, key);
+    pthread_rwlock_unlock(&main_engine_lock);
+    return ret;
+}
+int kvs_main_del_safe(void *inst, robj* key) {
+    pthread_rwlock_wrlock(&main_engine_lock);
+    int ret = kvs_hash_del((kvs_hash_t*)inst, key);
+    pthread_rwlock_unlock(&main_engine_lock);
+    return ret;
+}
+int kvs_main_mod_safe(void *inst, robj* key, robj* value) {
+    pthread_rwlock_wrlock(&main_engine_lock);
+    int ret = kvs_hash_mod((kvs_hash_t*)inst, key, value);
+    pthread_rwlock_unlock(&main_engine_lock);
+    return ret;
+}
+int kvs_main_exist_safe(void *inst, robj* key) {
+    pthread_rwlock_rdlock(&main_engine_lock);
+    int ret = kvs_hash_exist((kvs_hash_t*)inst, key);
+    pthread_rwlock_unlock(&main_engine_lock);
+    return ret;
+}
+#elif ENABLE_SKIPLIST
+int kvs_main_set_safe(void *inst, robj* key, robj* value) {
+    pthread_rwlock_wrlock(&main_engine_lock);
+    int ret = kvs_skiplist_set((kvs_skiplist_t*)inst, key, value);
+    pthread_rwlock_unlock(&main_engine_lock);
+    return ret;
+}
+char* kvs_main_get_safe(void *inst, robj* key) {
+    pthread_rwlock_rdlock(&main_engine_lock);
+    char *ret = kvs_skiplist_get((kvs_skiplist_t*)inst, key);
+    pthread_rwlock_unlock(&main_engine_lock);
+    return ret;
+}
+int kvs_main_del_safe(void *inst, robj* key) {
+    pthread_rwlock_wrlock(&main_engine_lock);
+    int ret = kvs_skiplist_del((kvs_skiplist_t*)inst, key);
+    pthread_rwlock_unlock(&main_engine_lock);
+    return ret;
+}
+int kvs_main_mod_safe(void *inst, robj* key, robj* value) {
+    pthread_rwlock_wrlock(&main_engine_lock);
+    int ret = kvs_skiplist_mod((kvs_skiplist_t*)inst, key, value);
+    pthread_rwlock_unlock(&main_engine_lock);
+    return ret;
+}
+int kvs_main_exist_safe(void *inst, robj* key) {
+    pthread_rwlock_rdlock(&main_engine_lock);
+    int ret = kvs_skiplist_exist((kvs_skiplist_t*)inst, key);
+    pthread_rwlock_unlock(&main_engine_lock);
+    return ret;
+}
+#elif ENABLE_ARRAY
+int kvs_main_set_safe(void *inst, robj* key, robj* value) {
+    pthread_rwlock_wrlock(&main_engine_lock);
+    int ret = kvs_array_set((kvs_array_t*)inst, key, value);
+    pthread_rwlock_unlock(&main_engine_lock);
+    return ret;
+}
+char* kvs_main_get_safe(void *inst, robj* key) {
+    pthread_rwlock_rdlock(&main_engine_lock);
+    char *ret = kvs_array_get((kvs_array_t*)inst, key);
+    pthread_rwlock_unlock(&main_engine_lock);
+    return ret;
+}
+int kvs_main_del_safe(void *inst, robj* key) {
+    pthread_rwlock_wrlock(&main_engine_lock);
+    int ret = kvs_array_del((kvs_array_t*)inst, key);
+    pthread_rwlock_unlock(&main_engine_lock);
+    return ret;
+}
+int kvs_main_mod_safe(void *inst, robj* key, robj* value) {
+    pthread_rwlock_wrlock(&main_engine_lock);
+    int ret = kvs_array_mod((kvs_array_t*)inst, key, value);
+    pthread_rwlock_unlock(&main_engine_lock);
+    return ret;
+}
+int kvs_main_exist_safe(void *inst, robj* key) {
+    pthread_rwlock_rdlock(&main_engine_lock);
+    int ret = kvs_array_exist((kvs_array_t*)inst, key);
+    pthread_rwlock_unlock(&main_engine_lock);
+    return ret;
+}
+#endif
+
+#endif /* ENABLE_MULTI_ENGINE */
+
 // 检查是否需要执行自动快照保存（根据save参数）
 void check_and_perform_autosave() {
     time_t current_time = time(0); 
@@ -287,6 +624,7 @@ int kvs_protocol(struct conn* c) {
     char* cmd_name = c->argv[0].ptr;
     robj* key = &c->argv[1];
     robj* value = &c->argv[2];
+    int use_engine_lock = 0;  /* 在SYNCING状态时设置为1，使用加锁版本的引擎操作 */
 
     /* =========================================================================
      * 【v3.0 双 Channel 架构】从节点存量同步期间的特殊处理
@@ -326,7 +664,7 @@ int kvs_protocol(struct conn* c) {
 
         /* 状态2: SYNCING - 存量同步进行中
          * RDMA 线程正在写入引擎，主线程不能并发写入
-         * 读命令可以安全执行（引擎读取是线程安全的）
+         * 读命令必须加锁执行（防止与RDMA线程并发访问）
          * 写命令必须入队，等待存量完成后再回放 */
         if (sync_state == SLAVE_STATE_SYNCING) {
             /* 写命令：入积压队列，保证最终一致性 */
@@ -351,10 +689,9 @@ int kvs_protocol(struct conn* c) {
                 return 0;  /* 已处理，不继续执行 */
             }
 
-            /* 读命令：穿透执行，不阻塞查询
-             * 注意：可能读到不完整数据（RDMA 同步中的中间状态）
-             * 这是 CAP 权衡：接受短暂的不一致，保证可用性 */
-            kvs_logInfo("[kvs_protocol SYNCING] 读命令 '%s' 穿透执行\n", cmd_name);
+            /* 读命令：需要加锁执行，防止与RDMA线程并发访问引擎 */
+            kvs_logInfo("[kvs_protocol SYNCING] 读命令 '%s' 加锁执行\n", cmd_name);
+            use_engine_lock = 1;  /* 标记需要在引擎操作时使用锁 */
             /* 不 return，继续执行后续命令处理逻辑 */
         } else {
             kvs_logInfo("[kvs_protocol SLAVE] 状态不是 SYNCING，继续正常执行\n");
@@ -400,7 +737,7 @@ int kvs_protocol(struct conn* c) {
             break;
         case KVS_CMD_AGET:
             kvs_logInfo("AGET key(%zu bytes) value(%zu bytes)", key->len, value->len);
-            gotValue = kvs_array_get(&array_engine, key);
+            gotValue = use_engine_lock ? kvs_array_get_safe(&array_engine, key) : kvs_array_get(&array_engine, key);
             // fprintf(stderr, "--> gotValue:\n%s", gotValue);
             if (gotValue == NULL) {
                 add_reply_error(c, "ERROR / Not Exist"); // Redis style: return nil
@@ -438,7 +775,7 @@ int kvs_protocol(struct conn* c) {
             break;
         case KVS_CMD_AEXIST:
             kvs_logInfo("AEXIST key(%zu bytes) value(%zu bytes)", key->len, value->len);
-            ret = kvs_array_exist(&array_engine, key);
+            ret = use_engine_lock ? kvs_array_exist_safe(&array_engine, key) : kvs_array_exist(&array_engine, key);
             if (ret > 0) {
                 add_reply_exist(c, 1);
             } else if (ret == 0) {
@@ -465,7 +802,7 @@ int kvs_protocol(struct conn* c) {
             break;
         case KVS_CMD_HGET:
             kvs_logInfo("HGET key(%zu bytes) value(%zu bytes)", key->len, value->len);
-            gotValue = kvs_hash_get(&hash_engine, key);
+            gotValue = use_engine_lock ? kvs_hash_get_safe(&hash_engine, key) : kvs_hash_get(&hash_engine, key);
             if (gotValue == NULL) {
                 add_reply_error(c, "ERROR / Not Exist");
             } else {
@@ -502,7 +839,7 @@ int kvs_protocol(struct conn* c) {
             break;
         case KVS_CMD_HEXIST:
             kvs_logInfo("HEXIST key(%zu bytes) value(%zu bytes)", key->len, value->len);
-            ret = kvs_hash_exist(&hash_engine, key);
+            ret = use_engine_lock ? kvs_hash_exist_safe(&hash_engine, key) : kvs_hash_exist(&hash_engine, key);
             if (ret > 0) {
                 add_reply_exist(c, 1);
             } else if (ret == 0) {
@@ -529,7 +866,7 @@ int kvs_protocol(struct conn* c) {
             break;
         case KVS_CMD_RGET:
             kvs_logInfo("RGET key(%zu bytes) value(%zu bytes)", key->len, value->len);
-            gotValue = kvs_rbtree_get(&rbtree_engine, key);
+            gotValue = use_engine_lock ? kvs_rbtree_get_safe(&rbtree_engine, key) : kvs_rbtree_get(&rbtree_engine, key);
             if (gotValue == NULL) {
                 add_reply_error(c, "ERROR / Not Exist");
             } else {
@@ -566,7 +903,7 @@ int kvs_protocol(struct conn* c) {
             break;
         case KVS_CMD_REXIST:
             kvs_logInfo("REXIST key(%zu bytes) value(%zu bytes)", key->len, value->len);
-            ret = kvs_rbtree_exist(&rbtree_engine, key);
+            ret = use_engine_lock ? kvs_rbtree_exist_safe(&rbtree_engine, key) : kvs_rbtree_exist(&rbtree_engine, key);
             if (ret > 0) {
                 add_reply_exist(c, 1);
             } else if (ret == 0) {
@@ -591,7 +928,7 @@ int kvs_protocol(struct conn* c) {
             break;
         case KVS_CMD_SGET:
             kvs_logInfo("SGET key(%zu bytes) value(%zu bytes)", key->len, value->len);
-            gotValue = kvs_skiplist_get(&skiplist_engine, key);
+            gotValue = use_engine_lock ? kvs_skiplist_get_safe(&skiplist_engine, key) : kvs_skiplist_get(&skiplist_engine, key);
             if (gotValue == NULL) {
                 add_reply_error(c, "ERROR / Not Exist");
             } else {
@@ -628,7 +965,7 @@ int kvs_protocol(struct conn* c) {
             break;
         case KVS_CMD_SEXIST:
             kvs_logInfo("SEXIST key(%zu bytes) value(%zu bytes)", key->len, value->len);
-            ret = kvs_skiplist_exist(&skiplist_engine, key);
+            ret = use_engine_lock ? kvs_skiplist_exist_safe(&skiplist_engine, key) : kvs_skiplist_exist(&skiplist_engine, key);
             if (ret > 0) {
                 add_reply_exist(c, 1);
             } else if (ret == 0) {
@@ -652,7 +989,7 @@ int kvs_protocol(struct conn* c) {
             break;
         case KVS_CMD_GET:
             kvs_logInfo("GET key(%zu bytes) value(%zu bytes)", key->len, value->len);
-            gotValue = kvs_main_get(&global_main_engine, key);
+            gotValue = use_engine_lock ? kvs_main_get_safe(&global_main_engine, key) : kvs_main_get(&global_main_engine, key);
             if (gotValue == NULL) {
                 add_reply_error(c, "ERROR / Not Exist");
             } else {
@@ -685,7 +1022,7 @@ int kvs_protocol(struct conn* c) {
             break;
         case KVS_CMD_EXIST:
             kvs_logInfo("EXIST key(%zu bytes) value(%zu bytes)", key->len, value->len);
-            ret = kvs_main_exist(&global_main_engine, key);
+            ret = use_engine_lock ? kvs_main_exist_safe(&global_main_engine, key) : kvs_main_exist(&global_main_engine, key);
             if (ret > 0) {
                 add_reply_exist(c, 1);
             } else if (ret == 0) {

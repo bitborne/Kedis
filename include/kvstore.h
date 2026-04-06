@@ -121,4 +121,51 @@ void* kvs_calloc(size_t num, size_t size);
 void *kvs_malloc(size_t size);
 void kvs_free(void *ptr);
 
+/* ============================================================================
+ * 引擎锁管理 - 延迟加锁方案
+ * 只在RDMA同步期间（SYNCING状态）使用锁，平时无锁
+ * ============================================================================ */
+
+/* 锁生命周期管理 */
+void engine_locks_init(void);
+void engine_locks_destroy(void);
+
+/* 多引擎模式加锁版本函数声明 */
+#if ENABLE_MULTI_ENGINE
+#if ENABLE_ARRAY
+int kvs_array_set_safe(kvs_array_t *inst, robj* key, robj* value);
+char* kvs_array_get_safe(kvs_array_t *inst, robj* key);
+int kvs_array_del_safe(kvs_array_t *inst, robj* key);
+int kvs_array_mod_safe(kvs_array_t *inst, robj* key, robj* value);
+int kvs_array_exist_safe(kvs_array_t *inst, robj* key);
+#endif
+#if ENABLE_HASH
+int kvs_hash_set_safe(kvs_hash_t *inst, robj* key, robj* value);
+char* kvs_hash_get_safe(kvs_hash_t *inst, robj* key);
+int kvs_hash_del_safe(kvs_hash_t *inst, robj* key);
+int kvs_hash_mod_safe(kvs_hash_t *inst, robj* key, robj* value);
+int kvs_hash_exist_safe(kvs_hash_t *inst, robj* key);
+#endif
+#if ENABLE_RBTREE
+int kvs_rbtree_set_safe(kvs_rbtree_t *inst, robj* key, robj* value);
+char* kvs_rbtree_get_safe(kvs_rbtree_t *inst, robj* key);
+int kvs_rbtree_del_safe(kvs_rbtree_t *inst, robj* key);
+int kvs_rbtree_mod_safe(kvs_rbtree_t *inst, robj* key, robj* value);
+int kvs_rbtree_exist_safe(kvs_rbtree_t *inst, robj* key);
+#endif
+#if ENABLE_SKIPLIST
+int kvs_skiplist_set_safe(kvs_skiplist_t *inst, robj* key, robj* value);
+char* kvs_skiplist_get_safe(kvs_skiplist_t *inst, robj* key);
+int kvs_skiplist_del_safe(kvs_skiplist_t *inst, robj* key);
+int kvs_skiplist_mod_safe(kvs_skiplist_t *inst, robj* key, robj* value);
+int kvs_skiplist_exist_safe(kvs_skiplist_t *inst, robj* key);
+#endif
+#else /* 单引擎模式 */
+int kvs_main_set_safe(void *inst, robj* key, robj* value);
+char* kvs_main_get_safe(void *inst, robj* key);
+int kvs_main_del_safe(void *inst, robj* key);
+int kvs_main_mod_safe(void *inst, robj* key, robj* value);
+int kvs_main_exist_safe(void *inst, robj* key);
+#endif
+
 #endif
