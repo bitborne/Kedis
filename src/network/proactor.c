@@ -42,6 +42,14 @@ static int g_event_fd = -1;           // eventfd（用于 RDMA 完成通知）
 static struct conn *g_event_conn = NULL;  // eventfd 对应的 conn 结构
 static uint64_t g_event_buf;          // eventfd 读取缓冲区
 
+/* accept 上下文 - 用于保存 addr 和 len，以便在 accept 完成后释放 */
+#define ACCEPT_CTX_MAGIC 0xACCE0000
+struct accept_ctx {
+  int magic;  // 魔数标记，用于识别 accept_ctx
+  struct sockaddr_in* addr;
+  socklen_t* len;
+};
+
 /* 从节点同步管理 */
 extern int slave_sync_get_eventfd(void);
 extern void slave_sync_drain_backlog(msg_handler handler);
@@ -109,15 +117,16 @@ static struct io_uring_sqe* sqe_prep(struct io_uring* ring, struct conn* c) {
 /* ---------------- 提交异步 accept ---------------- */
 static void post_accept(struct io_uring* ring, int listenfd) {
   // 为 accept 额外 malloc 地址信息，避免踩栈
-  struct sockaddr_in* addr = kvs_malloc(sizeof(*addr));
-  socklen_t* len = kvs_malloc(sizeof(*len));
-  *len = sizeof(*addr);
+  struct accept_ctx* ctx = kvs_malloc(sizeof(*ctx));
+  ctx->magic = ACCEPT_CTX_MAGIC;  // 设置魔数标记
+  ctx->addr = kvs_malloc(sizeof(*ctx->addr));
+  ctx->len = kvs_malloc(sizeof(*ctx->len));
+  *ctx->len = sizeof(*ctx->addr);
 
   struct io_uring_sqe* sqe = io_uring_get_sqe(ring);
-  io_uring_prep_accept(sqe, listenfd, (struct sockaddr*)addr, len, 0);
-  /* 魔法值：accept 事件的 user_data 固定为 -1，主循环据此识别 */
-  struct conn* dummy = (struct conn*)-1;
-  io_uring_sqe_set_data(sqe, dummy);
+  io_uring_prep_accept(sqe, listenfd, (struct sockaddr*)ctx->addr, ctx->len, 0);
+  /* 使用 accept_ctx 作为 user_data，accept 完成后释放 */
+  io_uring_sqe_set_data(sqe, ctx);
 }
 
 // /* ---------------- 提交异步 close ---------------- */
@@ -294,8 +303,16 @@ int proactor_start(unsigned short port, msg_handler handler) {
     io_uring_cqe_seen(&g_ring, cqe);
 
     /* -------- accept 事件 -------- */
-    if (c == (struct conn*)-1) {
-      if (res >= 0) {  // 新连接成功
+    /* 通过魔数标记识别 accept_ctx */
+    if (c != NULL && c != g_event_conn) {
+      struct accept_ctx* accept_ctx = (struct accept_ctx*)c;
+      if (accept_ctx->magic == ACCEPT_CTX_MAGIC) {
+        // 这是 accept 上下文，释放相关内存
+        kvs_free(accept_ctx->addr);
+        kvs_free(accept_ctx->len);
+        kvs_free(accept_ctx);
+        // 然后处理新连接
+        if (res >= 0) {  // 新连接成功
         struct conn* nc = conn_pool_alloc(&g_conn_pool);
         if (!nc) {
           close(res);
@@ -320,7 +337,8 @@ int proactor_start(unsigned short port, msg_handler handler) {
         post_accept(&g_ring, listenfd);
       }
       continue;
-    }
+      }  // 关闭 if (accept_ctx->magic == ACCEPT_CTX_MAGIC)
+    }  // 关闭 if (c != NULL && c != g_event_conn)
 
     /* =========================================================================
      * eventfd 事件处理（RDMA 同步完成通知）
