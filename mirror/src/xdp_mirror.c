@@ -123,43 +123,51 @@ static void send_to_slave(int fd, const __u8* data, __u32 len,
                    total, len, fd, src_port, dst_port);
 }
 
-// [修改] 刷新缓冲区：降级模式，不完整也尝试发送
+// [新增] 重置缓冲区（不发送数据）
+static void reset_buffer(struct reassembly_buffer* buf) {
+    if (!buf) return;
+    buf->active = false;
+    buf->total_len = 0;
+    buf->received_len = 0;
+}
+
+// [修复] 刷新缓冲区：只发送完整数据，不完整则直接丢弃
 static void flush_buffer(struct reassembly_buffer* buf) {
-    if (!buf || !buf->active) return;
+    if (!buf || !buf->active || buf->received_len == 0) return;
 
     char src_str[16], dst_str[16];
     inet_ntop(AF_INET, &buf->src_ip, src_str, sizeof(src_str));
     inet_ntop(AF_INET, &buf->dst_ip, dst_str, sizeof(dst_str));
 
-    // [修改] 降级模式：不完整也尝试发送已收到的数据
+    // [关键修复] 数据不完整时直接丢弃，不发送到从节点
     if (buf->received_len != buf->total_len) {
-        mirror_logWarn("[INCOMPLETE] 流 %s:%d -> %s:%d 不完整: 期望 %u, 收到 %u, 尝试发送部分数据",
+        mirror_logWarn("[DROP INCOMPLETE] 流 %s:%d -> %s:%d 数据不完整: 期望 %u, 收到 %u, 直接丢弃",
                       src_str, buf->src_port, dst_str, buf->dst_port,
                       buf->total_len, buf->received_len);
-        total_dropped += (buf->total_len - buf->received_len);  // 只统计未收到的部分
-    } else {
-        mirror_logInfo("[COMPLETE] %s:%d -> %s:%d, 总长度 %u 字节",
-                      src_str, buf->src_port, dst_str, buf->dst_port, buf->total_len);
+        // 统计丢弃的字节数
+        total_dropped += buf->received_len;
+        // 丢弃不完整数据，重置缓冲区
+        reset_buffer(buf);
+        return;
     }
-    
+
+    // 数据完整，发送到从节点
+    mirror_logInfo("[COMPLETE] %s:%d -> %s:%d, 总长度 %u 字节",
+                  src_str, buf->src_port, dst_str, buf->dst_port, buf->total_len);
+
     total_complete += buf->received_len;
 
-    // 发送数据（即使不完整也发送）
-    if (buf->slave_fd >= 0 && buf->received_len > 0) {
+    // 发送完整数据
+    if (buf->slave_fd >= 0) {
         send_to_slave(buf->slave_fd, buf->data, buf->received_len,
                      buf->src_port, buf->dst_port);
-    } else if (buf->slave_fd < 0) {
+    } else {
         mirror_logError("[ERROR] 流 %s:%d -> %s:%d 没有有效的从节点连接",
                        src_str, buf->src_port, dst_str, buf->dst_port);
     }
 
-    // [修复] 保持长连接，不关闭 slave_fd
-    // 连接将在流超时清理时关闭
-
-    // 重置缓冲区状态（但保留连接）
-    buf->active = false;
-    buf->total_len = 0;
-    buf->received_len = 0;
+    // 重置缓冲区状态（保留连接）
+    reset_buffer(buf);
 }
 
 // 查找或创建流缓冲区

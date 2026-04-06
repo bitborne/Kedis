@@ -192,11 +192,21 @@ static int connect_slave_for_flow(struct reassembly_buffer* buf) {
     return -1;
   }
 
-  mirror_logDebug("为流 %u -> %u 建立连接成功 (fd=%d)", 
+  mirror_logDebug("为流 %u -> %u 建立连接成功 (fd=%d)",
                   buf->src_port, buf->dst_port, fd);
   return fd;
 }
 
+// [新增] 清理重置缓冲区（不发送数据）
+static void reset_buffer(struct reassembly_buffer* buf) {
+  if (!buf) return;
+  buf->active = 0;
+  buf->total_len = 0;
+  buf->received_len = 0;
+  buf->incomplete_warned = false;
+}
+
+// [修复] 刷新缓冲区：只发送完整数据，不完整则直接丢弃
 static void flush_buffer(struct reassembly_buffer *buf) {
   if (!buf || !buf->active || buf->received_len == 0) return;
 
@@ -204,23 +214,23 @@ static void flush_buffer(struct reassembly_buffer *buf) {
   inet_ntop(AF_INET, &buf->src_ip, src_str, sizeof(src_str));
   inet_ntop(AF_INET, &buf->dst_ip, dst_str, sizeof(dst_str));
 
-  // [修改] 完整性检查：不完整也尝试发送，但记录警告
+  // [关键修复] 数据不完整时直接丢弃，不发送到从节点
   if (buf->received_len != buf->total_len) {
-    if (!buf->incomplete_warned) {
-      mirror_logWarn("[INCOMPLETE] 流 %s:%d -> %s:%d: 期望 %u, 收到 %u, 尝试发送部分数据",
-                     src_str, buf->src_port, dst_str, buf->dst_port,
-                     buf->total_len, buf->received_len);
-      buf->incomplete_warned = true;
-    }
-    // 继续执行，尝试发送已收到的数据
-  } else {
-    mirror_logInfo("[Complete] %s:%d -> %s:%d, total: %u bytes", 
-                   src_str, buf->src_port, dst_str, buf->dst_port, buf->received_len);
+    mirror_logWarn("[DROP INCOMPLETE] 流 %s:%d -> %s:%d 数据不完整: 期望 %u, 收到 %u, 直接丢弃",
+                   src_str, buf->src_port, dst_str, buf->dst_port,
+                   buf->total_len, buf->received_len);
+    // 丢弃不完整数据，重置缓冲区
+    reset_buffer(buf);
+    return;
   }
-  
+
+  // 数据完整，发送到从节点
+  mirror_logInfo("[COMPLETE] %s:%d -> %s:%d, total: %u bytes",
+                 src_str, buf->src_port, dst_str, buf->dst_port, buf->received_len);
+
   total_complete += buf->received_len;
 
-  // [修改] 使用流专属的 slave_fd
+  // 使用流专属的 slave_fd 发送完整数据
   if (buf->slave_fd >= 0) {
     send_to_slave(buf, buf->data, buf->received_len);
   } else {
@@ -228,13 +238,8 @@ static void flush_buffer(struct reassembly_buffer *buf) {
                    src_str, buf->src_port, dst_str, buf->dst_port);
   }
 
-  // [修复] 保持长连接，不关闭 slave_fd
-  // 连接将在流超时清理或程序退出时关闭
-
-  // 重置缓冲区状态（但保留连接和流在哈希表中）
-  buf->active = 0;
-  buf->total_len = 0;
-  buf->received_len = 0;
+  // 重置缓冲区状态（保留连接）
+  reset_buffer(buf);
 }
 
 static int handle_event(void* ctx, void* data, size_t data_sz) {
