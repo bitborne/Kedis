@@ -981,7 +981,7 @@ static int aofLoadToEngine(const char* filename, int engine_type) {
     robj key = {0};
     key.len = (key_len > 0) ? (key_len) : 0;
     if (key_len > 0) {
-      key.ptr = (char*)kvs_malloc(key_len);
+      key.ptr = (char*)kvs_malloc(key_len + 1);
       if (!key.ptr) {
         kvs_logError("无法分配内存来存储键");
         kvs_free(buffer);
@@ -1000,7 +1000,7 @@ static int aofLoadToEngine(const char* filename, int engine_type) {
         kvs_free(buffer);
         return -1;
       }
-      value.ptr = (char*)kvs_malloc(val_len);
+      value.ptr = (char*)kvs_malloc(val_len + 1);
       if (!value.ptr) {
         kvs_logError("无法分配内存来存储值");
         if (key.ptr) kvs_free(key.ptr);
