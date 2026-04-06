@@ -282,7 +282,7 @@ void* kmem_alloc(size_t size) {
         if (!hdr) return NULL;
         
         hdr->size_class = 0xFFFF; // 标记为大块
-        hdr->flags = 0;
+        hdr->flags = size;        // 存储实际大小供释放时使用
         hdr->magic = KMEM_MAGIC_ALLOCATED;
         
         pthread_mutex_lock(&g_kmem_pool.large_lock);
