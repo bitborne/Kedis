@@ -550,12 +550,7 @@ void appendToAofBuffer(int type, const robj* key, const robj* value) {
   char* aof_buf = aofBuffer.buf;
 
   int klen = key ? key->len + 1 : 0;
-  int vlen =
-      (value int vlen = (value->ptr && type != AOF_CMD_DEL) ? value->len : 0;
-       int vlen = (value->ptr && type != AOF_CMD_DEL) ? value->len : 0;
-       type != AOF_CMD_DEL)
-          ? value->len + 1
-          : 0;
+  int vlen = (value && value->ptr && type != AOF_CMD_DEL) ? value->len + 1 : 0;
 
   uint8_t vlq[16];
   int key_len_bytes = encode_vlq(klen, vlq);

@@ -614,7 +614,7 @@ static int ksfLoadToEngine(const char* filename, int engine_type) {
   while (pos < file_size) {
     // 解码键长度（VLQ格式）
     if (pos >= file_size) break;
-    uint64_t key_len;
+    uint64_t key_len; // key_len 是带 \0 的
     int key_len_bytes = decode_vlq((const uint8_t*)(buffer + pos), &key_len);
     pos += key_len_bytes;
 
@@ -626,7 +626,7 @@ static int ksfLoadToEngine(const char* filename, int engine_type) {
 
     // 读取键内容
     if (pos + key_len > file_size) break;
-    robj key = {0};
+    robj key = {0}; // key.len 不带 \0
     key.len = (key_len > 0) ? (key_len - 1) : 0;
     if (key_len > 0) {
       key.ptr = (char*)kvs_malloc(key_len);
@@ -636,7 +636,7 @@ static int ksfLoadToEngine(const char* filename, int engine_type) {
         return -1;
       }
       memcpy(key.ptr, buffer + pos, key_len);
-      key.ptr[key_len] = '\0';
+      key.ptr[key_len - 1] = '\0';
       pos += key_len;
     }
 
@@ -657,7 +657,7 @@ static int ksfLoadToEngine(const char* filename, int engine_type) {
         return -1;
       }
       memcpy(value.ptr, buffer + pos, val_len);
-      value.ptr[val_len] = '\0';
+      value.ptr[val_len - 1] = '\0';
       pos += val_len;
     }
 
