@@ -378,11 +378,16 @@ void kvs_rbtree_destroy(kvs_rbtree_t* inst) {
 
 char* kvs_rbtree_get(kvs_rbtree_t* inst, robj* key) {
   if (inst == NULL || key == NULL || key->ptr == NULL) return NULL;
-  
+
   rbtree_node* node = rbtree_search(inst, key->ptr);
 
-  if (node == inst->nil) {
+  if (node == inst->nil || node == NULL) {
     return NULL; // 键不存在，安全返回NULL
+  }
+
+  // 【安全修复】检查node->value是否为NULL
+  if (node->value == NULL) {
+    return NULL;
   }
 
   return node->value;
