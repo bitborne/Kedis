@@ -130,7 +130,7 @@ class KVServerBase(unittest.TestCase):
 
     def _get_client(self):
         """获取配置了 hiredis 的 Redis 客户端"""
-        return KVRedis(host=self.host, port=self.port, decode_responses=False, lib_name=None, lib_version=None)
+        return KVRedis(host=self.host, port=self.port, decode_responses=False, driver_info=None)
 
     @staticmethod
     def load_test_pairs():

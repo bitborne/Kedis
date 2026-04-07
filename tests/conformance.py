@@ -152,7 +152,7 @@ class ConformanceTest:
         
         cmd = pair.get_cmd_for_engine(engine, phase)
         # 使用 redis-py 客户端
-        client = redis.Redis(host=self.host, port=port, decode_responses=False, lib_version=None, lib_name=None)
+        client = redis.Redis(host=self.host, port=port, decode_responses=False, driver_info=None)
         
         try:
             if phase == 'set' or phase == 'mod':
