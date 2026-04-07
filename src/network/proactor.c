@@ -63,6 +63,15 @@ void proactor_stop(void) {
 }
 // extern __thread int current_processing_fd;
 
+/* ---------------- accept 上下文管理 ---------------- */
+static void accept_ctx_free(struct accept_ctx* ctx) {
+  if (ctx) {
+    kvs_free(ctx->addr);
+    kvs_free(ctx->len);
+    kvs_free(ctx);
+  }
+}
+
 /* ---------------- 连接池管理 ---------------- */
 static void conn_pool_init(struct conn_pool* pool, int max_conns) {
   pool->conns = kvs_malloc(max_conns * sizeof(struct conn));
@@ -118,12 +127,26 @@ static struct io_uring_sqe* sqe_prep(struct io_uring* ring, struct conn* c) {
 static void post_accept(struct io_uring* ring, int listenfd) {
   // 为 accept 额外 malloc 地址信息，避免踩栈
   struct accept_ctx* ctx = kvs_malloc(sizeof(*ctx));
+  if (!ctx) {
+    kvs_logError("Failed to alloc accept_ctx");
+    return;
+  }
   ctx->magic = ACCEPT_CTX_MAGIC;  // 设置魔数标记
   ctx->addr = kvs_malloc(sizeof(*ctx->addr));
   ctx->len = kvs_malloc(sizeof(*ctx->len));
+  if (!ctx->addr || !ctx->len) {
+    kvs_logError("Failed to alloc accept_ctx members");
+    accept_ctx_free(ctx);
+    return;
+  }
   *ctx->len = sizeof(*ctx->addr);
 
   struct io_uring_sqe* sqe = io_uring_get_sqe(ring);
+  if (!sqe) {
+    kvs_logError("Failed to get sqe for accept");
+    accept_ctx_free(ctx);
+    return;
+  }
   io_uring_prep_accept(sqe, listenfd, (struct sockaddr*)ctx->addr, ctx->len, 0);
   /* 使用 accept_ctx 作为 user_data，accept 完成后释放 */
   io_uring_sqe_set_data(sqe, ctx);
@@ -307,36 +330,37 @@ int proactor_start(unsigned short port, msg_handler handler) {
     if (c != NULL && c != g_event_conn) {
       struct accept_ctx* accept_ctx = (struct accept_ctx*)c;
       if (accept_ctx->magic == ACCEPT_CTX_MAGIC) {
-        // 这是 accept 上下文，释放相关内存
-        kvs_free(accept_ctx->addr);
-        kvs_free(accept_ctx->len);
-        kvs_free(accept_ctx);
+        // 【安全修复】先保存 accept 结果，然后立即释放 accept_ctx
+        // 避免在后续处理中发生 Use-After-Free
+        int new_fd = res;
+        accept_ctx_free(accept_ctx);  // 安全释放 accept_ctx
+
         // 然后处理新连接
-        if (res >= 0) {  // 新连接成功
-        struct conn* nc = conn_pool_alloc(&g_conn_pool);
-        if (!nc) {
-          close(res);
-          kvs_logError("Max conns reached, rejecting connection");
-        } else {
-          nc->fd = res;
-          nc->state = ST_RECV;
-          nc->wbuf = kvs_malloc(RESP_BUF_SIZE);
-          if (!nc->wbuf) {
-            conn_pool_free(&g_conn_pool, nc);
-            close(res);
-            kvs_logError("Failed to alloc write buffer");
+        if (new_fd >= 0) {  // 新连接成功
+          struct conn* nc = conn_pool_alloc(&g_conn_pool);
+          if (!nc) {
+            close(new_fd);
+            kvs_logError("Max conns reached, rejecting connection");
           } else {
-            // conn_reset(nc); -> kvs_resp_reset
-            kvs_resp_reset(nc);
-            post_recv_frame(&g_ring, nc);  // 投递第一个 recv
+            nc->fd = new_fd;
+            nc->state = ST_RECV;
+            nc->wbuf = kvs_malloc(RESP_BUF_SIZE);
+            if (!nc->wbuf) {
+              conn_pool_free(&g_conn_pool, nc);
+              close(new_fd);
+              kvs_logError("Failed to alloc write buffer");
+            } else {
+              // conn_reset(nc); -> kvs_resp_reset
+              kvs_resp_reset(nc);
+              post_recv_frame(&g_ring, nc);  // 投递第一个 recv
+            }
           }
+          post_accept(&g_ring, listenfd);  // 继续监听
+        } else {
+          if (new_fd != -EAGAIN && new_fd != -EINTR) perror("accept");
+          post_accept(&g_ring, listenfd);
         }
-        post_accept(&g_ring, listenfd);  // 继续监听
-      } else {
-        if (res != -EAGAIN && res != -EINTR) perror("accept");
-        post_accept(&g_ring, listenfd);
-      }
-      continue;
+        continue;
       }  // 关闭 if (accept_ctx->magic == ACCEPT_CTX_MAGIC)
     }  // 关闭 if (c != NULL && c != g_event_conn)
 
