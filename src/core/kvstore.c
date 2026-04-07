@@ -1098,6 +1098,9 @@ int kvs_protocol(struct conn* c) {
                 }
 
                 /* 4. fork子进程 */
+                /* 【安全修复】在fork前设置所有fd的CLOEXEC标志，防止子进程继承不必要的fd */
+                set_cloexec_on_all_fds();
+
                 pid_t pid = fork();
                 if (pid < 0) {
                     kvs_logError("[RDMASYNC] fork失败: %s\n", strerror(errno));
@@ -1237,16 +1240,22 @@ void dest_kvengine(void) {
 }
 
 // 信号处理函数
+// 【安全修复】使用异步信号安全的 write() 替代 printf()
 void signal_handler(int sig) {
-    static volatile int g_signal_received = 0;
-    
+    static volatile sig_atomic_t g_signal_received = 0;
+
     // 防止重复进入
     if (g_signal_received) {
         return;
     }
     g_signal_received = 1;
-    
-    printf("\n接收到信号 %d，准备关闭服务...\n", sig);
+
+    // 使用 write() 输出信号信息（异步信号安全）
+    char msg[64];
+    int len = snprintf(msg, sizeof(msg), "\n接收到信号 %d，准备关闭服务...\n", sig);
+    if (len > 0 && len < (int)sizeof(msg)) {
+        write(STDOUT_FILENO, msg, (size_t)len);
+    }
     
     // 【重要】设置全局退出标志，通知网络层优雅退出
     // proactor 使用 io_uring_wait_cqe_timeout，100ms 内会检查此标志
