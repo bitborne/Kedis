@@ -60,6 +60,7 @@ static uint32_t murmurhash3_32(const char *key, int len) {
 
 static int _hash(const robj* key, int size) {
 	if (!key || !key->ptr) return -1;
+	if (size <= 0) return -1;  // 【安全修复】防止除零错误
 	return murmurhash3_32(key->ptr, key->len) % size;
 }
 
