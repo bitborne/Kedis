@@ -46,13 +46,23 @@ static inline char* find_crlf(const char* s, size_t len) {
     return NULL;
 }
 
-// 快速 atoi 实现，比 strtol 快 5-10 倍
-static inline int fast_atoi(const char* s, size_t len) {
-    int n = 0;
+// 安全快速 atoi 实现，带溢出检查
+// 返回 >=0 表示成功，<0 表示错误或溢出
+static inline int64_t fast_atoi_safe(const char* s, size_t len) {
+    int64_t n = 0;
     for (size_t i = 0; i < len; i++) {
         char c = s[i];
-        if (c < '0' || c > '9') break;
-        n = n * 10 + (c - '0');
+        if (c < '0' || c > '9') {
+            // 如果第一个字符就是非数字，返回错误
+            if (i == 0) return -1;
+            break;
+        }
+        int digit = c - '0';
+        // 溢出检查：如果 n > (INT64_MAX - digit) / 10，则 n*10+digit 会溢出
+        if (n > (INT64_MAX - digit) / 10) {
+            return -1;  // 溢出
+        }
+        n = n * 10 + digit;
     }
     return n;
 }
@@ -84,7 +94,14 @@ int kvs_resp_feed(struct conn* c) {
         // 提取 argc（参数个数）
         char* ptr = c->rbuf + c->parse_done + 1;  // 跳过 '*'
         size_t num_len = end - ptr;  // 数字字符串长度
-        c->argc = fast_atoi(ptr, num_len);
+
+        // 使用安全的 atoi 解析，检查溢出和无效输入
+        int64_t parsed_argc = fast_atoi_safe(ptr, num_len);
+        if (parsed_argc < 0 || parsed_argc > MAX_ARGC) {
+          kvs_logError("Argc convert error: invalid or out of range");
+          goto error;  // 解析错误：数字格式错误或超出范围
+        }
+        c->argc = (int)parsed_argc;
 
         // 检查解析是否成功（数字长度应该大于0）
         if (num_len == 0 || c->argc <= 0) {
@@ -127,8 +144,15 @@ int kvs_resp_feed(struct conn* c) {
         // 提取 bulk_len（bulk data 长度）
         char* ptr = c->rbuf + c->parse_done + 1;  // 跳过 '$'
         size_t num_len = end - ptr;  // 数字字符串长度
-        c->bulk_len = (size_t)fast_atoi(ptr, num_len);
-        
+
+        // 使用安全的 atoi 解析，检查溢出和负数
+        int64_t parsed_len = fast_atoi_safe(ptr, num_len);
+        if (parsed_len < 0) {
+          kvs_logError("Bulk len convert error: negative or overflow");
+          goto error;
+        }
+        c->bulk_len = (size_t)parsed_len;
+
         // 检查解析是否成功
         if (num_len == 0) {
           kvs_logError("Bulk len convert error");
@@ -334,13 +358,14 @@ int kvs_resp_feed(struct conn* c) {
     goto continue_recv;  // 需要更多数据
   }
 
-  continue_recv:
+  continue_recv: {
     size_t remaining = c->rlen - c->parse_done;
     memmove(c->rbuf, c->rbuf + c->parse_done, remaining);
     c->rlen = remaining;
     c->parse_done = 0;
     // fprintf(stderr, "留下了谁? %d bytes: %*s\n", remaining , remaining, c->rbuf);
     return RESP_CONTINUE_RECV;
+  }
 
   error:
     c->rlen = c->parse_done = 0;
