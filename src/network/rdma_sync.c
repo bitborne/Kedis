@@ -589,34 +589,56 @@ void rdma_sync_server_stop(void) {
  *
  * @param keep_fd 需要保留的fd（TCP连接）
  */
-static void child_close_all_fds_except(int keep_fd) {
+/**
+ * @brief 设置所有已打开fd的FD_CLOEXEC标志
+ * 【安全修复】在fork前调用，防止子进程继承不必要的fd
+ */
+void set_cloexec_on_all_fds(void) {
     DIR *dir = opendir("/proc/self/fd");
-    if (!dir) {
-        /* 如果无法打开/proc/self/fd，使用备用方案：关闭常见范围的fd */
-        for (int fd = 3; fd < 256; fd++) {
-            if (fd != keep_fd) {
-                close(fd);
-            }
-        }
-        return;
-    }
+    if (!dir) return;
 
     struct dirent *entry;
-    int dir_fd = dirfd(dir); /* 获取目录自身的fd，避免关闭 */
+    int dir_fd = dirfd(dir);
 
     while ((entry = readdir(dir)) != NULL) {
-        /* 跳过.和.. */
         if (entry->d_name[0] == '.') continue;
 
         int fd = atoi(entry->d_name);
-
-        /* 保留标准IO、keep_fd和目录fd */
-        if (fd > 2 && fd != keep_fd && fd != dir_fd) {
-            close(fd);
+        /* 对标准IO和目录fd也设置CLOEXEC */
+        if (fd >= 0 && fd != dir_fd) {
+            int flags = fcntl(fd, F_GETFD);
+            if (flags >= 0) {
+                fcntl(fd, F_SETFD, flags | FD_CLOEXEC);
+            }
         }
     }
 
     closedir(dir);
+}
+
+/**
+ * @brief 子进程关闭所有fd（除keep_fd外）
+ * 【安全修复】使用sysconf获取最大fd，避免TOCTOU竞争
+ * 注意：此函数应在fork后立即调用，且父进程不应再创建新fd
+ */
+static void child_close_all_fds_except(int keep_fd) {
+    /* 获取当前进程最大fd限制 */
+    long max_fd = sysconf(_SC_OPEN_MAX);
+    if (max_fd < 0) {
+        max_fd = 65536; /* 默认值 */
+    }
+    /* 限制上限，避免关闭过多 */
+    if (max_fd > 65536) {
+        max_fd = 65536;
+    }
+
+    /* 关闭3到max_fd的所有fd（保留stdin/stdout/stderr） */
+    for (int fd = 3; fd < (int)max_fd; fd++) {
+        if (fd != keep_fd) {
+            /* 忽略错误（fd可能未打开） */
+            (void)close(fd);
+        }
+    }
 }
 
 /**

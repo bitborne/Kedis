@@ -246,6 +246,12 @@ struct cmd_buffer {
 int rdma_sync_child_server(int tcp_fd, rdma_engine_type_t engine_type);
 
 /*
+ * @brief 在fork前设置所有已打开fd的FD_CLOEXEC标志
+ * 【安全修复】防止子进程继承父进程的不必要fd，避免TOCTOU竞争
+ */
+void set_cloexec_on_all_fds(void);
+
+/*
  * 【废弃-方案A/B遗留】初始化 RDMA 同步服务器
  * 原因: 方案C使用TCP触发fork，无需常驻监听
  * 状态: 保留声明避免编译错误，但实现为空函数直接返回0
