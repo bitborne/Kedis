@@ -367,14 +367,29 @@ static int aofLoadToEngine_mmap(const char* filename, int engine_type) {
     // 步骤 6.4：检查边界条件
     // 计算 key 和 value 占用的总字节数
     // 如果 pos + key_len + val_len 超过文件大小，说明文件格式错误
-    if (pos + key_len + val_len + 2 > ctx.file_size) {
-      // 打印错误信息
-      kvs_logError("AOF 文件格式错误（超出文件边界）");
-
-      // 关闭 mmap 映射，释放资源
+    // 【安全修复】使用安全加法检查防止整数溢出
+    if (key_len > ctx.file_size || val_len > ctx.file_size) {
+      kvs_logError("AOF 文件格式错误：key_len 或 val_len 超过文件大小");
       mmap_close_file(&ctx);
-
-      // 返回失败
+      return -1;
+    }
+    // 检查 pos + key_len 是否溢出
+    if (pos > ctx.file_size - key_len) {
+      kvs_logError("AOF 文件格式错误：pos + key_len 溢出或超出边界");
+      mmap_close_file(&ctx);
+      return -1;
+    }
+    size_t pos_after_key = pos + key_len;
+    // 检查 pos_after_key + val_len 是否溢出
+    if (val_len > ctx.file_size - pos_after_key) {
+      kvs_logError("AOF 文件格式错误：pos + key_len + val_len 溢出或超出边界");
+      mmap_close_file(&ctx);
+      return -1;
+    }
+    // 最终边界检查（+2 用于 \0 终止符）
+    if (pos_after_key + val_len + 2 > ctx.file_size) {
+      kvs_logError("AOF 文件格式错误（超出文件边界）");
+      mmap_close_file(&ctx);
       return -1;
     }
 
