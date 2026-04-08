@@ -1,6 +1,6 @@
 CC = gcc
-CFLAGS = -I./NtyCo/core/ -O2 -Wall
-LDFLAGS = -L./NtyCo/ -lntyco -lpthread -luring -ldl -ljemalloc -lrdmacm -libverbs
+CFLAGS = -O2 -Wall
+LDFLAGS = -lpthread -luring -ldl -ljemalloc -lrdmacm -libverbs
 
 # 主项目源文件
 SRCS = src/core/kvstore.c \
@@ -8,7 +8,6 @@ SRCS = src/core/kvstore.c \
        src/core/config.c \
        src/core/sync_command.c \
        src/core/slave_sync.c \
-       src/network/ntyco.c \
        src/network/proactor.c \
        src/network/rdma_sync.c \
        src/engines/kvs_array.c \
@@ -19,8 +18,8 @@ SRCS = src/core/kvstore.c \
        src/persistence/ksf_stream.c \
        src/persistence/aof.c \
        src/utils/kmem.c \
-	   src/utils/kmem_compat.c \
-	   src/utils/kvs_log.c
+       src/utils/kmem_compat.c \
+       src/utils/kvs_log.c
 
 OBJS = $(SRCS:.c=.o)
 
@@ -35,14 +34,10 @@ KMEM_TEST = tests/test_kmem
 
 TARGET = kvstore
 # TESTCASE = tests/testcase
-SUBDIR = ./NtyCo/
 
-.PHONY: all clean $(SUBDIR)
+.PHONY: all clean
 
-all: $(SUBDIR) $(TARGET) $(TESTCASE)
-
-$(SUBDIR):
-	$(MAKE) -C $@
+all: $(TARGET) $(TESTCASE)
 
 # 静态模式规则：.o 挨着 .c
 $(OBJS): %.o: %.c
@@ -73,4 +68,3 @@ clean:
 	rm -f $(OBJS) $(TEST_OBJS) $(TARGET) $(TESTCASE)
 	rm -f $(KMEM_TEST_OBJ) $(KMEM_TEST)
 	rm -f src/utils/kmem.o
-	$(MAKE) -C $(SUBDIR) clean 2>/dev/null || true
