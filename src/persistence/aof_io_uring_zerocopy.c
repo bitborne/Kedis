@@ -10,9 +10,10 @@
  */
 
 #define _GNU_SOURCE
-#include "../../include/kvs_aof_io_uring.h"
-#include "../../include/kvstore.h"
-#include "../../include/kvs_log.h"
+#include "kvs_aof_io_uring.h"
+#include "kvstore.h"
+#include "kvs_log.h"
+#include "kmem.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -22,6 +23,7 @@
 #include <unistd.h>
 #include <sys/uio.h>
 #include <sys/stat.h>
+#include <stdint.h>
 
 /* ============================================================================
  * 内部宏定义
@@ -48,7 +50,7 @@ static pthread_mutex_t g_stats_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /**
  * 分配页对齐内存
- * 使用posix_memalign确保内存页对齐，适合O_DIRECT和注册缓冲区
+ * 使用kmem_aligned_alloc确保内存页对齐，适合O_DIRECT和注册缓冲区
  */
 void *aof_page_aligned_alloc(size_t size) {
     if (size == 0) {
@@ -57,12 +59,11 @@ void *aof_page_aligned_alloc(size_t size) {
 
     /* 对齐到页大小 */
     size_t aligned_size = aof_align_to_page(size);
-    void *ptr = NULL;
 
-    /* 使用posix_memalign分配页对齐内存 */
-    int ret = posix_memalign(&ptr, AOF_PAGE_SIZE, aligned_size);
-    if (ret != 0) {
-        kvs_logError("posix_memalign failed: %s", strerror(ret));
+    /* 使用kmem_aligned_alloc分配页对齐内存 */
+    void *ptr = kmem_aligned_alloc(aligned_size, AOF_PAGE_SIZE);
+    if (ptr == NULL) {
+        kvs_logError("kmem_aligned_alloc failed for size=%zu", aligned_size);
         return NULL;
     }
 
@@ -88,15 +89,15 @@ void aof_page_aligned_free(void *ptr) {
         return;
     }
 
-    /* posix_memalign分配的内存需要用free释放 */
-    free(ptr);
+    kvs_logDebug("Page aligned free: ptr=%p", ptr);
+
+    /* 使用kmem_aligned_free释放页对齐内存 */
+    kmem_aligned_free(ptr);
 
     /* 更新统计 */
     pthread_mutex_lock(&g_stats_lock);
     g_zerocopy_stats.page_frees++;
     pthread_mutex_unlock(&g_stats_lock);
-
-    kvs_logDebug("Page aligned free: ptr=%p", ptr);
 }
 
 /**
@@ -252,8 +253,9 @@ void aof_mempool_free(aof_mempool_t *pool, void *ptr) {
     }
 
     /* 验证指针是否在内存池范围内 */
-    if (ptr < pool->base_addr || 
-        ptr >= (char *)pool->base_addr + pool->block_size * pool->num_blocks) {
+    char *base = (char *)pool->base_addr;
+    char *p = (char *)ptr;
+    if (p < base || p >= base + pool->block_size * pool->num_blocks) {
         kvs_logError("Invalid pointer for mempool free: %p", ptr);
         return;
     }
@@ -308,28 +310,28 @@ int aof_register_buffers(struct io_uring *ring, aof_registered_buffers_t *reg,
     reg->registered = false;
 
     /* 分配iovec数组 */
-    reg->iovecs = (struct iovec *)kvs_malloc(sizeof(struct iovec) * buf_count);
+    reg->iovecs = (struct iovec *)kmem_alloc(sizeof(struct iovec) * buf_count);
     if (reg->iovecs == NULL) {
         kvs_logError("Failed to allocate iovecs array");
         return -1;
     }
 
     /* 分配缓冲区指针数组 */
-    reg->buffers = (void **)kvs_malloc(sizeof(void *) * buf_count);
+    reg->buffers = (void **)kmem_alloc(sizeof(void *) * buf_count);
     if (reg->buffers == NULL) {
         kvs_logError("Failed to allocate buffers array");
-        kvs_free(reg->iovecs);
+        kmem_free(reg->iovecs);
         reg->iovecs = NULL;
         return -1;
     }
 
     /* 计算位图大小（向上取整到64位边界） */
     size_t bitmap_words = (buf_count + BITMAP_BITS_PER_WORD - 1) / BITMAP_BITS_PER_WORD;
-    reg->bitmap = (uint64_t *)kvs_malloc(sizeof(uint64_t) * bitmap_words);
+    reg->bitmap = (uint64_t *)kmem_alloc(sizeof(uint64_t) * bitmap_words);
     if (reg->bitmap == NULL) {
         kvs_logError("Failed to allocate bitmap");
-        kvs_free(reg->buffers);
-        kvs_free(reg->iovecs);
+        kmem_free(reg->buffers);
+        kmem_free(reg->iovecs);
         reg->buffers = NULL;
         reg->iovecs = NULL;
         return -1;
@@ -345,9 +347,9 @@ int aof_register_buffers(struct io_uring *ring, aof_registered_buffers_t *reg,
             for (int j = 0; j < i; j++) {
                 aof_page_aligned_free(reg->buffers[j]);
             }
-            kvs_free(reg->bitmap);
-            kvs_free(reg->buffers);
-            kvs_free(reg->iovecs);
+            kmem_free(reg->bitmap);
+            kmem_free(reg->buffers);
+            kmem_free(reg->iovecs);
             reg->bitmap = NULL;
             reg->buffers = NULL;
             reg->iovecs = NULL;
@@ -368,9 +370,9 @@ int aof_register_buffers(struct io_uring *ring, aof_registered_buffers_t *reg,
         for (int i = 0; i < buf_count; i++) {
             aof_page_aligned_free(reg->buffers[i]);
         }
-        kvs_free(reg->bitmap);
-        kvs_free(reg->buffers);
-        kvs_free(reg->iovecs);
+        kmem_free(reg->bitmap);
+        kmem_free(reg->buffers);
+        kmem_free(reg->iovecs);
         reg->bitmap = NULL;
         reg->buffers = NULL;
         reg->iovecs = NULL;
@@ -385,9 +387,9 @@ int aof_register_buffers(struct io_uring *ring, aof_registered_buffers_t *reg,
         for (int i = 0; i < buf_count; i++) {
             aof_page_aligned_free(reg->buffers[i]);
         }
-        kvs_free(reg->bitmap);
-        kvs_free(reg->buffers);
-        kvs_free(reg->iovecs);
+        kmem_free(reg->bitmap);
+        kmem_free(reg->buffers);
+        kmem_free(reg->iovecs);
         reg->bitmap = NULL;
         reg->buffers = NULL;
         reg->iovecs = NULL;
@@ -421,19 +423,19 @@ void aof_unregister_buffers(aof_registered_buffers_t *reg) {
                 reg->buffers[i] = NULL;
             }
         }
-        kvs_free(reg->buffers);
+        kmem_free(reg->buffers);
         reg->buffers = NULL;
     }
 
     /* 释放iovec数组 */
     if (reg->iovecs != NULL) {
-        kvs_free(reg->iovecs);
+        kmem_free(reg->iovecs);
         reg->iovecs = NULL;
     }
 
     /* 释放位图 */
     if (reg->bitmap != NULL) {
-        kvs_free(reg->bitmap);
+        kmem_free(reg->bitmap);
         reg->bitmap = NULL;
     }
 
@@ -858,7 +860,7 @@ int aof_submit_large_write_fixed(struct io_uring *ring, int fd,
     io_uring_prep_write_fixed(sqe, fd, buf, len, 0, buf_idx);
     
     /* 保存上下文以便完成时释放缓冲区 */
-    aof_large_write_t *ctx = (aof_large_write_t *)kvs_malloc(sizeof(aof_large_write_t));
+    aof_large_write_t *ctx = (aof_large_write_t *)kmem_alloc(sizeof(aof_large_write_t));
     if (ctx == NULL) {
         kvs_logError("Failed to allocate write context");
         aof_release_reg_buffer(reg, buf_idx);
@@ -899,6 +901,6 @@ void aof_large_write_complete(aof_registered_buffers_t *reg, aof_large_write_t *
     }
 
     /* 释放上下文 */
-    kvs_free(ctx);
+    kmem_free(ctx);
 }
 
