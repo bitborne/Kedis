@@ -1,0 +1,343 @@
+{
+    "engines": ["A", "R", "S", "H"],
+    "commands": ["SET", "GET", "MOD", "DEL", "EXIST"],
+    "count": 48,
+    "tests": [
+      {
+        "name": "small_string",
+        "key_expr": "\"k1\"",
+        "value_expr": "\"v1\"",
+        "mod_value_expr": "\"v1_mod\"",
+        "engine_cmds": {}
+      },
+      {
+        "name": "large_string",
+        "key_expr": "\"large_key\"",
+        "value_expr": "\"x\" * 10000",
+        "mod_value_expr": "\"y\" * 10000",
+        "engine_cmds": {}
+      },
+      {
+        "name": "unicode",
+        "key_expr": "\"中文key\"",
+        "value_expr": "\"中文value 🎉\"",
+        "mod_value_expr": "\"修改后的中文 🎉\"",
+        "engine_cmds": {}
+      },
+      {
+        "name": "number_value",
+        "key_expr": "\"num_key\"",
+        "value_expr": "\"12345\"",
+        "mod_value_expr": "\"99999\"",
+        "engine_cmds": {}
+      },
+      {
+        "name": "special_chars",
+        "key_expr": "\"spec:key\"",
+        "value_expr": "\"val\\r\\nwith\\nlines\"",
+        "mod_value_expr": "\"new\\r\\nval\"",
+        "engine_cmds": {}
+      },
+      {
+        "name": "huge_key",
+        "key_expr": "\"k\" * 1000",
+        "value_expr": "\"huge_key_test\"",
+        "mod_value_expr": "\"huge_key_mod\"",
+        "engine_cmds": {}
+      },
+      {
+        "name": "single_char_key",
+        "key_expr": "\"a\"",
+        "value_expr": "\"single_char_value\"",
+        "mod_value_expr": "\"modified\"",
+        "engine_cmds": {}
+      },
+      {
+        "name": "single_char_value",
+        "key_expr": "\"single_char_key\"",
+        "value_expr": "\"x\"",
+        "mod_value_expr": "\"y\"",
+        "engine_cmds": {}
+      },
+      {
+        "name": "empty_string_value",
+        "key_expr": "\"empty_val_key\"",
+        "value_expr": "\"\"",
+        "mod_value_expr": "\"now_has_content\"",
+        "engine_cmds": {}
+      },
+      {
+        "name": "large_value_100kb_2",
+        "key_expr": "\"mb_key\"",
+        "value_expr": "\"M\" * (100 * 1024)",
+        "mod_value_expr": "\"N\" * (100 * 1024)",
+        "engine_cmds": {}
+      },
+      {
+        "name": "large_value_10mb",
+        "key_expr": "\"10mb_key\"",
+        "value_expr": "\"T\" * (10 * 1024 * 1024)",
+        "mod_value_expr": "\"U\" * (10 * 1024 * 1024)",
+        "engine_cmds": {}
+      },
+      {
+        "name": "key_with_spaces",
+        "key_expr": "\"key with spaces\"",
+        "value_expr": "\"value_with_spaces\"",
+        "mod_value_expr": "\"modified with spaces\"",
+        "engine_cmds": {}
+      },
+      {
+        "name": "value_with_leading_trailing_spaces",
+        "key_expr": "\"space_test\"",
+        "value_expr": "\"  leading_and_trailing  \"",
+        "mod_value_expr": "\"  modified  \"",
+        "engine_cmds": {}
+      },
+      {
+        "name": "key_with_tabs",
+        "key_expr": "\"key\\twith\\ttabs\"",
+        "value_expr": "\"value\\twith\\ttabs\"",
+        "mod_value_expr": "\"mod\\twith\\ttabs\"",
+        "engine_cmds": {}
+      },
+      {
+        "name": "resp_protocol_chars",
+        "key_expr": "\"resp$key\"",
+        "value_expr": "\"$12\\r\\nhello world\\r\\n\"",
+        "mod_value_expr": "\"*2\\r\\n$3\\r\\nGET\\r\\n\"",
+        "engine_cmds": {}
+      },
+      {
+        "name": "binary_like_data",
+        "key_expr": "\"binary_key\"",
+        "value_expr": "\"\".join([chr(i) if i != 0 else chr(1) for i in range(256)])",
+        "mod_value_expr": "\"\".join([chr((i + 128) % 256) if (i + 128) % 256 != 0 else chr(1) for i in range(256)])",
+        "engine_cmds": {}
+      },
+      {
+        "name": "unicode_various_scripts",
+        "key_expr": "\"日本語キー\"",
+        "value_expr": "\"العربية Русский 日本語 한국어\"",
+        "mod_value_expr": "\"Modified العر 日本\"",
+        "engine_cmds": {}
+      },
+      {
+        "name": "emoji_only",
+        "key_expr": "\"🎉🎊🎁\"",
+        "value_expr": "\"😀😃😄😁😆\"",
+        "mod_value_expr": "\"🥳🎉✨\"",
+        "engine_cmds": {}
+      },
+      {
+        "name": "key_with_colons",
+        "key_expr": "\"user:1001:profile\"",
+        "value_expr": "\"{\\\"name\\\":\\\"john\\\",\\\"age\\\":30}\"",
+        "mod_value_expr": "\"{\\\"name\\\":\\\"jane\\\",\\\"age\\\":31}\"",
+        "engine_cmds": {}
+      },
+      {
+        "name": "json_like_value",
+        "key_expr": "\"json_key\"",
+        "value_expr": "'{\"key\":\"value\",\"num\":123}'",
+        "mod_value_expr": "'{\"key\":\"modified\",\"num\":999}'",
+        "engine_cmds": {}
+      },
+      {
+        "name": "xml_like_value",
+        "key_expr": "\"xml_key\"",
+        "value_expr": "\"<root><item>value</item></root>\"",
+        "mod_value_expr": "\"<root><item>modified</item></root>\"",
+        "engine_cmds": {}
+      },
+      {
+        "name": "repeated_pattern",
+        "key_expr": "\"pattern_key\"",
+        "value_expr": "\"ABC\" * 1000",
+        "mod_value_expr": "\"XYZ\" * 1000",
+        "engine_cmds": {}
+      },
+      {
+        "name": "palindrome_value",
+        "key_expr": "\"palindrome_key\"",
+        "value_expr": "\"abcba\" * 100",
+        "mod_value_expr": "\"xyz\" * 100",
+        "engine_cmds": {}
+      },
+      {
+        "name": "numeric_string_edge_cases",
+        "key_expr": "\"num_edge\"",
+        "value_expr": "\"0\"",
+        "mod_value_expr": "\"-1\"",
+        "engine_cmds": {}
+      },
+      {
+        "name": "float_string",
+        "key_expr": "\"float_key\"",
+        "value_expr": "\"3.14159265358979323846\"",
+        "mod_value_expr": "\"2.71828182845904523536\"",
+        "engine_cmds": {}
+      },
+      {
+        "name": "scientific_notation",
+        "key_expr": "\"sci_key\"",
+        "value_expr": "\"1.23e-10\"",
+        "mod_value_expr": "\"9.99e+10\"",
+        "engine_cmds": {}
+      },
+      {
+        "name": "max_int_string",
+        "key_expr": "\"max_int\"",
+        "value_expr": "\"9223372036854775807\"",
+        "mod_value_expr": "\"-9223372036854775808\"",
+        "engine_cmds": {}
+      },
+      {
+        "name": "url_like_value",
+        "key_expr": "\"url_key\"",
+        "value_expr": "\"https://example.com/path?query=value&foo=bar\"",
+        "mod_value_expr": "\"https://modified.com/new?query=mod\"",
+        "engine_cmds": {}
+      },
+      {
+        "name": "base64_like",
+        "key_expr": "\"b64_key\"",
+        "value_expr": "\"SGVsbG8gV29ybGQhISE=\"",
+        "mod_value_expr": "\"TW9kaWZpZWQgVmFsdWU=\"",
+        "engine_cmds": {}
+      },
+      {
+        "name": "hex_string",
+        "key_expr": "\"hex_key\"",
+        "value_expr": "\"48656c6c6f20576f726c64\"",
+        "mod_value_expr": "\"4d6f646966696564\"",
+        "engine_cmds": {}
+      },
+      {
+        "name": "uuid_like_key",
+        "key_expr": "\"550e8400-e29b-41d4-a716-446655440000\"",
+        "value_expr": "\"uuid_value_12345\"",
+        "mod_value_expr": "\"uuid_modified_99999\"",
+        "engine_cmds": {}
+      },
+      {
+        "name": "timestamp_key",
+        "key_expr": "\"ts_1704067200\"",
+        "value_expr": "\"event_data_at_timestamp\"",
+        "mod_value_expr": "\"modified_event_data\"",
+        "engine_cmds": {}
+      },
+      {
+        "name": "nested_delimiter",
+        "key_expr": "\"a::b::c::d\"",
+        "value_expr": "\"val||sep||test\"",
+        "mod_value_expr": "\"mod||sep||done\"",
+        "engine_cmds": {}
+      },
+      {
+        "name": "sql_like_injection_attempt",
+        "key_expr": "\"sql_test\"",
+        "value_expr": "\"'; DROP TABLE users; --\"",
+        "mod_value_expr": "\"'; SELECT * FROM admin; --\"",
+        "engine_cmds": {}
+      },
+      {
+        "name": "path_traversal_like",
+        "key_expr": "\"path_key\"",
+        "value_expr": "\"../../../etc/passwd\"",
+        "mod_value_expr": "\"/safe/path/only\"",
+        "engine_cmds": {}
+      },
+      {
+        "name": "html_entities",
+        "key_expr": "\"html_key\"",
+        "value_expr": "\"&lt;div&gt;Hello&lt;/div&gt;\"",
+        "mod_value_expr": "\"&lt;span&gt;Modified&lt;/span&gt;\"",
+        "engine_cmds": {}
+      },
+      {
+        "name": "markdown_like",
+        "key_expr": "\"md_key\"",
+        "value_expr": "\"# Header\\n\\n- item1\\n- item2\\n\\n**bold**\"",
+        "mod_value_expr": "\"## New Header\\n\\n1. first\\n2. second\"",
+        "engine_cmds": {}
+      },
+      {
+        "name": "csv_like",
+        "key_expr": "\"csv_key\"",
+        "value_expr": "\"name,age,city\\nJohn,30,NYC\\nJane,25,LA\"",
+        "mod_value_expr": "\"name,age,city\\nBob,40,Chicago\"",
+        "engine_cmds": {}
+      },
+      {
+        "name": "multiline_value",
+        "key_expr": "\"multi_key\"",
+        "value_expr": "\"Line1\\nLine2\\nLine3\\n\\nLine5\"",
+        "mod_value_expr": "\"NewLine1\\r\\nNewLine2\\r\\n\\r\\nNewLine4\"",
+        "engine_cmds": {}
+      },
+      {
+        "name": "whitespace_variations",
+        "key_expr": "\"ws_key\"",
+        "value_expr": "\" \\t\\n\\r\\n \\t \"",
+        "mod_value_expr": "\"\\n\\n\\t\\t  \"",
+        "engine_cmds": {}
+      },
+      {
+        "name": "all_ascii_printable",
+        "key_expr": "\"ascii_key\"",
+        "value_expr": "\"\".join([chr(i) for i in range(32, 127)])",
+        "mod_value_expr": "\"\".join([chr(i) for i in range(126, 31, -1)])",
+        "engine_cmds": {}
+      },
+      {
+        "name": "repeated_single_char",
+        "key_expr": "\"repeat_key\"",
+        "value_expr": "\"A\" * 100000",
+        "mod_value_expr": "\"B\" * 100000",
+        "engine_cmds": {}
+      },
+      {
+        "name": "alternating_pattern",
+        "key_expr": "\"alt_key\"",
+        "value_expr": "\"(\" + \"AB\" * 5000 + \")\"",
+        "mod_value_expr": "\"[\" + \"XY\" * 5000 + \"]\"",
+        "engine_cmds": {}
+      },
+      {
+        "name": "zero_width_chars",
+        "key_expr": "\"zw_key\\u200B\\u200C\"",
+        "value_expr": "\"value\\u200Dwith\\uFEFFzwc\"",
+        "mod_value_expr": "\"mod\\u200Bvalue\\u200C\"",
+        "engine_cmds": {}
+      },
+      {
+        "name": "bidi_override_chars",
+        "key_expr": "\"bidi_key\"",
+        "value_expr": "\"\\u202Ereverse\\u202Cnormal\"",
+        "mod_value_expr": "\"\\u202Emodified\\u202Cend\"",
+        "engine_cmds": {}
+      },
+      {
+        "name": "combining_chars",
+        "key_expr": "\"combo_key\"",
+        "value_expr": "\"e\\u0301\\u0302\\u0303\"",
+        "mod_value_expr": "\"a\\u0301\\u0302\\u0303\"",
+        "engine_cmds": {}
+      },
+      {
+        "name": "private_use_area",
+        "key_expr": "\"pua_key\\uE000\\uF8FF\"",
+        "value_expr": "\"\\uE001\\uF8FE\\uE002private\"",
+        "mod_value_expr": "\"\\uF8FD\\uE003modified\"",
+        "engine_cmds": {}
+      },
+      {
+        "name": "large_key_100kb",
+        "key_expr": "\"K\" * (100 * 1024 - 1)",
+        "value_expr": "\"near_max_key_size_test\"",
+        "mod_value_expr": "\"modified_after_near_max\"",
+        "engine_cmds": {}
+      }
+    ]
+  }
