@@ -69,8 +69,7 @@ class MemoryTest1000K:
             host=self.host, 
             port=self.port, 
             decode_responses=False,
-            lib_name=None,      # 禁用 lib 名称发送
-            lib_version=None,   # 禁用 lib 版本发送
+            driver_info=None,
             socket_connect_timeout=10,
             socket_timeout=30,
             health_check_interval=0  # 禁用健康检查以提高性能
