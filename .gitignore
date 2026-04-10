@@ -55,3 +55,8 @@ mirror/src/kprobe_mirror
 mirror/src/uprobe_mirror
 tests/repl_sset_benchmark_results/charts
 performance/*_benchmark_results
+rdma/
+rdma_sendfile/rdma_client
+rdma_sendfile/sf_client
+rdma_sendfile/rdma_server
+rdma_sendfile/sf_server
