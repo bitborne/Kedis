@@ -19,6 +19,7 @@
 #define CQ_CAPACITY (256)
 #define MAX_SGE (1)
 #define MAX_WR (64)
+#define RECV_CREDITS 20  // 预发布20个接收请求形成缓冲
 
 typedef struct {
     struct ibv_pd *pd;
@@ -96,10 +97,6 @@ static int receive_file(connection_t *conn) {
     printf("File size: %lu bytes (%.2f MB)\n",
            conn->file_size, conn->file_size / (1024.0 * 1024.0));
 
-    // 先准备好接收第一块数据
-    size_t first_chunk = conn->file_size < BUFFER_SIZE ? conn->file_size : BUFFER_SIZE;
-    post_recv(conn, first_chunk);
-
     // 发送就绪确认
     strcpy(conn->send_buf, "READY");
     post_send(conn, 5);
@@ -110,9 +107,20 @@ static int receive_file(connection_t *conn) {
     printf("Receiving file...\n");
     conn->start_time = get_time_us();
 
+    // 预发布多个接收请求形成"信用"队列
+    // 这允许服务端连续发送最多RECV_CREDITS个数据块而不阻塞
+    int credits = RECV_CREDITS;
+    for (int i = 0; i < credits && conn->received + (i * BUFFER_SIZE) < conn->file_size; i++) {
+        size_t chunk_size = (conn->file_size - conn->received - (i * BUFFER_SIZE)) < BUFFER_SIZE ?
+                            (conn->file_size - conn->received - (i * BUFFER_SIZE)) : BUFFER_SIZE;
+        if (chunk_size > 0) {
+            post_recv(conn, chunk_size);
+        }
+    }
+
     // 接收文件数据
     while (conn->received < conn->file_size) {
-        // 已经在循环外发布了第一个接收请求
+        // 已经在循环外发布了接收请求
         do {
             ne = ibv_poll_cq(conn->cq, 1, &wc);
         } while (ne == 0);
@@ -131,11 +139,13 @@ static int receive_file(connection_t *conn) {
 
         conn->received += data_len;
 
-        // 如果不是最后一块，继续发布接收请求
+        // 如果不是最后一块，立即补一个接收请求保持"信用"
         if (conn->received < conn->file_size) {
             size_t next_chunk = (conn->file_size - conn->received) < BUFFER_SIZE ?
                                 (conn->file_size - conn->received) : BUFFER_SIZE;
-            post_recv(conn, next_chunk);
+            if (next_chunk > 0) {
+                post_recv(conn, next_chunk);
+            }
         }
     }
 
