@@ -53,6 +53,7 @@ $(OBJS): %.o: %.c
 # 主程序（根目录）
 $(TARGET): $(OBJS)
 	$(CC) -o $@ $^ $(LDFLAGS)
+	@mkdir -p data
 
 # 测试程序（独立，不链接主项目）
 # $(TESTCASE): $(TEST_OBJS)
