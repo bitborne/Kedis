@@ -27,17 +27,27 @@ class TestInreRepl(KVServerBase):
     mirror_ifname = "lo"     # 默认网卡
 
     def tearDown(self):
-        """清理所有进程"""
+        """清理所有进程并彻底卸载 eBPF 程序"""
         # 停止 BPF mirror 工具 (使用 sudo kill)
         if self.mirror_proc:
-            subprocess.run(["sudo", "kill", str(self.mirror_proc.pid)], 
+            # 先尝试优雅退出 (SIGTERM)，让程序执行清理逻辑
+            subprocess.run(["sudo", "kill", "-TERM", str(self.mirror_proc.pid)],
                           stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
             try:
-                self.mirror_proc.wait(timeout=2)
+                self.mirror_proc.wait(timeout=3)
             except:
-                pass
+                # 强制退出
+                subprocess.run(["sudo", "kill", "-KILL", str(self.mirror_proc.pid)],
+                              stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+                try:
+                    self.mirror_proc.wait(timeout=2)
+                except:
+                    pass
             self.mirror_proc = None
-        
+
+            # 显式卸载可能残留的 eBPF 程序
+            self._cleanup_bpf_programs()
+
         # 停止 Slave 服务
         if self.slave_proc:
             try:
@@ -50,9 +60,35 @@ class TestInreRepl(KVServerBase):
                     except:
                         pass
             self.slave_proc = None
-            
+
         # 停止 Master 服务 (基类逻辑)
         self._stop_server()
+
+    def _cleanup_bpf_programs(self):
+        """显式清理可能残留的 eBPF 程序"""
+        if self.mirror_type == "mirror":
+            # TC 类型的 eBPF 程序: 使用 tc 命令删除 ingress filter
+            subprocess.run(
+                ["sudo", "tc", "filter", "del", "dev", self.mirror_ifname, "ingress"],
+                stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL
+            )
+            # 同时清理 clsact qdisc（如果存在）
+            subprocess.run(
+                ["sudo", "tc", "qdisc", "del", "dev", self.mirror_ifname, "clsact"],
+                stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL
+            )
+
+        elif self.mirror_type == "xdp":
+            # XDP 类型的 eBPF 程序: 使用 ip 命令关闭 xdp
+            subprocess.run(
+                ["sudo", "ip", "link", "set", "dev", self.mirror_ifname, "xdp", "off"],
+                stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL
+            )
+
+        elif self.mirror_type == "uprobe":
+            # uprobe 类型的 eBPF 程序: 当进程退出后自动卸载
+            # 如果残留，可以使用 bpftool 清理，但通常不需要
+            pass
 
     def _wait_for_port(self, port: int, timeout: int = 50):
         """辅助函数：等待指定端口就绪"""
