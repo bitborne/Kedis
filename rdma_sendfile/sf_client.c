@@ -101,9 +101,19 @@ int main(int argc, char *argv[]) {
             break;
         }
 
-        ssize_t written = write(out_fd, buffer, n);
-        if (written != n) {
-            perror("write failed");
+        // 循环写入确保全部数据写入文件
+        ssize_t total_written = 0;
+        while (total_written < n) {
+            ssize_t written = write(out_fd, buffer + total_written, n - total_written);
+            if (written < 0) {
+                if (errno == EINTR) continue;
+                perror("write failed");
+                break;
+            }
+            total_written += written;
+        }
+        if (total_written != n) {
+            fprintf(stderr, "write incomplete: %zd of %zd bytes\n", total_written, n);
             break;
         }
         received += n;
