@@ -96,6 +96,10 @@ static int receive_file(connection_t *conn) {
     printf("File size: %lu bytes (%.2f MB)\n",
            conn->file_size, conn->file_size / (1024.0 * 1024.0));
 
+    // 先准备好接收第一块数据
+    size_t first_chunk = conn->file_size < BUFFER_SIZE ? conn->file_size : BUFFER_SIZE;
+    post_recv(conn, first_chunk);
+
     // 发送就绪确认
     strcpy(conn->send_buf, "READY");
     post_send(conn, 5);
@@ -108,10 +112,7 @@ static int receive_file(connection_t *conn) {
 
     // 接收文件数据
     while (conn->received < conn->file_size) {
-        size_t to_recv = (conn->file_size - conn->received) < BUFFER_SIZE ?
-                         (conn->file_size - conn->received) : BUFFER_SIZE;
-
-        post_recv(conn, to_recv);
+        // 已经在循环外发布了第一个接收请求
         do {
             ne = ibv_poll_cq(conn->cq, 1, &wc);
         } while (ne == 0);
@@ -129,6 +130,13 @@ static int receive_file(connection_t *conn) {
         }
 
         conn->received += data_len;
+
+        // 如果不是最后一块，继续发布接收请求
+        if (conn->received < conn->file_size) {
+            size_t next_chunk = (conn->file_size - conn->received) < BUFFER_SIZE ?
+                                (conn->file_size - conn->received) : BUFFER_SIZE;
+            post_recv(conn, next_chunk);
+        }
     }
 
     double end_time = get_time_us();

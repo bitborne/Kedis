@@ -74,7 +74,13 @@ static int post_recv(connection_t *conn) {
 }
 
 static int send_file(connection_t *conn) {
-    // 先发送文件大小
+    struct ibv_wc wc;
+    int ne;
+
+    // 先准备好接收"READY"
+    post_recv(conn);
+
+    // 发送文件大小给客户端
     memcpy(conn->send_buf, &conn->file_size, sizeof(conn->file_size));
     if (post_send(conn, sizeof(conn->file_size)) < 0) {
         perror("post_send file_size failed");
@@ -82,16 +88,13 @@ static int send_file(connection_t *conn) {
     }
 
     // 等待发送完成
-    struct ibv_wc wc;
-    int ne;
     do {
         ne = ibv_poll_cq(conn->cq, 1, &wc);
     } while (ne == 0);
 
     printf("File size sent: %ld bytes\n", conn->file_size);
 
-    // 等待客户端准备好
-    post_recv(conn);
+    // 等待客户端准备好（"READY"消息）
     do {
         ne = ibv_poll_cq(conn->cq, 1, &wc);
     } while (ne == 0);
