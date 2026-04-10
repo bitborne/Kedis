@@ -1232,11 +1232,14 @@ void dest_kvengine(void) {
     kvs_main_destroy(&global_main_engine);
 #endif
 
+    // 清理同步模块（关闭 RDMA 连接、释放资源）
+    // 【必须在 kmem_destroy() 之前调用】因为 sync_module_cleanup() 使用 kvs_free()
+    // 释放内存，而 kvs_free() 在没有 jemalloc 时会调用 kmem_free()。如果 kmem_destroy()
+    // 先执行，内存池会被销毁，导致访问已释放资源触发 SIGSEGV。
+    sync_module_cleanup();
+
     // 销毁kmem内存池系统
     kmem_destroy();
-
-    // 清理同步模块（关闭 RDMA 连接、释放资源）
-    sync_module_cleanup();
 }
 
 // 信号处理函数

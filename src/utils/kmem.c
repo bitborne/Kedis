@@ -628,3 +628,74 @@ void kmem_leak_check(void) {
     // 这需要额外的跟踪结构，暂不实现
     printf("kmem_leak_check: not implemented yet\n");
 }
+
+/* ============================================================================
+ * 页对齐分配实现
+ * ============================================================================ */
+
+// 页对齐分配管理结构
+typedef struct kmem_aligned_hdr {
+    size_t size;        // 用户请求大小
+    size_t align;       // 对齐边界
+    void *orig_ptr;     // 原始分配指针（用于释放）
+    uint32_t magic;     // 魔数
+} kmem_aligned_hdr_t;
+
+#define KMEM_ALIGNED_MAGIC  0x4B4D414C  // "KMAL"
+
+void* kmem_aligned_alloc(size_t size, size_t align) {
+    if (size == 0 || align == 0) {
+        return NULL;
+    }
+
+    // 对齐必须是2的幂
+    if ((align & (align - 1)) != 0) {
+        return NULL;
+    }
+
+    // 确保对齐至少为sizeof(void*)
+    if (align < sizeof(void*)) {
+        align = sizeof(void*);
+    }
+
+    // 分配额外空间：头部 + 对齐填充
+    size_t total_size = sizeof(kmem_aligned_hdr_t) + size + align;
+
+    // 使用kmem_alloc分配（大块的会走malloc）
+    char *raw = kmem_alloc(total_size);
+    if (!raw) {
+        return NULL;
+    }
+
+    // 计算对齐后的地址
+    char *aligned = (char *)(((uintptr_t)raw + sizeof(kmem_aligned_hdr_t) + align - 1) & ~(align - 1));
+
+    // 设置头部
+    kmem_aligned_hdr_t *hdr = (kmem_aligned_hdr_t *)(aligned - sizeof(kmem_aligned_hdr_t));
+    hdr->size = size;
+    hdr->align = align;
+    hdr->orig_ptr = raw;
+    hdr->magic = KMEM_ALIGNED_MAGIC;
+
+    return (void *)aligned;
+}
+
+void kmem_aligned_free(void *ptr) {
+    if (!ptr) {
+        return;
+    }
+
+    // 获取头部
+    kmem_aligned_hdr_t *hdr = (kmem_aligned_hdr_t *)((char *)ptr - sizeof(kmem_aligned_hdr_t));
+
+    // 验证魔数
+    if (hdr->magic != KMEM_ALIGNED_MAGIC) {
+        // 不是kmem_aligned_alloc分配的内存，可能是普通kmem_alloc
+        // 尝试直接释放
+        kmem_free(ptr);
+        return;
+    }
+
+    // 释放原始内存
+    kmem_free(hdr->orig_ptr);
+}
