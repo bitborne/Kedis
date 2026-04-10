@@ -148,12 +148,35 @@ Kedis 采用真正的 Proactor 模式。传统的 `epoll` 属于“通知就绪�
 - **系统环境**: Linux 内核版本 5.8+ (支持 io_uring 与 eBPF ring_buf)
 - **依赖库**: `liburing`, `libbpf`
 
+### 编译依赖说明
+
+| 依赖库          | Arch Linux (pacman) | Debian/Ubuntu (apt) | 功能说明                 |
+| --------------- | ------------------- | ------------------- | ------------------------ |
+| libbfd          | `binutils`          | `binutils-dev`      | BPF 字节码反汇编         |
+| libcap          | `libcap`            | `libcap-dev`        | 细粒度权限控制 (CAP_BPF) |
+| clang-bpf-co-re | `clang`             | `clang`             | CO-RE 重定位支持         |
+| llvm            | `llvm`              | `llvm`              | BPF 后端代码生成         |
+
+#### 快速安装命令
+
+**Arch Linux:**
+
+```bash
+sudo pacman -S binutils libcap clang llvm
+```
+
+**Debian/Ubuntu:**
+
+```bash
+sudo apt install binutils-dev libcap-dev clang llvm
+```
+
 ### 编译构建
 ```bash
 # 1. 编译主服务器
 make
 # 2. 编译 eBPF 模块
-cd mirror && make prebuild && make all
+cd mirror && make prebuild && make vmlinux && make all
 ```
 
 ### 运行指南
