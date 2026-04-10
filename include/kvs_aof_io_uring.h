@@ -110,25 +110,25 @@ typedef struct aof_large_write {
 } aof_large_write_t;
 
 /* 单个缓冲区结构 */
-typedef struct aof_buf {
+typedef struct aof_uring_buf {
     _Atomic aof_buf_state_t state;  /* 缓冲区状态（CAS操作） */
     void *data;                     /* 数据指针（页对齐） */
     size_t size;                    /* 缓冲区总大小 */
     size_t used;                    /* 已使用字节数 */
     uint64_t sequence;              /* 序列号，用于排序 */
     pthread_mutex_t lock;           /* 保护used字段的锁 */
-} aof_buf_t;
+} aof_uring_buf_t;
 
 /* 双缓冲结构 */
-typedef struct aof_double_buf {
-    aof_buf_t buffers[2];           /* 两个缓冲区 */
+typedef struct aof_uring_double_buf {
+    aof_uring_buf_t buffers[2];     /* 两个缓冲区 */
     _Atomic int active_idx;         /* 当前活跃缓冲区索引 */
     int fd;                         /* AOF文件描述符 */
     uint64_t global_seq;            /* 全局序列号生成器 */
     pthread_cond_t flush_cond;      /* 刷新条件变量 */
     pthread_mutex_t flush_lock;     /* 刷新锁 */
     bool shutdown;                  /* 关闭标志 */
-} aof_double_buf_t;
+} aof_uring_double_buf_t;
 
 /* 批量提交上下文 */
 typedef struct aof_batch_ctx {
@@ -343,13 +343,13 @@ aof_write_type_t aof_select_write_type(size_t total_len);
  * @param fd AOF文件描述符
  * @return 0成功，-1失败
  */
-int aof_double_buf_init(aof_double_buf_t *dbuf, int fd);
+int aof_double_buf_init(aof_uring_double_buf_t *dbuf, int fd);
 
 /**
  * 销毁双缓冲系统
  * @param dbuf 双缓冲结构
  */
-void aof_double_buf_destroy(aof_double_buf_t *dbuf);
+void aof_double_buf_destroy(aof_uring_double_buf_t *dbuf);
 
 /**
  * 获取用于写入的缓冲区（CAS操作）
@@ -359,7 +359,7 @@ void aof_double_buf_destroy(aof_double_buf_t *dbuf);
  * @param offset_out 输出偏移量
  * @return 0成功，-1失败（需要等待）
  */
-int aof_buf_acquire_for_write(aof_double_buf_t *dbuf, size_t size,
+int aof_buf_acquire_for_write(aof_uring_double_buf_t *dbuf, size_t size,
                               void **buf_out, size_t *offset_out);
 
 /**
@@ -368,7 +368,7 @@ int aof_buf_acquire_for_write(aof_double_buf_t *dbuf, size_t size,
  * @param used 实际使用的字节数
  * @return 0成功，-1失败
  */
-int aof_buf_mark_ready(aof_double_buf_t *dbuf, size_t used);
+int aof_buf_mark_ready(aof_uring_double_buf_t *dbuf, size_t used);
 
 /**
  * 等待可刷新的缓冲区（CAS: READY -> WRITING）
@@ -376,7 +376,7 @@ int aof_buf_mark_ready(aof_double_buf_t *dbuf, size_t used);
  * @param buf_idx 输出缓冲区索引
  * @return 0成功，-1失败
  */
-int aof_buf_wait_for_flushable(aof_double_buf_t *dbuf, int *buf_idx);
+int aof_buf_wait_for_flushable(aof_uring_double_buf_t *dbuf, int *buf_idx);
 
 /**
  * 释放缓冲区回空闲状态（CAS: SYNCING -> IDLE）
@@ -384,14 +384,14 @@ int aof_buf_wait_for_flushable(aof_double_buf_t *dbuf, int *buf_idx);
  * @param buf_idx 缓冲区索引
  * @return 0成功，-1失败
  */
-int aof_buf_release(aof_double_buf_t *dbuf, int buf_idx);
+int aof_buf_release(aof_uring_double_buf_t *dbuf, int buf_idx);
 
 /**
  * 触发缓冲区切换（当活跃缓冲区满时）
  * @param dbuf 双缓冲结构
  * @return 0成功，-1失败
  */
-int aof_buf_trigger_switch(aof_double_buf_t *dbuf);
+int aof_buf_trigger_switch(aof_uring_double_buf_t *dbuf);
 
 /* ============================================================================
  * io_uring批量提交函数（独立ring实例）
@@ -481,12 +481,10 @@ void aof_group_commit_destroy(aof_group_commit_t *gc);
 int aof_group_commit_trigger(aof_group_commit_t *gc, int fd);
 
 /**
- * EVERYSEC模式的定时器处理器
- * @param sig 信号编号
- * @param si 信号信息
- * @param uc 用户上下文
+ * EVERYSEC模式的定时器处理器（SIGEV_THREAD风格）
+ * @param sv 信号值
  */
-void aof_everysec_timer_handler(int sig, siginfo_t *si, void *uc);
+void aof_everysec_timer_handler(union sigval sv);
 
 /**
  * 提交链接的write+fsync操作
