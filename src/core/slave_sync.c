@@ -313,6 +313,15 @@ static robj *robj_array_dup(int argc, robj *argv) {
             if (new_argv[i].ptr) {
                 memcpy(new_argv[i].ptr, argv[i].ptr, argv[i].len);
                 new_argv[i].ptr[argv[i].len] = '\0';
+            } else {
+                /* 内存分配失败，清理已分配的资源 */
+                kvs_logError("[Slave Sync] robj_array_dup: 分配参数 %d 内存失败 (len=%zu)\n",
+                             i, argv[i].len);
+                for (int j = 0; j < i; j++) {
+                    if (new_argv[j].ptr) kvs_free(new_argv[j].ptr);
+                }
+                kvs_free(new_argv);
+                return NULL;
             }
         } else {
             new_argv[i].ptr = NULL;
@@ -324,14 +333,21 @@ static robj *robj_array_dup(int argc, robj *argv) {
 
 /* 入队 - 主线程在 SYNCING 状态下调用 */
 int slave_sync_enqueue(int argc, robj *argv) {
-    if (argc <= 0 || !argv) return -1;
+    if (argc <= 0 || !argv) {
+        kvs_logError("[Slave Sync] 入队失败: 参数无效 (argc=%d, argv=%p)\n", argc, (void*)argv);
+        return -1;
+    }
 
     struct backlog_cmd *cmd = kvs_malloc(sizeof(*cmd));
-    if (!cmd) return -1;
+    if (!cmd) {
+        kvs_logError("[Slave Sync] 入队失败: 分配命令结构体内存失败\n");
+        return -1;
+    }
 
     cmd->argc = argc;
     cmd->argv = robj_array_dup(argc, argv);
     if (!cmd->argv) {
+        kvs_logError("[Slave Sync] 入队失败: 深拷贝参数失败 (argc=%d)\n", argc);
         kvs_free(cmd);
         return -1;
     }
@@ -346,7 +362,7 @@ int slave_sync_enqueue(int argc, robj *argv) {
     g_backlog.tail = cmd;
     g_backlog.count++;
 
-    kvs_logDebug("[Slave Sync] 命令入队，当前积压: %lu\n", (unsigned long)g_backlog.count);
+    kvs_logInfo("[Slave Sync] 命令入队成功，当前积压: %lu\n", (unsigned long)g_backlog.count);
     return 0;
 }
 
