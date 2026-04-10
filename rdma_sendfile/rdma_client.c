@@ -97,6 +97,19 @@ static int receive_file(connection_t *conn) {
     printf("File size: %lu bytes (%.2f MB)\n",
            conn->file_size, conn->file_size / (1024.0 * 1024.0));
 
+    // 预发布多个接收请求形成"信用"队列
+    // 这允许服务端连续发送最多RECV_CREDITS个数据块而不阻塞
+    // 必须在发送"READY"之前完成，否则服务端可能立即开始发送
+    int credits = RECV_CREDITS;
+    for (int i = 0; i < credits && conn->received + (i * BUFFER_SIZE) < conn->file_size; i++) {
+        size_t chunk_size = (conn->file_size - conn->received - (i * BUFFER_SIZE)) < BUFFER_SIZE ?
+                            (conn->file_size - conn->received - (i * BUFFER_SIZE)) : BUFFER_SIZE;
+        if (chunk_size > 0) {
+            post_recv(conn, chunk_size);
+        }
+    }
+    printf("Posted %d receive requests\n", credits);
+
     // 发送就绪确认
     strcpy(conn->send_buf, "READY");
     post_send(conn, 5);
@@ -106,17 +119,6 @@ static int receive_file(connection_t *conn) {
 
     printf("Receiving file...\n");
     conn->start_time = get_time_us();
-
-    // 预发布多个接收请求形成"信用"队列
-    // 这允许服务端连续发送最多RECV_CREDITS个数据块而不阻塞
-    int credits = RECV_CREDITS;
-    for (int i = 0; i < credits && conn->received + (i * BUFFER_SIZE) < conn->file_size; i++) {
-        size_t chunk_size = (conn->file_size - conn->received - (i * BUFFER_SIZE)) < BUFFER_SIZE ?
-                            (conn->file_size - conn->received - (i * BUFFER_SIZE)) : BUFFER_SIZE;
-        if (chunk_size > 0) {
-            post_recv(conn, chunk_size);
-        }
-    }
 
     // 接收文件数据
     while (conn->received < conn->file_size) {
