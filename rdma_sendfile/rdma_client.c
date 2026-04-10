@@ -15,7 +15,7 @@
 #include <rdma/rdma_cma.h>
 #include <infiniband/verbs.h>
 
-#define BUFFER_SIZE (64 * 1024 * 1024)  // 64MB buffer
+#define BUFFER_SIZE (2 * 1024 * 1024)  // 2MB buffer
 #define CQ_CAPACITY (128)
 #define MAX_SGE (1)
 #define MAX_WR (128)
