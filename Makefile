@@ -9,6 +9,7 @@ SRCS = src/core/kvstore.c \
        src/core/sync_command.c \
        src/core/slave_sync.c \
        src/network/proactor.c \
+       src/network/echo_mode.c \
        src/network/rdma_sync.c \
        src/engines/kvs_array.c \
        src/engines/kvs_rbtree.c \

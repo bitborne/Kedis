@@ -1,6 +1,7 @@
 // proactor.c - Proactor network model with RESP protocol and io_uring
 #define _GNU_SOURCE
 #include "../../include/kvstore.h"
+#include "../../include/echo_mode.h"
 #include "../../include/kvs_rdma_sync.h"  /* SLAVE_STATE_* 宏定义 */
 #include <assert.h>
 #include <ctype.h>
@@ -246,12 +247,14 @@ static int init_listen(uint16_t port, const char* bind_addr) {
   return fd;
 }
 
+#if !ENABLE_ECHO_MODE
 /* --------------  业务入口：处理解析好的argv,并准备wbuf  -------------- */
 static int processCommand(struct conn* c) {
   // 直接调用核心逻辑
   // 核心逻辑会根据 c->argv 处理命令，并将结果写入 c->wbuf
   return g_kvs_handler(c);
 }
+#endif
 
 /* --------------  proactor_start：主入口  -------------- */
 int proactor_start(unsigned short port, msg_handler handler) {
@@ -470,6 +473,10 @@ int proactor_start(unsigned short port, msg_handler handler) {
           c->rlen += res;  // 累加接收的字节数（不是覆盖）
           c->parse_done = 0;
           
+#if ENABLE_ECHO_MODE
+          echo_handler(c);
+          post_send_resp(&g_ring, c);
+#else
           int ret = kvs_resp_feed(c);
           // fprintf(stderr, "==> ret = %d\n", ret);
           if (ret == RESP_ERROR) {
@@ -492,6 +499,7 @@ int proactor_start(unsigned short port, msg_handler handler) {
             // 提交 recv 请求，等待更多数据
             post_recv_frame(&g_ring, c);
           }
+#endif
         }
         break;
       }

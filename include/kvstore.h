@@ -32,6 +32,8 @@
 #define ENABLE_MULTI_ENGINE	1
 // 是否使用mmap加载数据文件(ksf, 快照)
 #define ENABLE_MMAP 1
+// 是否启用echo mode（回显模式）
+#define ENABLE_ECHO_MODE 0
 
 #include "config.h"
 
