@@ -1337,7 +1337,7 @@ void appendToAofBufferToEngine(int engine_type, int type, const robj* key,
         aof_buf[aofBuffer[engine_type].len] = '\0';
         aofBuffer[engine_type].len++;
     } else if (klen == 0) {
-        debug("klen == 0");
+        // debug("klen == 0");
         aof_buf[aofBuffer[engine_type].len] = '\0';
         aofBuffer[engine_type].len++;
     } else {
@@ -1351,7 +1351,7 @@ void appendToAofBufferToEngine(int engine_type, int type, const robj* key,
         aof_buf[aofBuffer[engine_type].len] = '\0';
         aofBuffer[engine_type].len++;
     } else if (vlen == 0) {
-        debug("vlen == 0");
+        // debug("vlen == 0");
         aof_buf[aofBuffer[engine_type].len] = '\0';
         aofBuffer[engine_type].len++;
     } else {

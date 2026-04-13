@@ -118,6 +118,41 @@ const char*
                  "SEXIST", "SAVE", "BGSAVE", "SYNC", "REPLICAOF",
                  "RDMASYNC"};    // 添加SAVE、BGSAVE、SYNC、REPLICAOF和RDMASYNC命令
 
+
+// 命令查找 hash 表（开放寻址）
+#define CMD_HASH_SIZE 64
+static int cmd_hash_table[CMD_HASH_SIZE];
+
+static inline unsigned int cmd_hash_djb2(const char *str) {
+    unsigned int hash = 5381;
+    int c;
+    while ((c = (unsigned char)*str++))
+        hash = ((hash << 5) + hash) + c; /* hash * 33 + c */
+    return hash;
+}
+
+static void init_cmd_hash(void) {
+    for (int i = 0; i < CMD_HASH_SIZE; i++)
+        cmd_hash_table[i] = -1;
+    for (int cmd = KVS_CMD_START; cmd < KVS_CMD_COUNT; cmd++) {
+        const char *name = command[cmd];
+        unsigned int h = cmd_hash_djb2(name) & (CMD_HASH_SIZE - 1);
+        while (cmd_hash_table[h] != -1)
+            h = (h + 1) & (CMD_HASH_SIZE - 1);
+        cmd_hash_table[h] = cmd;
+    }
+}
+
+static int cmd_hash_lookup(const char *name) {
+    unsigned int h = cmd_hash_djb2(name) & (CMD_HASH_SIZE - 1);
+    while (cmd_hash_table[h] != -1) {
+        int cmd = cmd_hash_table[h];
+        if (strcasecmp(name, command[cmd]) == 0)
+            return cmd;
+        h = (h + 1) & (CMD_HASH_SIZE - 1);
+    }
+    return KVS_CMD_COUNT;
+}
 // 自动保存参数：save seconds changes
 // static int save_params_seconds = 300;        // 5分钟
 // static int save_params_changes = 100;        // 100次变化
@@ -705,13 +740,8 @@ int kvs_protocol(struct conn* c) {
         kvs_logInfo("[kvs_protocol] 不是从节点模式，正常执行命令\n");
     }
 
-    // 查找命令 ID
-    int cmd = KVS_CMD_START;
-    for (cmd = KVS_CMD_START; cmd < KVS_CMD_COUNT; cmd++) {
-        if (strcasecmp(cmd_name, command[cmd]) == 0) { // strcasecmp 忽略大小写
-            break;
-        }
-    }
+    // 查找命令 ID（O(1) hash 查找）
+    int cmd = cmd_hash_lookup(cmd_name);
 
     int ret = 0;
     char* gotValue = NULL;
@@ -1159,6 +1189,9 @@ int kvs_protocol(struct conn* c) {
 }
 
 int init_kvengine(void) {
+    // 初始化命令 hash 表
+    init_cmd_hash();
+
     // 初始化kmem内存池系统
     if (kmem_init() != 0) {
         kvs_logError("Failed to initialize kmem\n");
