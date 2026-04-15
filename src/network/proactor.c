@@ -44,12 +44,12 @@ static int g_event_fd = -1;           // eventfd（用于 RDMA 完成通知）
 static struct conn *g_event_conn = NULL;  // eventfd 对应的 conn 结构
 static uint64_t g_event_buf;          // eventfd 读取缓冲区
 
-/* accept 上下文 - 用于保存 addr 和 len，以便在 accept 完成后释放 */
+/* accept 上下文 - 用于保存 addr 和 len，嵌入结构体避免额外分配 */
 #define ACCEPT_CTX_MAGIC 0xACCE0000
 struct accept_ctx {
   int magic;  // 魔数标记，用于识别 accept_ctx
-  struct sockaddr_in* addr;
-  socklen_t* len;
+  struct sockaddr_in addr;
+  socklen_t len;
 };
 
 /* 从节点同步管理 */
@@ -68,8 +68,6 @@ void proactor_stop(void) {
 /* ---------------- accept 上下文管理 ---------------- */
 static void accept_ctx_free(struct accept_ctx* ctx) {
   if (ctx) {
-    kvs_free(ctx->addr);
-    kvs_free(ctx->len);
     kvs_free(ctx);
   }
 }
@@ -134,14 +132,7 @@ static void post_accept(struct io_uring* ring, int listenfd) {
     return;
   }
   ctx->magic = ACCEPT_CTX_MAGIC;  // 设置魔数标记
-  ctx->addr = kvs_malloc(sizeof(*ctx->addr));
-  ctx->len = kvs_malloc(sizeof(*ctx->len));
-  if (!ctx->addr || !ctx->len) {
-    kvs_logError("Failed to alloc accept_ctx members");
-    accept_ctx_free(ctx);
-    return;
-  }
-  *ctx->len = sizeof(*ctx->addr);
+  ctx->len = sizeof(ctx->addr);
 
   struct io_uring_sqe* sqe = io_uring_get_sqe(ring);
   if (!sqe) {
@@ -149,7 +140,7 @@ static void post_accept(struct io_uring* ring, int listenfd) {
     accept_ctx_free(ctx);
     return;
   }
-  io_uring_prep_accept(sqe, listenfd, (struct sockaddr*)ctx->addr, ctx->len, 0);
+  io_uring_prep_accept(sqe, listenfd, (struct sockaddr*)&ctx->addr, &ctx->len, 0);
   /* 使用 accept_ctx 作为 user_data，accept 完成后释放 */
   io_uring_sqe_set_data(sqe, ctx);
 }

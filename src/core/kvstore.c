@@ -580,52 +580,53 @@ void check_and_perform_autosave() {
 }
 
 /* ---------------- RESP 响应辅助函数 ---------------- */
-// 发送原始字符串到回复缓冲区，供命令处理使用
-void add_reply_str(struct conn* c, const char* str) {
+// 发送原始字符串到回复缓冲区，带已知长度
+void add_reply_str_len(struct conn* c, const char* str, size_t len) {
         if (!str) return;
-        size_t len = strlen(str);
         if (c->wlen + len > RESP_BUF_SIZE) return; // 简单保护
         memcpy(c->wbuf + c->wlen, str, len);
         c->wlen += len;
 }
 
+// 发送原始字符串到回复缓冲区，供命令处理使用
+void add_reply_str(struct conn* c, const char* str) {
+        if (!str) return;
+        add_reply_str_len(c, str, strlen(str));
+}
+
 // 发送错误回复 (-ERR ...)，供命令处理使用
 void add_reply_error(struct conn* c, const char* err) {
-        add_reply_str(c, "-");
+        add_reply_str_len(c, "-", 1);
         add_reply_str(c, err);
-        add_reply_str(c, "\r\n");
+        add_reply_str_len(c, "\r\n", 2);
         c->send_st = ST_SEND_SMALL;
 }
 
 // 发送状态回复 (+OK ...)，供命令处理使用
 void add_reply_status(struct conn* c, const char* status) {
-        add_reply_str(c, "+");
+        add_reply_str_len(c, "+", 1);
         add_reply_str(c, status);
-        add_reply_str(c, "\r\n");
+        add_reply_str_len(c, "\r\n", 2);
         c->send_st = ST_SEND_SMALL;
 }
 
-// 发送批量字符串回复 ($len...)，供命令处理使用
-void add_reply_bulk(struct conn* c, char* str) {
+// 发送批量字符串回复 ($len...)，带已知长度
+void add_reply_bulk_len(struct conn* c, char* str, size_t len) {
         // 如果 str 为 NULL，返回 Null Bulk String
         if (str == NULL) {
-                add_reply_str(c, "$-1\r\n"); // Null Bulk String
+                add_reply_str_len(c, "$-1\r\n", 5); // Null Bulk String
                 return;
         }
-        
-        // 计算数据的长度
-        c->bulk_tt = strlen(str) + 2; // 为了 \r\n
+
+        c->bulk_tt = len + 2; // 为了 \r\n
         c->bulk_data = str;
-        // 计算响应数据的总长度
-        // 格式：$<len>\r\n<data>\r\n    (第二个 \r\n 已包含在数据中)
-        // 长度：1 ($) + 数字位数 + 2 (\r\n) + len + 2 (\r\n)
-        char hdr_buf[32]; // 临时缓冲区，用于存储 RESP 头部
-        c->hdr_len = sprintf(hdr_buf, "$%zu\r\n", c->bulk_tt - 2); // 生成 RESP 头部
+        char hdr_buf[32];
+        c->hdr_len = sprintf(hdr_buf, "$%zu\r\n", len);
 
         memcpy(c->wbuf + c->wlen, hdr_buf, c->hdr_len);
         c->wlen += c->hdr_len;
 
-        size_t avail    = RESP_BUF_SIZE - c->wlen;
+        size_t avail = RESP_BUF_SIZE - c->wlen;
         size_t remain = c->bulk_tt - c->bulk_sent;
         size_t cp = avail < remain ? avail : remain;
         memcpy(c->wbuf + c->wlen, str, cp);
@@ -641,6 +642,15 @@ void add_reply_bulk(struct conn* c, char* str) {
         }
 
         c->send_st = ST_SEND_HDR_SENT;
+}
+
+// 发送批量字符串回复 ($len...)，供命令处理使用
+void add_reply_bulk(struct conn* c, char* str) {
+        if (str == NULL) {
+                add_reply_bulk_len(c, NULL, 0);
+                return;
+        }
+        add_reply_bulk_len(c, str, strlen(str));
 }
 
 // 为了兼容旧的 "YES, Exist" 返回格式，这里做个简单映射，也可以直接返回 RESP Integer
@@ -772,7 +782,7 @@ int kvs_protocol(struct conn* c) {
             if (gotValue == NULL) {
                 add_reply_error(c, "ERROR / Not Exist"); // Redis style: return nil
             } else {
-                add_reply_bulk(c, gotValue);
+                add_reply_bulk_len(c, gotValue, strlen(gotValue));
             }
             break;
         case KVS_CMD_ADEL:
@@ -836,7 +846,7 @@ int kvs_protocol(struct conn* c) {
             if (gotValue == NULL) {
                 add_reply_error(c, "ERROR / Not Exist");
             } else {
-                add_reply_bulk(c, gotValue);
+                add_reply_bulk_len(c, gotValue, strlen(gotValue));
             }
             break;
         case KVS_CMD_HDEL:
@@ -900,7 +910,7 @@ int kvs_protocol(struct conn* c) {
             if (gotValue == NULL) {
                 add_reply_error(c, "ERROR / Not Exist");
             } else {
-                add_reply_bulk(c, gotValue);
+                add_reply_bulk_len(c, gotValue, strlen(gotValue));
             }
             break;
         case KVS_CMD_RDEL:
@@ -962,7 +972,7 @@ int kvs_protocol(struct conn* c) {
             if (gotValue == NULL) {
                 add_reply_error(c, "ERROR / Not Exist");
             } else {
-                add_reply_bulk(c, gotValue);
+                add_reply_bulk_len(c, gotValue, strlen(gotValue));
             }
             break;
         case KVS_CMD_SDEL:
@@ -1025,7 +1035,7 @@ int kvs_protocol(struct conn* c) {
             if (gotValue == NULL) {
                 add_reply_error(c, "ERROR / Not Exist");
             } else {
-                add_reply_bulk(c, gotValue);
+                add_reply_bulk_len(c, gotValue, strlen(gotValue));
             }
             break;
         case KVS_CMD_DEL:
