@@ -14,13 +14,14 @@ void kvs_resp_reset(struct conn* c) {
   c->argc = 0;                  // 重置期望的参数个数
   c->argc_done = 0;             // 重置已解析完成的参数个数
 
-  // 释放所有已分配的参数内存
+  // 释放所有已分配的参数内存（RBUF_REF 的直接丢弃，引擎已深拷贝）
   for (int i = 0; i < MAX_ARGC; i++) {
-    if (c->argv[i].ptr) {
+    if (c->argv[i].ptr && !(c->argv[i].flags & ROBJ_FLAG_RBUF_REF)) {
       kvs_free(c->argv[i].ptr);  // 释放参数内存
-      c->argv[i].ptr = NULL;     // 清空指针
     }
+    c->argv[i].ptr = NULL;     // 清空指针
     c->argv[i].len = 0;  // 清空长度
+    c->argv[i].flags = 0;
   }
 
   c->bulk_done = 0;   // 重置 bulk data 已解析长度
@@ -29,9 +30,9 @@ void kvs_resp_reset(struct conn* c) {
 
 void kvs_resp_free_resources(struct conn* c) {
 
-  // 释放已解析的参数
+  // 释放已解析的参数（RBUF_REF 的跳过）
   for (int i = 0; i < c->argc; i++) {
-    if (c->argv[i].ptr) {
+    if (c->argv[i].ptr && !(c->argv[i].flags & ROBJ_FLAG_RBUF_REF)) {
       kvs_free(c->argv[i].ptr);
       c->argv[i].ptr = NULL;
     }
@@ -41,8 +42,14 @@ void kvs_resp_free_resources(struct conn* c) {
 }
 
 static inline char* find_crlf(const char* s, size_t len) {
-    for (size_t i = 0; i + 1 < len; i++) 
-        if (s[i] == '\r' && s[i+1] == '\n') return (char*)(s + i);
+    const char* p = s;
+    const char* end = s + len - 1;
+    while (p < end) {
+        p = memchr(p, '\r', end - p + 1);
+        if (!p) return NULL;
+        if (p[1] == '\n') return (char*)p;
+        p++;
+    }
     return NULL;
 }
 
@@ -67,6 +74,22 @@ static inline int64_t fast_atoi_safe(const char* s, size_t len) {
     return n;
 }
 
+/* 在 memmove rbuf 前，将所有指向 rbuf 的 argv 指针升级到堆内存 */
+static inline void rbuf_ref_upgrade(struct conn* c) {
+    for (int i = 0; i < c->argc_done; i++) {
+        if (c->argv[i].ptr && (c->argv[i].flags & ROBJ_FLAG_RBUF_REF)) {
+            char* old_ptr = c->argv[i].ptr;
+            size_t old_len = c->argv[i].len;
+            c->argv[i].ptr = kvs_malloc(old_len + 1);
+            if (c->argv[i].ptr) {
+                memcpy(c->argv[i].ptr, old_ptr, old_len);
+                c->argv[i].ptr[old_len] = '\0';
+            }
+            c->argv[i].flags &= ~ROBJ_FLAG_RBUF_REF;
+        }
+    }
+}
+
 /* --------------  RESP 流式解析：啃掉 data[]，返回是否完成一条完整命令
  * -------------- */
 int kvs_resp_feed(struct conn* c) {
@@ -75,7 +98,6 @@ int kvs_resp_feed(struct conn* c) {
   while (c->parse_done < c->rlen && c->resp_state != ST_RESP_OK) {
     switch (c->resp_state) {
       case ST_RESP_HDR: {
-        kvs_logDebug("RECV: into [ST_RESP_HDR]");
         // 检查是否以 * 开头（Array 格式）
         // DEBUG
         if (c->rbuf[c->parse_done] != '*') {
@@ -108,24 +130,23 @@ int kvs_resp_feed(struct conn* c) {
           kvs_logError("Argc convert error");
           goto error;  // 解析错误：数字格式错误
         }
-        
+
         // 更新 parse_done 到命令头结束位置（跳过 \r\n）
         c->parse_done = end + 2 - c->rbuf;
-        
+
         // 切换到 ST_RESP_BULK_LEN 状态，准备解析第一个参数的长度
         c->resp_state = ST_RESP_BULK_LEN;
         break;
       }
       case ST_RESP_BULK_LEN: {
-        kvs_logDebug("RECV: into [ST_RESP_BULK_LEN]");
         // 检查是否以 $ 开头（Bulk String 格式）
-        
+
         // DEBUG
         if (c->rbuf[c->parse_done] != '$') {
           kvs_logError("Bulk should start with $");
           goto error; // 协议错误：不是 Bulk String 格式
         }
-        
+
         // 查找 \r\n，确定长度头结束位置
         size_t remaining = c->rlen - c->parse_done;
         char* end = find_crlf(c->rbuf + c->parse_done, remaining);
@@ -140,7 +161,7 @@ int kvs_resp_feed(struct conn* c) {
           // c->parse_done = 0;
           // return RESP_CONTINUE_REMAINING_RECV;
         }
-        
+
         // 提取 bulk_len（bulk data 长度）
         char* ptr = c->rbuf + c->parse_done + 1;  // 跳过 '$'
         size_t num_len = end - ptr;  // 数字字符串长度
@@ -158,17 +179,18 @@ int kvs_resp_feed(struct conn* c) {
           kvs_logError("Bulk len convert error");
           goto error;
         }
-        
+
         // 更新 parse_done 到长度头结束位置（跳过 \r\n）
         c->parse_done = end + 2 - c->rbuf;
-        
+
         // 处理 NULL bulk string（bulk_len == -1）
         if (c->bulk_len == (size_t)-1) {
           kvs_logError("服务端不应该收到 $-1\\r\\n\n");
           c->argv[c->argc_done].ptr = NULL;  // NULL 指针
           c->argv[c->argc_done].len = 0;     // 长度为 0
+          c->argv[c->argc_done].flags = 0;
           c->argc_done++;                    // 已解析参数个数加 1
-          
+
           // 检查是否所有参数解析完毕
           if (c->argc_done == c->argc) {
             c->resp_state = ST_RESP_OK;  // 切换到完成状态
@@ -176,13 +198,13 @@ int kvs_resp_feed(struct conn* c) {
           // 否则继续解析下一个参数（保持在 ST_RESP_BULK_LEN 状态）
           break;
         }
-        
+
         // 检查 bulk_len 是否超过最大限制
         if (c->bulk_len > MAX_SEG_SIZE) {
           kvs_logError("Bulk too big");
           goto error;  // 数据过大，拒绝处理
         }
-        
+
         // 分配内存存储 bulk data（+1 用于 null terminator）
         c->argv[c->argc_done].ptr = kvs_malloc(c->bulk_len + 1);
         if (!c->argv[c->argc_done].ptr) {
@@ -191,48 +213,86 @@ int kvs_resp_feed(struct conn* c) {
         }
         c->argv[c->argc_done].len = c->bulk_len;        // 记录长度
         c->argv[c->argc_done].ptr[c->bulk_len] = '\0';  // 添加 null terminator
-        
+        c->argv[c->argc_done].flags = 0;
+
         // 切换到 ST_RESP_BULK_DATA 状态，准备接收 bulk data
         c->bulk_done = 0;  // 重置已接收的 bulk data 长度
         c->resp_state = ST_RESP_BULK_DATA;
         break;
       }
       case ST_RESP_BULK_DATA: {
-        kvs_logDebug("RECV: into [ST_RESP_BULK_DATA]");
         // 计算还需要接收多少 bulk data
-        
+
         // fprintf(stderr, "-->bulk_data\n");
-        
+
         size_t want = c->bulk_len - c->bulk_done;
-        
+
         // 计算 rbuf 中还有多少数据可用
         size_t avail = c->rlen - c->parse_done;
+
+        // 【零拷贝快速路径】整个 bulk 数据（含 \r\n）已经到达且尚未拷贝
+        // 注意：argv[0] 是命令名，下游用 strcasecmp/djb2 做字符串比较，需要 \0 结尾，
+        // 因此命令名不走零拷贝，总是 malloc+copy 保证 null-terminated。
+        if (c->argc_done > 0 && c->bulk_done == 0 && avail >= c->bulk_len + 2) {
+            // 直接让 argv 指向 rbuf 内部
+            c->argv[c->argc_done].ptr = c->rbuf + c->parse_done;
+            c->argv[c->argc_done].len = c->bulk_len;
+            c->argv[c->argc_done].flags = ROBJ_FLAG_RBUF_REF;
+            c->parse_done += c->bulk_len;
+            // 检查 \r\n
+            if (c->rbuf[c->parse_done] != '\r' ||
+                c->rbuf[c->parse_done + 1] != '\n') {
+                kvs_logError("Bulk should end with \\r\\n");
+                goto error;
+            }
+            // 将 \r 覆写为 \0，使零拷贝指针对引擎的 strcmp/strlen 安全
+            c->rbuf[c->parse_done] = '\0';
+            c->parse_done += 2;
+            c->argc_done++;
+
+            if (c->argc_done == c->argc) {
+                c->resp_state = ST_RESP_OK;
+                if (c->parse_done < c->rlen) {
+                    rbuf_ref_upgrade(c);
+                    size_t remaining = c->rlen - c->parse_done;
+                    memmove(c->rbuf, c->rbuf + c->parse_done, remaining);
+                    c->rlen = remaining;
+                    c->parse_done = 0;
+                } else {
+                    c->rlen = 0;
+                    c->parse_done = 0;
+                }
+            } else {
+                c->resp_state = ST_RESP_BULK_LEN;
+            }
+            break;
+        }
 
         // 计算本次可以复制的数据量（取 want 和 avail 的较小值）
         size_t cp = (want < avail) ? want : avail;
         // fprintf(stderr, "cp == %d\n", cp);
         // 从 rbuf 复制数据到 argv[argc_done].ptr
         if (cp > 0) {
-          
+
           memcpy(c->argv[c->argc_done].ptr + c->bulk_done,
             c->rbuf + c->parse_done, cp);
         }
-          
+
           // fprintf(stderr, "bulk_done1 == %d\n", c->bulk_done);
           // 更新 bulk_done（已接收的 bulk data 长度）
           c->bulk_done += cp;
         // fprintf(stderr, "bulk_done2 == %d\n", c->bulk_done);
-        
+
         // fprintf(stderr, "parse_done1 == %d\n", c->parse_done);
         // 更新 parse_done（rbuf 中已处理的数据位置）
         c->parse_done += cp;
         // fprintf(stderr, "parse_done2 == %d\n", c->parse_done);
-        
+
         // 检查 bulk data 是否接收完成
         // fprintf(stderr, "c->bulk_done:%d != c->bulk_len: %d\n", c->bulk_done, c->bulk_len);
         if (c->bulk_done == c->bulk_len) {
           // bulk data 收全了，现在检查是否有 \r\n
-          
+
           // 检查 rbuf 中是否有足够的数据接收 \r\n
           // fprintf(stderr, "data:--> 1\n");
           if (c->parse_done + 2 > c->rlen) {
@@ -241,7 +301,7 @@ int kvs_resp_feed(struct conn* c) {
             // 保留已接收的部分 \r\n;
             goto continue_recv;
           }
-          
+
           // fprintf(stderr, "data:--> 2\n");
           // 检查 \r\n 是否正确
           if (c->rbuf[c->parse_done] != '\r' ||
@@ -250,7 +310,7 @@ int kvs_resp_feed(struct conn* c) {
               goto error;  // 协议错误：缺少 \r\n
           }
           // fprintf(stderr, "data:--> 3\n");
-            
+
           // 跳过 \r\n（2 字节）
           c->parse_done += 2;
           // fprintf(stderr, "跳过\\r\\n: c->parse_done=%d\n", c->parse_done);
@@ -264,8 +324,9 @@ int kvs_resp_feed(struct conn* c) {
             c->resp_state = ST_RESP_OK;
             // 处理粘包, 让下一条命令先留在缓冲区 memmove到开头
             // fprintf(stderr, "OK==rbuf: %*s\nparse_>done后: %*s\n", IOP_SIZE, c->rbuf, IOP_SIZE - c->parse_done, c->rbuf + c->parse_done);
-            if (c->parse_done < c->rlen) {  
+            if (c->parse_done < c->rlen) {
               // fprintf(stderr, "[循环内]判断出了有粘包\n");
+              rbuf_ref_upgrade(c);
               size_t remaining = c->rlen - c->parse_done;
               memmove(c->rbuf, c->rbuf + c->parse_done, remaining);
               c->rlen = remaining;
@@ -306,7 +367,7 @@ int kvs_resp_feed(struct conn* c) {
       // 所有数据都已处理，重置 rlen 和 parse_done
       // c->rlen = 0;
       // c->parse_done = 0;
-    
+
       // fprintf(stderr, "应该来这\n");
       c->resp_state = ST_RESP_HDR;
       c->rlen = c->parse_done = c->bulk_len = 0;
@@ -319,7 +380,7 @@ int kvs_resp_feed(struct conn* c) {
       // 粘包才走这里( rlen = remaining, parse_done = 0 )
         // fprintf(stderr, "[循环外]确实出现粘包!\n");
         // [原本以为走到这个分支是不可能的, 故原本`go to error`]
-        // [但实际,如果粘包,确实会走在这个分支] 
+        // [但实际,如果粘包,确实会走在这个分支]
         // goto error;
         c->resp_state = ST_RESP_HDR;
         c->argc_done = 0;
@@ -348,6 +409,8 @@ int kvs_resp_feed(struct conn* c) {
     } else if (c->parse_done >= c->rlen) {
       // fprintf(stderr, "-->b\n");
       // 所有数据都已处理，重置 rlen
+      // 在重置前先把指向 rbuf 的 argv 升级到堆内存
+      rbuf_ref_upgrade(c);
       c->rlen = 0;
       c->parse_done = 0;
       goto continue_recv;
@@ -359,11 +422,13 @@ int kvs_resp_feed(struct conn* c) {
   }
 
   continue_recv: {
-    size_t remaining = c->rlen - c->parse_done;
-    memmove(c->rbuf, c->rbuf + c->parse_done, remaining);
-    c->rlen = remaining;
-    c->parse_done = 0;
-    // fprintf(stderr, "留下了谁? %d bytes: %*s\n", remaining , remaining, c->rbuf);
+    if (c->parse_done > 0 && c->rlen >= (IOP_SIZE - 256)) {
+        rbuf_ref_upgrade(c);
+        size_t remaining = c->rlen - c->parse_done;
+        memmove(c->rbuf, c->rbuf + c->parse_done, remaining);
+        c->rlen = remaining;
+        c->parse_done = 0;
+    }
     return RESP_CONTINUE_RECV;
   }
 

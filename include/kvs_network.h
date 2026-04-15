@@ -30,9 +30,12 @@ typedef enum {
 } send_state_t;
 
 /* ---------------- 段对象：只挂指针，不拷贝数据 ---------------- */
+#define ROBJ_FLAG_RBUF_REF 0x01  // ptr 直接指向 rbuf 内部，无需 free
+
 typedef struct {
-  char* ptr;   // 指向堆内存
+  char* ptr;   // 指向数据（可能是堆内存，也可能直接指向 rbuf）
   size_t len;  // 段长度
+  unsigned int flags;  // 标志位
 } robj;
 
 /* ---------------- 连接上下文 ---------------- */
