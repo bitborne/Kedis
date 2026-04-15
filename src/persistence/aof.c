@@ -666,8 +666,8 @@ void appendToAofBuffer(int type, const robj* key, const robj* value) {
  * 更新：使用write_all确保所有数据都写入，简化逻辑
  * 注意：此函数仅在单引擎模式下使用
  */
-static int flushAofBuffer_force(uint64_t now_ns) {
 #if !ENABLE_MULTI_ENGINE
+static int flushAofBuffer_force(uint64_t now_ns) {
   if (aofBuffer.len > 0 && aof_fd != -1) {
     ssize_t result = write_all(aof_fd, aofBuffer.buf, aofBuffer.len);
     if (result == -1) {
@@ -678,14 +678,9 @@ static int flushAofBuffer_force(uint64_t now_ns) {
     aofBuffer.last_flush_ns = now_ns;
   }
   return 0;
-#else
-  kvs_logError("多引擎模式下请使用引擎特定的flush函数");
-  return -1;
-#endif
 }
 
 int flushAofBuffer(uint64_t now_ns) {
-#if !ENABLE_MULTI_ENGINE
   if (aofBuffer.len > 0 && aof_fd != -1) {
     if (aofBuffer.len < AOF_FLUSH_MIN_SIZE &&
         (now_ns - aofBuffer.last_flush_ns) < AOF_FLUSH_MIN_NS) {
@@ -694,11 +689,8 @@ int flushAofBuffer(uint64_t now_ns) {
     return flushAofBuffer_force(now_ns);
   }
   return 0;
-#else
-  kvs_logError("多引擎模式下请使用引擎特定的flush函数");
-  return -1;
-#endif
 }
+#endif
 
 /**
  * 刷新指定引擎的AOF缓冲区到文件（多引擎模式）
