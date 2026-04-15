@@ -5,6 +5,8 @@
 
 
 void kvs_resp_reset(struct conn* c) {
+  int argc_done = c->argc_done; // 先保存，因为后续要清零
+
   c->rlen = 0;                  // 重置读缓冲区有效数据长度
   c->wlen = c->bulk_sent = 0;       // 重置写缓冲区长度和已发送长度
   c->bulk_p = NULL;
@@ -14,9 +16,13 @@ void kvs_resp_reset(struct conn* c) {
   c->argc = 0;                  // 重置期望的参数个数
   c->argc_done = 0;             // 重置已解析完成的参数个数
 
-  // 释放所有已分配的参数内存（RBUF_REF 的直接丢弃，引擎已深拷贝）
-  for (int i = 0; i < MAX_ARGC; i++) {
-    if (c->argv[i].ptr && !(c->argv[i].flags & ROBJ_FLAG_RBUF_REF)) {
+  // 按需释放已使用的参数内存（RBUF_REF 的直接丢弃，cmd_buf 无需 free）
+  int reset_slots = argc_done;
+  if (reset_slots < MAX_ARGC && c->argv[reset_slots].ptr)
+    reset_slots++;
+  for (int i = 0; i < reset_slots; i++) {
+    if (c->argv[i].ptr && !(c->argv[i].flags & ROBJ_FLAG_RBUF_REF)
+        && c->argv[i].ptr != c->cmd_buf) {
       kvs_free(c->argv[i].ptr);  // 释放参数内存
     }
     c->argv[i].ptr = NULL;     // 清空指针
@@ -30,9 +36,10 @@ void kvs_resp_reset(struct conn* c) {
 
 void kvs_resp_free_resources(struct conn* c) {
 
-  // 释放已解析的参数（RBUF_REF 的跳过）
+  // 释放已解析的参数（RBUF_REF 和 cmd_buf 的跳过）
   for (int i = 0; i < c->argc; i++) {
-    if (c->argv[i].ptr && !(c->argv[i].flags & ROBJ_FLAG_RBUF_REF)) {
+    if (c->argv[i].ptr && !(c->argv[i].flags & ROBJ_FLAG_RBUF_REF)
+        && c->argv[i].ptr != c->cmd_buf) {
       kvs_free(c->argv[i].ptr);
       c->argv[i].ptr = NULL;
     }
@@ -42,6 +49,13 @@ void kvs_resp_free_resources(struct conn* c) {
 }
 
 static inline char* find_crlf(const char* s, size_t len) {
+    if (len <= 16) {
+        const char* end = s + len - 1;
+        for (const char* p = s; p < end; p++) {
+            if (p[0] == '\r' && p[1] == '\n') return (char*)p;
+        }
+        return NULL;
+    }
     const char* p = s;
     const char* end = s + len - 1;
     while (p < end) {
@@ -51,6 +65,20 @@ static inline char* find_crlf(const char* s, size_t len) {
         p++;
     }
     return NULL;
+}
+
+// 小数字快速 atoi，无溢出检查，适用于 argc 等 1-3 位小数字
+static inline int64_t fast_atoi_small(const char* s, size_t len) {
+    int64_t n = 0;
+    for (size_t i = 0; i < len; i++) {
+        char c = s[i];
+        if (c < '0' || c > '9') {
+            if (i == 0) return -1;
+            break;
+        }
+        n = n * 10 + (c - '0');
+    }
+    return n;
 }
 
 // 安全快速 atoi 实现，带溢出检查
@@ -117,8 +145,8 @@ int kvs_resp_feed(struct conn* c) {
         char* ptr = c->rbuf + c->parse_done + 1;  // 跳过 '*'
         size_t num_len = end - ptr;  // 数字字符串长度
 
-        // 使用安全的 atoi 解析，检查溢出和无效输入
-        int64_t parsed_argc = fast_atoi_safe(ptr, num_len);
+        // argc 只有 1-3 位，使用无溢出检查的快速路径
+        int64_t parsed_argc = fast_atoi_small(ptr, num_len);
         if (parsed_argc < 0 || parsed_argc > MAX_ARGC) {
           kvs_logError("Argc convert error: invalid or out of range");
           goto error;  // 解析错误：数字格式错误或超出范围
@@ -206,10 +234,15 @@ int kvs_resp_feed(struct conn* c) {
         }
 
         // 分配内存存储 bulk data（+1 用于 null terminator）
-        c->argv[c->argc_done].ptr = kvs_malloc(c->bulk_len + 1);
-        if (!c->argv[c->argc_done].ptr) {
-          kvs_logError("Bulk malloc fail");
-          goto error;  // 内存分配失败
+        // argv[0] 命令名内联到 cmd_buf，避免短命令的 malloc/free
+        if (c->argc_done == 0 && c->bulk_len < sizeof(c->cmd_buf)) {
+          c->argv[0].ptr = c->cmd_buf;
+        } else {
+          c->argv[c->argc_done].ptr = kvs_malloc(c->bulk_len + 1);
+          if (!c->argv[c->argc_done].ptr) {
+            kvs_logError("Bulk malloc fail");
+            goto error;  // 内存分配失败
+          }
         }
         c->argv[c->argc_done].len = c->bulk_len;        // 记录长度
         c->argv[c->argc_done].ptr[c->bulk_len] = '\0';  // 添加 null terminator

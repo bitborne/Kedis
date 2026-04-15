@@ -55,6 +55,7 @@ struct conn {
   int argc;              // 期望的参数个数 (argc)
   int argc_done;         // 已解析完成的参数个数 (用于跟踪解析进度)
   size_t bulk_done;      // 当前 bulk 已解析长度
+  char cmd_buf[16];      // argv[0] 短命令名内联缓冲，避免 malloc
   robj argv[MAX_ARGC];   // 命令段数组 (每个 ptr 都需要 malloc)
   
   
