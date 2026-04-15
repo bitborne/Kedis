@@ -1011,7 +1011,9 @@ int kvs_protocol(struct conn* c) {
             if (ret < 0) {
                 add_reply_error(c, "ERROR");
             } else if (ret == 0) {
-                appendToAofBuffer(AOF_CMD_SET, key, value);
+                if (g_config.aof_enabled) {
+                    appendToAofBuffer(AOF_CMD_SET, key, value);
+                }
                 add_reply_status(c, "OK");
             } else {
                 add_reply_error(c, "Key has existed");
@@ -1032,7 +1034,9 @@ int kvs_protocol(struct conn* c) {
             if (ret < 0) {
                 add_reply_error(c, "ERROR");
             } else if (ret == 0) {
-                appendToAofBuffer(AOF_CMD_DEL, key, NULL);
+                if (g_config.aof_enabled) {
+                    appendToAofBuffer(AOF_CMD_DEL, key, NULL);
+                }
                 add_reply_status(c, "OK");
             } else {
                 add_reply_error(c, "Not Exist");
@@ -1044,7 +1048,9 @@ int kvs_protocol(struct conn* c) {
             if (ret < 0) {
                 add_reply_error(c, "ERROR");
             } else if (ret == 0) {
-                appendToAofBuffer(AOF_CMD_MOD, key, value);
+                if (g_config.aof_enabled) {
+                    appendToAofBuffer(AOF_CMD_MOD, key, value);
+                }
                 add_reply_status(c, "OK");
             } else {
                 add_reply_error(c, "Not Exist");

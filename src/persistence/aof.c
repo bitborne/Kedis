@@ -89,12 +89,12 @@ static int aof_fd_skiplist = -1;
 #else
 static int aof_fd = -1;
 #endif
+static int aof_fds[4] = {-1, -1, -1, -1};
 
 // 后台fsync线程相关
 static pthread_t fsync_thread;
 static int fsync_running = 0;
 static time_t last_fsync_time = 0;
-static time_t last_write_time = 0;
 
 /**
  * 安全写入函数 - 确保所有数据都被写入
@@ -114,7 +114,6 @@ static ssize_t write_all(int fd, const void* buf, size_t count) {
     }
     written += n;
   }
-  last_write_time = time(NULL);
   return (ssize_t)written;
 }
 
@@ -136,6 +135,17 @@ typedef struct {
  * @param output 存储编码结果的缓冲区
  * @return 编码后占用的字节数
  */
+/* 获取当前单调时钟时间（纳秒） */
+static inline uint64_t get_monotonic_ns(void) {
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (uint64_t)ts.tv_sec * 1000000000ULL + ts.tv_nsec;
+}
+
+/* 延迟flush阈值 */
+#define AOF_FLUSH_MIN_SIZE 4096
+#define AOF_FLUSH_MIN_NS   1000000  /* 1ms */
+
 static int encode_vlq(uint64_t value, uint8_t* output) {
   int count = 0;
   do {
@@ -622,7 +632,7 @@ void appendToAofBuffer(int type, const robj* key, const robj* value) {
 
   // 小命令：尝试追加到缓冲区
   if (aofBuffer.len + total_needed > AOF_BUF_SIZE) {
-    flushAofBuffer();  // 缓冲区满，先flush
+    flushAofBuffer_force();  // 缓冲区满，强制flush
   }
 
   // 添加命令码（1字节）
@@ -657,16 +667,34 @@ void appendToAofBuffer(int type, const robj* key, const robj* value) {
  * 更新：使用write_all确保所有数据都写入，简化逻辑
  * 注意：此函数仅在单引擎模式下使用
  */
-int flushAofBuffer() {
+static int flushAofBuffer_force() {
 #if !ENABLE_MULTI_ENGINE
-  if (aof_len > 0 && aof_fd != -1) {
+  if (aofBuffer.len > 0 && aof_fd != -1) {
+    uint64_t now = get_monotonic_ns();
     ssize_t result = write_all(aof_fd, aofBuffer.buf, aofBuffer.len);
     if (result == -1) {
       kvs_logError("写入AOF文件失败: %s", strerror(errno));
       return -1;
     }
-    // 成功写入后，重置缓冲区
     aofBuffer.len = 0;
+    aofBuffer.last_flush_ns = now;
+  }
+  return 0;
+#else
+  kvs_logError("多引擎模式下请使用引擎特定的flush函数");
+  return -1;
+#endif
+}
+
+int flushAofBuffer() {
+#if !ENABLE_MULTI_ENGINE
+  if (aofBuffer.len > 0 && aof_fd != -1) {
+    uint64_t now = get_monotonic_ns();
+    if (aofBuffer.len < AOF_FLUSH_MIN_SIZE &&
+        (now - aofBuffer.last_flush_ns) < AOF_FLUSH_MIN_NS) {
+      return 0;
+    }
+    return flushAofBuffer_force();
   }
   return 0;
 #else
@@ -680,28 +708,12 @@ int flushAofBuffer() {
  * @param engine_type 引擎类型: 0=array, 1=hash, 2=rbtree, 3=skiplist
  * @return 成功返回0，失败返回-1
  */
-static int flushAofBufferToEngine(int engine_type) {
+static int flushAofBufferToEngine_force(int engine_type) {
 #if ENABLE_MULTI_ENGINE
   char* aof_buf = aofBuffer[engine_type].buf;
   if (aofBuffer[engine_type].len > 0) {
-    int target_fd = -1;
-    if (engine_type == AOF_ENGINE_TYPE_ARRAY) {
-#if ENABLE_ARRAY
-      target_fd = aof_fd_array;
-#endif
-    } else if (engine_type == AOF_ENGINE_TYPE_HASH) {
-#if ENABLE_HASH
-      target_fd = aof_fd_hash;
-#endif
-    } else if (engine_type == AOF_ENGINE_TYPE_RBTREE) {
-#if ENABLE_RBTREE
-      target_fd = aof_fd_rbtree;
-#endif
-    } else if (engine_type == AOF_ENGINE_TYPE_SKIPLIST) {
-#if ENABLE_SKIPLIST
-      target_fd = aof_fd_skiplist;
-#endif
-    }
+    uint64_t now = get_monotonic_ns();
+    int target_fd = aof_fds[engine_type];
     if (target_fd != -1) {
       ssize_t result =
           write_all(target_fd, aof_buf, aofBuffer[engine_type].len);
@@ -709,9 +721,25 @@ static int flushAofBufferToEngine(int engine_type) {
         kvs_logError("写入AOF文件失败: %s", strerror(errno));
         return -1;
       }
-      // 成功写入后，重置缓冲区
       aofBuffer[engine_type].len = 0;
+      aofBuffer[engine_type].last_flush_ns = now;
     }
+  }
+  return 0;
+#else
+  return flushAofBuffer_force();
+#endif
+}
+
+static int flushAofBufferToEngine(int engine_type) {
+#if ENABLE_MULTI_ENGINE
+  if (aofBuffer[engine_type].len > 0) {
+    uint64_t now = get_monotonic_ns();
+    if (aofBuffer[engine_type].len < AOF_FLUSH_MIN_SIZE &&
+        (now - aofBuffer[engine_type].last_flush_ns) < AOF_FLUSH_MIN_NS) {
+      return 0;
+    }
+    return flushAofBufferToEngine_force(engine_type);
   }
   return 0;
 #else
@@ -776,6 +804,7 @@ int start_aof_fsync_process() {
     kvs_logError("无法打开AOF文件 %s", aof_filename_array);
     return -1;
   }
+  aof_fds[AOF_ENGINE_TYPE_ARRAY] = aof_fd_array;
   kvs_logInfo("Array引擎AOF文件已打开: %s", aof_filename_array);
 #endif
 
@@ -785,6 +814,7 @@ int start_aof_fsync_process() {
     kvs_logError("无法打开AOF文件 %s", aof_filename_hash);
     return -1;
   }
+  aof_fds[AOF_ENGINE_TYPE_HASH] = aof_fd_hash;
   kvs_logInfo("Hash引擎AOF文件已打开: %s", aof_filename_hash);
 #endif
 
@@ -795,6 +825,7 @@ int start_aof_fsync_process() {
     kvs_logError("无法打开AOF文件 %s", aof_filename_rbtree);
     return -1;
   }
+  aof_fds[AOF_ENGINE_TYPE_RBTREE] = aof_fd_rbtree;
   kvs_logInfo("Rbtree引擎AOF文件已打开: %s", aof_filename_rbtree);
 #endif
 
@@ -805,6 +836,7 @@ int start_aof_fsync_process() {
     kvs_logError("无法打开AOF文件 %s", aof_filename_skiplist);
     return -1;
   }
+  aof_fds[AOF_ENGINE_TYPE_SKIPLIST] = aof_fd_skiplist;
   kvs_logInfo("Skiplist引擎AOF文件已打开: %s", aof_filename_skiplist);
 #endif
 #else
@@ -864,6 +896,24 @@ void stop_aof_fsync_process() {
   // 等待线程结束
   pthread_join(fsync_thread, NULL);
 
+  // 强制刷新所有AOF缓冲区到文件
+#if ENABLE_MULTI_ENGINE
+#if ENABLE_ARRAY
+  flushAofBufferToEngine_force(AOF_ENGINE_TYPE_ARRAY);
+#endif
+#if ENABLE_HASH
+  flushAofBufferToEngine_force(AOF_ENGINE_TYPE_HASH);
+#endif
+#if ENABLE_RBTREE
+  flushAofBufferToEngine_force(AOF_ENGINE_TYPE_RBTREE);
+#endif
+#if ENABLE_SKIPLIST
+  flushAofBufferToEngine_force(AOF_ENGINE_TYPE_SKIPLIST);
+#endif
+#else
+  flushAofBuffer_force();
+#endif
+
   // 关闭所有AOF文件描述符
 #if ENABLE_MULTI_ENGINE
 #if ENABLE_ARRAY
@@ -871,6 +921,7 @@ void stop_aof_fsync_process() {
     fsync(aof_fd_array);  // 最后一次同步
     close(aof_fd_array);
     aof_fd_array = -1;
+    aof_fds[AOF_ENGINE_TYPE_ARRAY] = -1;
   }
 #endif
 #if ENABLE_HASH
@@ -878,6 +929,7 @@ void stop_aof_fsync_process() {
     fsync(aof_fd_hash);
     close(aof_fd_hash);
     aof_fd_hash = -1;
+    aof_fds[AOF_ENGINE_TYPE_HASH] = -1;
   }
 #endif
 #if ENABLE_RBTREE
@@ -885,6 +937,7 @@ void stop_aof_fsync_process() {
     fsync(aof_fd_rbtree);
     close(aof_fd_rbtree);
     aof_fd_rbtree = -1;
+    aof_fds[AOF_ENGINE_TYPE_RBTREE] = -1;
   }
 #endif
 #if ENABLE_SKIPLIST
@@ -892,6 +945,7 @@ void stop_aof_fsync_process() {
     fsync(aof_fd_skiplist);
     close(aof_fd_skiplist);
     aof_fd_skiplist = -1;
+    aof_fds[AOF_ENGINE_TYPE_SKIPLIST] = -1;
   }
 #endif
 #else
@@ -1281,27 +1335,10 @@ void appendToAofBufferToEngine(int engine_type, int type, const robj* key,
     }
 
     // 直接写入大命令到对应引擎的AOF文件
-    int target_fd = -1;
 #if ENABLE_MULTI_ENGINE
-    if (engine_type == AOF_ENGINE_TYPE_ARRAY) {
-#if ENABLE_ARRAY
-      target_fd = aof_fd_array;
-#endif
-    } else if (engine_type == AOF_ENGINE_TYPE_HASH) {
-#if ENABLE_HASH
-      target_fd = aof_fd_hash;
-#endif
-    } else if (engine_type == AOF_ENGINE_TYPE_RBTREE) {
-#if ENABLE_RBTREE
-      target_fd = aof_fd_rbtree;
-#endif
-    } else if (engine_type == AOF_ENGINE_TYPE_SKIPLIST) {
-#if ENABLE_SKIPLIST
-      target_fd = aof_fd_skiplist;
-#endif
-    }
+    int target_fd = aof_fds[engine_type];
 #else
-    target_fd = aof_fd;
+    int target_fd = aof_fd;
 #endif
 
     if (target_fd != -1 && write_all(target_fd, cmd_data, pos) < 0) {
@@ -1315,7 +1352,7 @@ void appendToAofBufferToEngine(int engine_type, int type, const robj* key,
 
     // [小命令]: 尝试追加到缓冲区
     if (aofBuffer[engine_type].len + total_needed > AOF_BUF_SIZE) {
-      flushAofBufferToEngine(engine_type);  // 缓冲区满，先flush
+      flushAofBufferToEngine_force(engine_type);  // 缓冲区满，强制flush
     }
   
     // 添加命令码（1字节）

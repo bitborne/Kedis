@@ -27,6 +27,7 @@
 typedef struct {
   char buf[AOF_BUF_SIZE];
   int len;
+  uint64_t last_flush_ns;
 } aof_buf_t;
 
 // AOF相关函数声明
