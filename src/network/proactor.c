@@ -16,6 +16,7 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <time.h>
 
 extern kv_config g_config;
 
@@ -56,7 +57,7 @@ extern int slave_sync_get_eventfd(void);
 extern void slave_sync_drain_backlog(msg_handler handler);
 
 /* ---------------- 外部函数声明 ---------------- */
-extern void before_sleep(void);
+extern void before_sleep(uint64_t now_ns);
 
 /* ---------------- 优雅退出支持 ---------------- */
 void proactor_stop(void) {
@@ -271,7 +272,17 @@ int proactor_start(unsigned short port, msg_handler handler) {
   conn_pool_init(&g_conn_pool, MAX_CONNS);
 
   /* 初始化 io_uring */
-  io_uring_queue_init(RING_ENTRIES, &g_ring, 0);
+  {
+    int ret = io_uring_queue_init(RING_ENTRIES, &g_ring, IORING_SETUP_SQPOLL);
+    if (ret < 0) {
+      kvs_logWarn("IORING_SETUP_SQPOLL not available (ret=%d), falling back", ret);
+      ret = io_uring_queue_init(RING_ENTRIES, &g_ring, 0);
+      if (ret < 0) {
+        kvs_logError("io_uring_queue_init failed: %d", ret);
+        return -1;
+      }
+    }
+  }
   post_accept(&g_ring, listenfd);
 
   /* 初始化从节点同步系统（如果是从节点）
@@ -310,280 +321,293 @@ int proactor_start(unsigned short port, msg_handler handler) {
 
   kvs_logInfo("Proactor server listening on port %d...", port);
 
+  struct timespec last_before_sleep = {0};
+
   while (g_proactor_running) {
-    io_uring_submit(&g_ring);
+    if (io_uring_sq_ready(&g_ring) > 0) {
+        io_uring_submit(&g_ring);
+    }
     struct io_uring_cqe* cqe;
-    
+
     // 【优雅退出】使用 100ms 超时等待，定期检查退出标志
     struct __kernel_timespec ts = {.tv_sec = 0, .tv_nsec = 100000000};
     int ret = io_uring_wait_cqe_timeout(&g_ring, &cqe, &ts);
-    
+
     if (ret == -ETIME) {
-      // 超时，继续循环检查 g_proactor_running
+      before_sleep(0);
       continue;
     }
     if (ret < 0) break;
 
-    struct conn* c = (struct conn*)io_uring_cqe_get_data(cqe);
-    int res = cqe->res;
-    io_uring_cqe_seen(&g_ring, cqe);
+    unsigned int count = 0;
+    unsigned int head;
+    io_uring_for_each_cqe(&g_ring, head, cqe) {
+      struct conn* c = (struct conn*)io_uring_cqe_get_data(cqe);
+      int res = cqe->res;
+      count++;
 
-    /* -------- accept 事件 -------- */
-    /* 通过魔数标记识别 accept_ctx */
-    if (c != NULL && c != g_event_conn) {
-      struct accept_ctx* accept_ctx = (struct accept_ctx*)c;
-      if (accept_ctx->magic == ACCEPT_CTX_MAGIC) {
-        // 【安全修复】先保存 accept 结果，然后立即释放 accept_ctx
-        // 避免在后续处理中发生 Use-After-Free
-        int new_fd = res;
-        accept_ctx_free(accept_ctx);  // 安全释放 accept_ctx
+      /* -------- accept 事件 -------- */
+      /* 通过魔数标记识别 accept_ctx */
+      if (c != NULL && c != g_event_conn) {
+        struct accept_ctx* accept_ctx = (struct accept_ctx*)c;
+        if (accept_ctx->magic == ACCEPT_CTX_MAGIC) {
+          // 【安全修复】先保存 accept 结果，然后立即释放 accept_ctx
+          // 避免在后续处理中发生 Use-After-Free
+          int new_fd = res;
+          accept_ctx_free(accept_ctx);  // 安全释放 accept_ctx
 
-        // 然后处理新连接
-        if (new_fd >= 0) {  // 新连接成功
-          struct conn* nc = conn_pool_alloc(&g_conn_pool);
-          if (!nc) {
-            close(new_fd);
-            kvs_logError("Max conns reached, rejecting connection");
-          } else {
-            nc->fd = new_fd;
-            nc->state = ST_RECV;
-            nc->wbuf = kvs_malloc(RESP_BUF_SIZE);
-            if (!nc->wbuf) {
-              conn_pool_free(&g_conn_pool, nc);
+          // 然后处理新连接
+          if (new_fd >= 0) {  // 新连接成功
+            struct conn* nc = conn_pool_alloc(&g_conn_pool);
+            if (!nc) {
               close(new_fd);
-              kvs_logError("Failed to alloc write buffer");
+              kvs_logError("Max conns reached, rejecting connection");
             } else {
-              // conn_reset(nc); -> kvs_resp_reset
-              kvs_resp_reset(nc);
-              post_recv_frame(&g_ring, nc);  // 投递第一个 recv
+              nc->fd = new_fd;
+              nc->state = ST_RECV;
+              nc->wbuf = kvs_malloc(RESP_BUF_SIZE);
+              if (!nc->wbuf) {
+                conn_pool_free(&g_conn_pool, nc);
+                close(new_fd);
+                kvs_logError("Failed to alloc write buffer");
+              } else {
+                // conn_reset(nc); -> kvs_resp_reset
+                kvs_resp_reset(nc);
+                post_recv_frame(&g_ring, nc);  // 投递第一个 recv
+              }
             }
+            post_accept(&g_ring, listenfd);  // 继续监听
+          } else {
+            if (new_fd != -EAGAIN && new_fd != -EINTR) perror("accept");
+            post_accept(&g_ring, listenfd);
           }
-          post_accept(&g_ring, listenfd);  // 继续监听
+          continue;
+        }  // 关闭 if (accept_ctx->magic == ACCEPT_CTX_MAGIC)
+      }  // 关闭 if (c != NULL && c != g_event_conn)
+
+      /* ========================================================================
+       * eventfd 事件处理（RDMA 同步完成通知）
+       *
+       * 【v3.0 架构】线程间通信机制
+       *
+       * 触发流程：
+       *   RDMA 线程完成同步 -> 更新 g_sync_state -> 写入 eventfd ->
+       *   io_uring 检测到可读 -> 这里处理 -> 回放积压队列
+       *
+       * 设计要点：
+       *   - 无锁：eventfd 是单生产者（RDMA 线程）单消费者（主线程）
+       *   - 幂等：即使多次通知，状态检查防止重复回放
+       *   - 容错：错误后重新投递 read 请求，确保不错过后续通知
+       * ======================================================================== */
+      if (g_event_conn && c == g_event_conn) {
+        if (res > 0) {
+          /* 成功读取通知值（8 字节 uint64_t） */
+          uint64_t notify_val = g_event_buf;
+          kvs_logInfo("[Proactor] 收到 RDMA 完成通知，值=%lu", (unsigned long)notify_val);
+
+          /* ------------------------------------------------------------------
+           * 【关键】状态检查，防止重复处理或异常状态处理
+           *
+           * 场景1: 正常完成 -> READY -> 回放积压
+           * 场景2: RDMA 失败 -> IDLE -> 积压已清空，无需回放
+           * 场景3: 重复通知 -> 状态已为 READY，积压为空，安全
+           * ------------------------------------------------------------------ */
+          extern int slave_sync_get_state(void);
+          int current_state = slave_sync_get_state();
+
+          if (current_state == SLAVE_STATE_READY) {
+            /* 正常路径：RDMA 成功，需要回放积压队列 */
+            extern void slave_sync_drain_backlog(msg_handler handler);
+            slave_sync_drain_backlog(g_kvs_handler);
+            kvs_logInfo("[Proactor] 积压队列回放完成");
+          } else if (current_state == SLAVE_STATE_IDLE) {
+            /* RDMA 线程可能失败了，积压队列已被清空 */
+            kvs_logWarn("[Proactor] RDMA 同步失败（状态为 IDLE），无需回放");
+          } else if (current_state == SLAVE_STATE_SYNCING) {
+            /* 竞态条件：通知早于状态更新到达
+             * 策略：继续等待下一次通知（RDMA 线程会再发一次） */
+            kvs_logWarn("[Proactor] 收到通知但状态仍为 SYNCING，等待下次通知");
+          } else {
+            /* 未知状态，记录错误 */
+            kvs_logError("[Proactor] 未知同步状态: %d", current_state);
+          }
+
+          /* 重新投递 read 请求，支持多次同步（如 REPLICAOF 切换到新主） */
+          post_read_eventfd(&g_ring, g_event_fd, &g_event_buf);
+
+        } else if (res < 0) {
+          /* ------------------------------------------------------------------
+           * 错误处理
+           * -EAGAIN: 非阻塞模式下无数据可读（不应发生，io_uring 已触发）
+           * -EINTR:  被信号中断，可以安全重试
+           * 其他：    严重错误，记录并尝试恢复
+           * ------------------------------------------------------------------ */
+          if (res == -EAGAIN || res == -EINTR) {
+            /* 可重试错误，重新投递 read 请求 */
+            kvs_logDebug("[Proactor] eventfd 可重试错误: %d，重新投递", res);
+            post_read_eventfd(&g_ring, g_event_fd, &g_event_buf);
+          } else {
+            /* 严重错误，记录但不退出（eventfd 可能仍可恢复） */
+            kvs_logError("[Proactor] eventfd 错误: %d，尝试恢复", res);
+            post_read_eventfd(&g_ring, g_event_fd, &g_event_buf);
+          }
         } else {
-          if (new_fd != -EAGAIN && new_fd != -EINTR) perror("accept");
-          post_accept(&g_ring, listenfd);
+          /* res == 0: 对端关闭 eventfd（不应发生，eventfd 是匿名管道） */
+          kvs_logWarn("[Proactor] eventfd 返回 0（对端关闭？），重新注册");
+          post_read_eventfd(&g_ring, g_event_fd, &g_event_buf);
         }
         continue;
-      }  // 关闭 if (accept_ctx->magic == ACCEPT_CTX_MAGIC)
-    }  // 关闭 if (c != NULL && c != g_event_conn)
+      }
 
-    /* =========================================================================
-     * eventfd 事件处理（RDMA 同步完成通知）
-     *
-     * 【v3.0 架构】线程间通信机制
-     *
-     * 触发流程：
-     *   RDMA 线程完成同步 -> 更新 g_sync_state -> 写入 eventfd ->
-     *   io_uring 检测到可读 -> 这里处理 -> 回放积压队列
-     *
-     * 设计要点：
-     *   - 无锁：eventfd 是单生产者（RDMA 线程）单消费者（主线程）
-     *   - 幂等：即使多次通知，状态检查防止重复回放
-     *   - 容错：错误后重新投递 read 请求，确保不错过后续通知
-     * ========================================================================= */
-    if (g_event_conn && c == g_event_conn) {
-      if (res > 0) {
-        /* 成功读取通知值（8 字节 uint64_t） */
-        uint64_t notify_val = g_event_buf;
-        kvs_logInfo("[Proactor] 收到 RDMA 完成通知，值=%lu", (unsigned long)notify_val);
+      /* -------- 读写错误 -------- */
+      if (res < 0) {
+        if (res == -EAGAIN || res == -EINTR) {  // 可重试
+          if (c->state == ST_RECV) post_recv_frame(&g_ring, c);
+          if (c->state == ST_SEND) post_send_resp(&g_ring, c);
+        } else {  // 致命错误
+          conn_free(c);
+          conn_pool_free(&g_conn_pool, c);
+        }
+        continue;
+      }
 
-        /* ------------------------------------------------------------------
-         * 【关键】状态检查，防止重复处理或异常状态处理
-         *
-         * 场景1: 正常完成 -> READY -> 回放积压
-         * 场景2: RDMA 失败 -> IDLE -> 积压已清空，无需回放
-         * 场景3: 重复通知 -> 状态已为 READY，积压为空，安全
-         * ------------------------------------------------------------------ */
-        extern int slave_sync_get_state(void);
-        int current_state = slave_sync_get_state();
+      /* -------- 正常业务 -------- */
+      switch (c->state) {
+        // 来了一个请求, 处理一下
+        case ST_RECV: {
+          if (res == 0) {  // EOF，客户端关闭连接
+            conn_free(c);
+            conn_pool_free(&g_conn_pool, c);
+            break;
+          } else if (res > 0) {
+            // 将新接收的数据追加到 rbuf 的末尾
+            // 注意：c->rlen 是当前 rbuf 中的有效数据长度
+            // 新数据从 c->rbuf + c->rlen 的位置开始写入
 
-        if (current_state == SLAVE_STATE_READY) {
-          /* 正常路径：RDMA 成功，需要回放积压队列 */
-          extern void slave_sync_drain_backlog(msg_handler handler);
-          slave_sync_drain_backlog(g_kvs_handler);
-          kvs_logInfo("[Proactor] 积压队列回放完成");
-        } else if (current_state == SLAVE_STATE_IDLE) {
-          /* RDMA 线程可能失败了，积压队列已被清空 */
-          kvs_logWarn("[Proactor] RDMA 同步失败（状态为 IDLE），无需回放");
-        } else if (current_state == SLAVE_STATE_SYNCING) {
-          /* 竞态条件：通知早于状态更新到达
-           * 策略：继续等待下一次通知（RDMA 线程会再发一次） */
-          kvs_logWarn("[Proactor] 收到通知但状态仍为 SYNCING，等待下次通知");
-        } else {
-          /* 未知状态，记录错误 */
-          kvs_logError("[Proactor] 未知同步状态: %d", current_state);
+            // [可以作为最高级日志级别的打印信息]
+          //   kvs_logDebug("r->len == %zu", c->rlen);
+          //   kvs_logDebug("recv (%d bytes):\n%.*s\n====", res, res, c->rbuf + c->rlen);
+
+            c->rlen += res;  // 累加接收的字节数（不是覆盖）
+            c->parse_done = 0;
+
+#if ENABLE_ECHO_MODE
+            echo_handler(c);
+            post_send_resp(&g_ring, c);
+#else
+            int ret = kvs_resp_feed(c);
+            // fprintf(stderr, "==> ret = %d\n", ret);
+            if (ret == RESP_ERROR) {
+              // 协议错误，关闭连接
+              kvs_logError("kvs_resp_feed: RESP parse error");
+              conn_free(c);
+              conn_pool_free(&g_conn_pool, c);
+            } else if (ret == RESP_PARSE_OK) {
+              kvs_logDebug("RESP parse OK");
+              // 解析完成，处理命令
+              processCommand(c);
+              // 切换到发送状态
+              c->state = ST_SEND;
+              // 投递发送请求
+              // fprintf(stderr, "==> after process wbuf: %*s\n", c->wbuf, RESP_BUF_SIZE);
+              post_send_resp(&g_ring, c);
+            } else if (ret == RESP_CONTINUE_RECV) {
+                kvs_logDebug("RESP continue recv");
+              // ret == 0，需要更多数据
+              // 提交 recv 请求，等待更多数据
+              post_recv_frame(&g_ring, c);
+            }
+#endif
+          }
+          break;
         }
 
-        /* 重新投递 read 请求，支持多次同步（如 REPLICAOF 切换到新主） */
-        post_read_eventfd(&g_ring, g_event_fd, &g_event_buf);
-
-      } else if (res < 0) {
-        /* ------------------------------------------------------------------
-         * 错误处理
-         * -EAGAIN: 非阻塞模式下无数据可读（不应发生，io_uring 已触发）
-         * -EINTR:  被信号中断，可以安全重试
-         * 其他：    严重错误，记录并尝试恢复
-         * ------------------------------------------------------------------ */
-        if (res == -EAGAIN || res == -EINTR) {
-          /* 可重试错误，重新投递 read 请求 */
-          kvs_logDebug("[Proactor] eventfd 可重试错误: %d，重新投递", res);
-          post_read_eventfd(&g_ring, g_event_fd, &g_event_buf);
-        } else {
-          /* 严重错误，记录但不退出（eventfd 可能仍可恢复） */
-          kvs_logError("[Proactor] eventfd 错误: %d，尝试恢复", res);
-          post_read_eventfd(&g_ring, g_event_fd, &g_event_buf);
-        }
-      } else {
-        /* res == 0: 对端关闭 eventfd（不应发生，eventfd 是匿名管道） */
-        kvs_logWarn("[Proactor] eventfd 返回 0（对端关闭？），重新注册");
-        post_read_eventfd(&g_ring, g_event_fd, &g_event_buf);
-      }
-      continue;
-    }
-
-    /* -------- 读写错误 -------- */
-    if (res < 0) {
-      if (res == -EAGAIN || res == -EINTR) {  // 可重试
-        if (c->state == ST_RECV) post_recv_frame(&g_ring, c);
-        if (c->state == ST_SEND) post_send_resp(&g_ring, c);
-      } else {  // 致命错误
-        conn_free(c);
-        conn_pool_free(&g_conn_pool, c);
-      }
-      continue;
-    }
-
-    /* -------- 正常业务 -------- */
-    switch (c->state) {
-      // 来了一个请求, 处理一下
-      case ST_RECV: {
-        if (res == 0) {  // EOF，客户端关闭连接
+        // 发我们准备好的数据过去
+        case ST_SEND: {
+          if (c->wlen != (size_t)res) { // 数据未发完(比较少见)
+            c->wbuf += res;
+            c->wlen -= res;
+            post_send_resp(&g_ring, c);  // 提交剩余部分
+            break;
+          }
+          c->wlen = 0;
+          // fprintf(stderr, "======= start =======\n");
+          if (c->send_st == ST_SEND_SMALL) {
+            kvs_logDebug("SEND: Small response");
+            // fprintf(stderr, "=======  small \n");
+            // 可以断言数据已经发完了
+            c->state = ST_RECV;
+            c->bulk_p = c->bulk_data = NULL;
+            c->bulk_sent = 0;
+            c->bulk_tt = 0;
+            c->hdr_len = 0;
+            c->wlen = 0;
+            post_recv_frame(&g_ring, c);
+            break;
+          } else {
+              if (c->send_st == ST_SEND_HDR_SENT) {
+                kvs_logDebug("SEND: Header sented");
+                c->bulk_sent += res - c->hdr_len;
+                c->send_st = ST_SEND_BULK;
+              }
+              else if (c->send_st == ST_SEND_BULK) {
+                kvs_logDebug("SEND: Bulk data sending");
+                c->bulk_sent += res;
+              } else {
+                kvs_logError("ST_SEND_NOTSET\n");
+                conn_free(c);
+                conn_pool_free(&g_conn_pool, c);
+              }
+              c->bulk_p = c->bulk_data + c->bulk_sent;
+              if (c->bulk_sent < c->bulk_tt) {
+                // 1. 计算当前这一波该发多少
+                // 逻辑：剩下的数据量 和 缓冲区大小，谁小取谁
+                size_t remain = c->bulk_tt - c->bulk_sent;
+                size_t avail = RESP_BUF_SIZE - c->wlen;
+                size_t cp = (avail < remain ? avail : remain);
+                // 2. 将数据拷贝到定长缓冲区（或直接从原内存地址发送）
+                memcpy(c->wbuf + c->wlen, c->bulk_p, cp);
+                c->wlen += cp;
+                if (remain <= avail) {
+                  c->wbuf[c->wlen - 2] = '\r';
+                  c->wbuf[c->wlen - 1] = '\n';
+                } else if (remain == avail + 1) {
+                  c->wbuf[c->wlen - 1] = '\r';
+                } else if (remain == 1) {
+                  c->wbuf[c->wlen] = '\n';
+                }
+                post_send_resp(&g_ring, c);
+              } else {
+                // bulk 发完了!
+                kvs_logDebug("SEND: Bulk data OVER!");
+                c->state = ST_RECV;
+                c->bulk_p = c->bulk_data = NULL;
+                c->bulk_sent = 0;
+                c->bulk_tt = 0;
+                c->hdr_len = 0;
+                c->wlen = 0;
+                post_recv_frame(&g_ring, c);
+              }
+            }
+            break;
+          }
+        case ST_CLOSE: {
           conn_free(c);
           conn_pool_free(&g_conn_pool, c);
           break;
-        } else if (res > 0) {
-          // 将新接收的数据追加到 rbuf 的末尾
-          // 注意：c->rlen 是当前 rbuf 中的有效数据长度
-          // 新数据从 c->rbuf + c->rlen 的位置开始写入
-
-          // [可以作为最高级日志级别的打印信息]
-        //   kvs_logDebug("r->len == %zu", c->rlen);
-        //   kvs_logDebug("recv (%d bytes):\n%.*s\n====", res, res, c->rbuf + c->rlen);
-
-          c->rlen += res;  // 累加接收的字节数（不是覆盖）
-          c->parse_done = 0;
-          
-#if ENABLE_ECHO_MODE
-          echo_handler(c);
-          post_send_resp(&g_ring, c);
-#else
-          int ret = kvs_resp_feed(c);
-          // fprintf(stderr, "==> ret = %d\n", ret);
-          if (ret == RESP_ERROR) {
-            // 协议错误，关闭连接
-            kvs_logError("kvs_resp_feed: RESP parse error");
-            conn_free(c);
-            conn_pool_free(&g_conn_pool, c);
-          } else if (ret == RESP_PARSE_OK) {
-            kvs_logDebug("RESP parse OK");
-            // 解析完成，处理命令
-            processCommand(c);
-            // 切换到发送状态
-            c->state = ST_SEND;
-            // 投递发送请求
-            // fprintf(stderr, "==> after process wbuf: %*s\n", c->wbuf, RESP_BUF_SIZE);
-            post_send_resp(&g_ring, c);
-          } else if (ret == RESP_CONTINUE_RECV) {
-              kvs_logDebug("RESP continue recv");
-            // ret == 0，需要更多数据
-            // 提交 recv 请求，等待更多数据
-            post_recv_frame(&g_ring, c);
-          }
-#endif
         }
-        break;
-      }
+      }  // switch
+    }
+    io_uring_cq_advance(&g_ring, count);
 
-      // 发我们准备好的数据过去
-      case ST_SEND: {
-        if (c->wlen != res) { // 数据未发完(比较少见)
-          kvs_logError("wlen != sent");
-          // 简易处理, 不管提交了多少, 整个 wbuf 全部重新提交
-          post_send_resp(&g_ring, c);  // 重新提交 
-          break;
-        }
-        c->wlen = 0;
-        memset(c->wbuf, 0, RESP_BUF_SIZE);
-        // fprintf(stderr, "======= start =======\n");
-        if (c->send_st == ST_SEND_SMALL) {
-          kvs_logDebug("SEND: Small response");
-          // fprintf(stderr, "=======  small \n");
-          // 可以断言数据已经发完了
-          c->state = ST_RECV;
-          c->bulk_p = c->bulk_data = NULL;
-          c->bulk_sent = 0;
-          c->bulk_tt = 0;
-          memset(c->wbuf, 0, RESP_BUF_SIZE);
-          c->hdr_len = 0;
-          c->wlen = 0;
-          post_recv_frame(&g_ring, c);
-          break;
-        } else {
-            if (c->send_st == ST_SEND_HDR_SENT) {
-              kvs_logDebug("SEND: Header sented");
-              c->bulk_sent += res - c->hdr_len;
-              c->send_st = ST_SEND_BULK;
-            }
-            else if (c->send_st == ST_SEND_BULK) {
-              kvs_logDebug("SEND: Bulk data sending");
-              c->bulk_sent += res;
-            } else {
-              kvs_logError("ST_SEND_NOTSET\n");
-              conn_free(c);
-              conn_pool_free(&g_conn_pool, c);
-            }
-            c->bulk_p = c->bulk_data + c->bulk_sent;
-            if (c->bulk_sent < c->bulk_tt) {
-              // 1. 计算当前这一波该发多少
-              // 逻辑：剩下的数据量 和 缓冲区大小，谁小取谁
-              size_t remain = c->bulk_tt - c->bulk_sent;
-              size_t avail = RESP_BUF_SIZE - c->wlen;
-              size_t cp = (avail < remain ? avail : remain);
-              // 2. 将数据拷贝到定长缓冲区（或直接从原内存地址发送）
-              memcpy(c->wbuf + c->wlen, c->bulk_p, cp);
-              c->wlen += cp;
-              if (remain <= avail) {
-                c->wbuf[c->wlen - 2] = '\r';
-                c->wbuf[c->wlen - 1] = '\n';
-              } else if (remain == avail + 1) {
-                c->wbuf[c->wlen - 1] = '\r';
-              } else if (remain == 1) {
-                c->wbuf[c->wlen] = '\n';
-              }
-              post_send_resp(&g_ring, c);
-            } else {
-              // bulk 发完了!
-              kvs_logDebug("SEND: Bulk data OVER!");
-              c->state = ST_RECV;
-              c->bulk_p = c->bulk_data = NULL;
-              c->bulk_sent = 0;
-              c->bulk_tt = 0;
-              memset(c->wbuf, 0, RESP_BUF_SIZE);
-              c->hdr_len = 0;
-              c->wlen = 0;
-              post_recv_frame(&g_ring, c);
-            }
-          }
-          break;
-        }
-      case ST_CLOSE: {
-        conn_free(c);
-        conn_pool_free(&g_conn_pool, c);
-        break;
-      }
-    }  // switch
-
-    before_sleep();
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    uint64_t now_ns = (uint64_t)now.tv_sec * 1000000000ULL + now.tv_nsec;
+    uint64_t last_ns = (uint64_t)last_before_sleep.tv_sec * 1000000000ULL + last_before_sleep.tv_nsec;
+    if (count == 0 || now_ns - last_ns >= 1000000ULL) { // 至少每 1ms 调用一次
+      before_sleep(now_ns);
+      last_before_sleep = now;
+    }
   } /* while */
 
   close(listenfd);
