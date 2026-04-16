@@ -8,6 +8,7 @@
 #include <errno.h>
 #include <liburing.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -377,6 +378,8 @@ int proactor_start(unsigned short port, msg_handler handler) {
             } else {
               nc->fd = new_fd;
               nc->state = ST_RECV;
+              int nodelay = 1;
+              setsockopt(new_fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
               nc->wbuf = kvs_malloc(RESP_BUF_SIZE);
               if (!nc->wbuf) {
                 conn_pool_free(&g_conn_pool, nc);
