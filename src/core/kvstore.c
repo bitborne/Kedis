@@ -618,28 +618,17 @@ void add_reply_bulk_len(struct conn* c, char* str, size_t len) {
                 return;
         }
 
-        c->bulk_tt = len + 2; // 为了 \r\n
+        c->bulk_tt = len; // body 原始长度，尾部 \r\n 单独发送
         c->bulk_data = str;
         char hdr_buf[32];
         c->hdr_len = sprintf(hdr_buf, "$%zu\r\n", len);
 
-        memcpy(c->wbuf + c->wlen, hdr_buf, c->hdr_len);
-        c->wlen += c->hdr_len;
-
-        size_t avail = RESP_BUF_SIZE - c->wlen;
-        size_t remain = c->bulk_tt - c->bulk_sent;
-        size_t cp = avail < remain ? avail : remain;
-        memcpy(c->wbuf + c->wlen, str, cp);
-
-        c->wlen += cp;
-        if (remain <= avail) {
-            c->wbuf[c->wlen - 2] = '\r';
-            c->wbuf[c->wlen - 1] = '\n';
-        } else if (remain == avail + 1) {
-            c->wbuf[c->wlen - 1] = '\r';
-        } else if (remain == 1) {
-            c->wbuf[c->wlen] = '\n';
-        }
+        memcpy(c->wbuf, hdr_buf, c->hdr_len);
+        // 预先把 \r\n 放在 header 后面，稍后最后发送
+        memcpy(c->wbuf + c->hdr_len, "\r\n", 2);
+        c->wlen = c->hdr_len;
+        c->wbuf_off = 0;
+        c->bulk_sent = 0;
 
         c->send_st = ST_SEND_HDR_SENT;
 }

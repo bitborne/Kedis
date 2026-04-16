@@ -2,6 +2,7 @@
 #define __KVS_NETWORK_H__
 
 #include <stddef.h>
+#include <sys/socket.h>  /* for struct msghdr / iovec */
 
 /* ---------------- 常量定义 ---------------- */
 #define IOP_SIZE (4 * 1024)               // 每次 recv/send 的帧大小（16 KB）
@@ -39,13 +40,19 @@ typedef struct {
 } robj;
 
 /* ---------------- 连接上下文 ---------------- */
+/*
+ * 警告：struct conn 的字段布局被 mirror/src/uprobe_mirror.bpf.c 硬编码引用。
+ * 任何修改（增删字段、改变顺序、调整对齐）都必须同步更新该 BPF 文件中的
+ * CONN_FD_OFFSET / CONN_RLEN_OFFSET / CONN_PARSE_DONE_OFFSET / CONN_RBUF_OFFSET。
+ */
 struct conn {
   /* === 热字段：事件循环高频访问，集中在前 64-128 字节 === */
   int fd;                // TCP 套接字
   int state;             // io_uring 状态：ST_RECV / ST_SEND / ST_CLOSE
   int next_free;         // 空闲链表中的下一个连接索引
   size_t rlen;           // 缓冲区内有效数据长度
-  size_t wlen;           // wbuf 有效长度 & 已发长度
+  size_t wlen;           // wbuf 有效数据总长度
+  size_t wbuf_off;       // wbuf 已发送偏移（保持 wbuf 指针不动）
   size_t parse_done;     // 缓冲区内已解析长度
   resp_state_t resp_state;
   size_t bulk_len;       // 当前段长度 (需要读取的长度)
@@ -64,6 +71,10 @@ struct conn {
   char* bulk_data;       // 大数据源指针（用于流式发送）
   char* bulk_p;
   char* wbuf;            // 回包缓冲（+OK\r\n 或 $len\r\n...）
+
+  /* sendmsg 零拷贝用的持久化结构（避免栈上 msghdr 被提前释放） */
+  struct iovec send_iov[2];
+  struct msghdr send_msg;
 };
 
 // 消息处理回调函数定义

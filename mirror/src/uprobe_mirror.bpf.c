@@ -20,11 +20,15 @@ struct {
     __type(value, __u64);
 } debug_stats SEC(".maps");
 
-// conn 结构体偏移量（基于实际计算）
+/*
+ * 警告：以下偏移量必须与 include/kvs_network.h 中的 struct conn 布局严格同步。
+ * 修改 struct conn 后请务必重新计算并更新这些宏。
+ * 当前偏移基于缓存行优化后的布局（热字段在前，大缓冲区在后）。
+ */
 #define CONN_FD_OFFSET         0
-#define CONN_RBUF_OFFSET       12
-#define CONN_RLEN_OFFSET       4112
-#define CONN_PARSE_DONE_OFFSET 4120
+#define CONN_RLEN_OFFSET       16
+#define CONN_PARSE_DONE_OFFSET 40
+#define CONN_RBUF_OFFSET       112
 
 SEC("uprobe/kvs_resp_feed")
 int BPF_KPROBE(uprobe_kvs_resp_feed, void *c)

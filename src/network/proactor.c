@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/uio.h>
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <time.h>
@@ -163,7 +164,27 @@ static void post_send_resp(struct io_uring* ring, struct conn* c) {
   // 获取一个 SQE（提交队列条目）
   struct io_uring_sqe* sqe = sqe_prep(ring, c);
   // if (g_100++ <= 100) fprintf(stderr, "--> c->wbuf : %*s\n", c->wlen, c->wbuf);
-  io_uring_prep_send(sqe, c->fd, c->wbuf, c->wlen, 0);
+  if (c->send_st == ST_SEND_BULK) {
+    io_uring_prep_send(sqe, c->fd, c->bulk_data + c->bulk_sent, c->bulk_tt - c->bulk_sent, 0);
+  } else {
+    io_uring_prep_send(sqe, c->fd, c->wbuf + c->wbuf_off, c->wlen - c->wbuf_off, 0);
+  }
+}
+
+/* ---------------- 提交异步 bulk send：sendmsg + iovec[2] 零拷贝 ---------------- */
+static void post_send_bulk(struct io_uring* ring, struct conn* c) {
+  size_t hdr_remain = c->hdr_len - c->wbuf_off;
+  c->send_iov[0].iov_base = c->wbuf + c->wbuf_off;
+  c->send_iov[0].iov_len = hdr_remain;
+  c->send_iov[1].iov_base = c->bulk_data + c->bulk_sent;
+  c->send_iov[1].iov_len = c->bulk_tt - c->bulk_sent;
+
+  memset(&c->send_msg, 0, sizeof(c->send_msg));
+  c->send_msg.msg_iov = c->send_iov;
+  c->send_msg.msg_iovlen = 2;
+
+  struct io_uring_sqe* sqe = sqe_prep(ring, c);
+  io_uring_prep_sendmsg(sqe, c->fd, &c->send_msg, 0);
 }
 
 /* ---------------- 提交异步 read：用于 eventfd ---------------- */
@@ -515,73 +536,65 @@ int proactor_start(unsigned short port, msg_handler handler) {
 
         // 发我们准备好的数据过去
         case ST_SEND: {
-          if (c->wlen != (size_t)res) { // 数据未发完(比较少见)
-            c->wbuf += res;
-            c->wlen -= res;
-            post_send_resp(&g_ring, c);  // 提交剩余部分
-            break;
-          }
-          c->wlen = 0;
-          // fprintf(stderr, "======= start =======\n");
           if (c->send_st == ST_SEND_SMALL) {
+            if (c->wlen - c->wbuf_off != (size_t)res) {
+              c->wbuf_off += res;
+              post_send_resp(&g_ring, c);
+              break;
+            }
+            c->wlen = 0;
+            c->wbuf_off = 0;
             kvs_logDebug("SEND: Small response");
-            // fprintf(stderr, "=======  small \n");
-            // 可以断言数据已经发完了
             c->state = ST_RECV;
             c->bulk_p = c->bulk_data = NULL;
             c->bulk_sent = 0;
             c->bulk_tt = 0;
             c->hdr_len = 0;
-            c->wlen = 0;
             post_recv_frame(&g_ring, c);
             break;
-          } else {
-              if (c->send_st == ST_SEND_HDR_SENT) {
-                kvs_logDebug("SEND: Header sented");
-                c->bulk_sent += res - c->hdr_len;
-                c->send_st = ST_SEND_BULK;
-              }
-              else if (c->send_st == ST_SEND_BULK) {
-                kvs_logDebug("SEND: Bulk data sending");
-                c->bulk_sent += res;
-              } else {
-                kvs_logError("ST_SEND_NOTSET\n");
-                conn_free(c);
-                conn_pool_free(&g_conn_pool, c);
-              }
-              c->bulk_p = c->bulk_data + c->bulk_sent;
-              if (c->bulk_sent < c->bulk_tt) {
-                // 1. 计算当前这一波该发多少
-                // 逻辑：剩下的数据量 和 缓冲区大小，谁小取谁
-                size_t remain = c->bulk_tt - c->bulk_sent;
-                size_t avail = RESP_BUF_SIZE - c->wlen;
-                size_t cp = (avail < remain ? avail : remain);
-                // 2. 将数据拷贝到定长缓冲区（或直接从原内存地址发送）
-                memcpy(c->wbuf + c->wlen, c->bulk_p, cp);
-                c->wlen += cp;
-                if (remain <= avail) {
-                  c->wbuf[c->wlen - 2] = '\r';
-                  c->wbuf[c->wlen - 1] = '\n';
-                } else if (remain == avail + 1) {
-                  c->wbuf[c->wlen - 1] = '\r';
-                } else if (remain == 1) {
-                  c->wbuf[c->wlen] = '\n';
-                }
-                post_send_resp(&g_ring, c);
-              } else {
-                // bulk 发完了!
-                kvs_logDebug("SEND: Bulk data OVER!");
-                c->state = ST_RECV;
-                c->bulk_p = c->bulk_data = NULL;
-                c->bulk_sent = 0;
-                c->bulk_tt = 0;
-                c->hdr_len = 0;
-                c->wlen = 0;
-                post_recv_frame(&g_ring, c);
-              }
+          }
+
+          if (c->send_st == ST_SEND_HDR_SENT) {
+            size_t hdr_remain = c->hdr_len - c->wbuf_off;
+            if ((size_t)res < hdr_remain) {
+              c->wbuf_off += res;
+              post_send_bulk(&g_ring, c);
+              break;
             }
+            c->bulk_sent = res - hdr_remain;
+            c->wbuf_off = c->hdr_len;
+            if (c->bulk_sent < c->bulk_tt) {
+              c->send_st = ST_SEND_BULK;
+              post_send_bulk(&g_ring, c);
+              break;
+            }
+            // header + body 全发完，发送尾部 \r\n
+            c->send_st = ST_SEND_SMALL;
+            c->wlen = c->hdr_len + 2;
+            c->wbuf_off = c->hdr_len;
+            post_send_resp(&g_ring, c);
             break;
           }
+
+          if (c->send_st == ST_SEND_BULK) {
+            c->bulk_sent += res;
+            if (c->bulk_sent < c->bulk_tt) {
+              post_send_resp(&g_ring, c);
+              break;
+            }
+            // body 发完，发送尾部 \r\n
+            c->send_st = ST_SEND_SMALL;
+            c->wlen = c->hdr_len + 2;
+            c->wbuf_off = c->hdr_len;
+            post_send_resp(&g_ring, c);
+            break;
+          }
+
+          kvs_logError("ST_SEND unknown state\n");
+          conn_free(c);
+          conn_pool_free(&g_conn_pool, c);
+          break;
+        }
         case ST_CLOSE: {
           conn_free(c);
           conn_pool_free(&g_conn_pool, c);

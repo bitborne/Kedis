@@ -8,7 +8,7 @@ void kvs_resp_reset(struct conn* c) {
   int argc_done = c->argc_done; // 先保存，因为后续要清零
 
   c->rlen = 0;                  // 重置读缓冲区有效数据长度
-  c->wlen = c->bulk_sent = 0;       // 重置写缓冲区长度和已发送长度
+  c->wlen = c->wbuf_off = c->bulk_sent = 0;       // 重置写缓冲区长度和已发送长度
   c->bulk_p = NULL;
   c->send_st = ST_SEND_NOTSET;
   c->resp_state = ST_RESP_HDR;  // 重置 RESP 解析状态为等待解析命令头
