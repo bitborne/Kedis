@@ -611,6 +611,9 @@ void add_reply_status(struct conn* c, const char* status) {
 }
 
 // 发送批量字符串回复 ($len...)，带已知长度
+// 小 value（<= 1024 字节）直接拷贝到 wbuf 一次性发送，避免零拷贝的额外 io_uring 往返
+#define BULK_ZEROCOPY_THRESHOLD 1024
+
 void add_reply_bulk_len(struct conn* c, char* str, size_t len) {
         // 如果 str 为 NULL，返回 Null Bulk String
         if (str == NULL) {
@@ -618,10 +621,24 @@ void add_reply_bulk_len(struct conn* c, char* str, size_t len) {
                 return;
         }
 
+        char hdr_buf[32];
+        size_t hdr_len = sprintf(hdr_buf, "$%zu\r\n", len);
+
+        if (len <= BULK_ZEROCOPY_THRESHOLD) {
+                // 小 value 快速路径：直接写入 wbuf，单次 send 完成
+                memcpy(c->wbuf, hdr_buf, hdr_len);
+                memcpy(c->wbuf + hdr_len, str, len);
+                memcpy(c->wbuf + hdr_len + len, "\r\n", 2);
+                c->wlen = hdr_len + len + 2;
+                c->wbuf_off = 0;
+                c->send_st = ST_SEND_SMALL;
+                return;
+        }
+
+        // 大 value 零拷贝路径：sendmsg + iovec[2]
         c->bulk_tt = len; // body 原始长度，尾部 \r\n 单独发送
         c->bulk_data = str;
-        char hdr_buf[32];
-        c->hdr_len = sprintf(hdr_buf, "$%zu\r\n", len);
+        c->hdr_len = hdr_len;
 
         memcpy(c->wbuf, hdr_buf, c->hdr_len);
         // 预先把 \r\n 放在 header 后面，稍后最后发送
