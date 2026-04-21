@@ -164,28 +164,7 @@ static void post_recv_frame(struct io_uring* ring, struct conn* c) {
 static void post_send_resp(struct io_uring* ring, struct conn* c) {
   // 获取一个 SQE（提交队列条目）
   struct io_uring_sqe* sqe = sqe_prep(ring, c);
-  // if (g_100++ <= 100) fprintf(stderr, "--> c->wbuf : %*s\n", c->wlen, c->wbuf);
-  if (c->send_st == ST_SEND_BULK) {
-    io_uring_prep_send(sqe, c->fd, c->bulk_data + c->bulk_sent, c->bulk_tt - c->bulk_sent, 0);
-  } else {
-    io_uring_prep_send(sqe, c->fd, c->wbuf + c->wbuf_off, c->wlen - c->wbuf_off, 0);
-  }
-}
-
-/* ---------------- 提交异步 bulk send：sendmsg + iovec[2] 零拷贝 ---------------- */
-static void post_send_bulk(struct io_uring* ring, struct conn* c) {
-  size_t hdr_remain = c->hdr_len - c->wbuf_off;
-  c->send_iov[0].iov_base = c->wbuf + c->wbuf_off;
-  c->send_iov[0].iov_len = hdr_remain;
-  c->send_iov[1].iov_base = c->bulk_data + c->bulk_sent;
-  c->send_iov[1].iov_len = c->bulk_tt - c->bulk_sent;
-
-  memset(&c->send_msg, 0, sizeof(c->send_msg));
-  c->send_msg.msg_iov = c->send_iov;
-  c->send_msg.msg_iovlen = 2;
-
-  struct io_uring_sqe* sqe = sqe_prep(ring, c);
-  io_uring_prep_sendmsg(sqe, c->fd, &c->send_msg, 0);
+  io_uring_prep_send(sqe, c->fd, c->wbuf + c->wbuf_off, c->wlen - c->wbuf_off, 0);
 }
 
 /* ---------------- 提交异步 read：用于 eventfd ---------------- */
@@ -267,6 +246,46 @@ static int processCommand(struct conn* c) {
   // 直接调用核心逻辑
   // 核心逻辑会根据 c->argv 处理命令，并将结果写入 c->wbuf
   return g_kvs_handler(c);
+}
+
+/* --------------  pipeline 主循环：批量解析并执行命令  -------------- */
+static void run_pipeline(struct io_uring* ring, struct conn* c) {
+  while (1) {
+    int ret = kvs_resp_feed(c);
+    if (ret == RESP_ERROR) {
+      kvs_logError("kvs_resp_feed: RESP parse error");
+      conn_free(c);
+      conn_pool_free(&g_conn_pool, c);
+      return;
+    } else if (ret == RESP_CONTINUE_RECV) {
+      kvs_logDebug("RESP continue recv");
+      flush_all_aof_buffers_now();
+      if (c->wlen > 0) {
+        c->state = ST_SEND;
+        post_send_resp(ring, c);
+      } else {
+        post_recv_frame(ring, c);
+      }
+      return;
+    } else if (ret == RESP_PARSE_OK) {
+      kvs_logDebug("RESP parse OK");
+      processCommand(c);
+      kvs_resp_pipeline_next(c);
+      if (c->send_st == ST_SEND_HDR_SENT) {
+        flush_all_aof_buffers_now();
+        c->state = ST_SEND;
+        post_send_resp(ring, c);
+        return;
+      }
+      if (c->wbuf_full) {
+        flush_all_aof_buffers_now();
+        c->state = ST_SEND;
+        post_send_resp(ring, c);
+        return;
+      }
+      continue;
+    }
+  }
 }
 #endif
 
@@ -504,34 +523,12 @@ int proactor_start(unsigned short port, msg_handler handler) {
           //   kvs_logDebug("recv (%d bytes):\n%.*s\n====", res, res, c->rbuf + c->rlen);
 
             c->rlen += res;  // 累加接收的字节数（不是覆盖）
-            c->parse_done = 0;
 
 #if ENABLE_ECHO_MODE
             echo_handler(c);
             post_send_resp(&g_ring, c);
 #else
-            int ret = kvs_resp_feed(c);
-            // fprintf(stderr, "==> ret = %d\n", ret);
-            if (ret == RESP_ERROR) {
-              // 协议错误，关闭连接
-              kvs_logError("kvs_resp_feed: RESP parse error");
-              conn_free(c);
-              conn_pool_free(&g_conn_pool, c);
-            } else if (ret == RESP_PARSE_OK) {
-              kvs_logDebug("RESP parse OK");
-              // 解析完成，处理命令
-              processCommand(c);
-              // 切换到发送状态
-              c->state = ST_SEND;
-              // 投递发送请求
-              // fprintf(stderr, "==> after process wbuf: %*s\n", c->wbuf, RESP_BUF_SIZE);
-              post_send_resp(&g_ring, c);
-            } else if (ret == RESP_CONTINUE_RECV) {
-                kvs_logDebug("RESP continue recv");
-              // ret == 0，需要更多数据
-              // 提交 recv 请求，等待更多数据
-              post_recv_frame(&g_ring, c);
-            }
+            run_pipeline(&g_ring, c);
 #endif
           }
           break;
@@ -539,63 +536,78 @@ int proactor_start(unsigned short port, msg_handler handler) {
 
         // 发我们准备好的数据过去
         case ST_SEND: {
+          // 通用 partial send 处理（适用于所有 send_st）
+          if (c->wlen - c->wbuf_off != (size_t)res) {
+            c->wbuf_off += res;
+            post_send_resp(&g_ring, c);
+            break;
+          }
+          c->wbuf_off = 0;
+
           if (c->send_st == ST_SEND_SMALL) {
-            if (c->wlen - c->wbuf_off != (size_t)res) {
-              c->wbuf_off += res;
-              post_send_resp(&g_ring, c);
-              break;
-            }
             c->wlen = 0;
-            c->wbuf_off = 0;
             kvs_logDebug("SEND: Small response");
             c->state = ST_RECV;
             c->bulk_p = c->bulk_data = NULL;
             c->bulk_sent = 0;
             c->bulk_tt = 0;
             c->hdr_len = 0;
-            post_recv_frame(&g_ring, c);
+            c->send_st = ST_SEND_NOTSET;
+            c->wbuf_full = 0;
+            if (c->rlen > c->parse_done) {
+              run_pipeline(&g_ring, c);
+            } else {
+              post_recv_frame(&g_ring, c);
+            }
             break;
           }
 
+          // ST_SEND_HDR_SENT 或 ST_SEND_BULK：拷贝 body 到 wbuf 分块发送
           if (c->send_st == ST_SEND_HDR_SENT) {
-            size_t hdr_remain = c->hdr_len - c->wbuf_off;
-            if ((size_t)res < hdr_remain) {
-              c->wbuf_off += res;
-              post_send_bulk(&g_ring, c);
-              break;
-            }
-            c->bulk_sent = res - hdr_remain;
-            c->wbuf_off = c->hdr_len;
-            if (c->bulk_sent < c->bulk_tt) {
-              c->send_st = ST_SEND_BULK;
-              post_send_bulk(&g_ring, c);
-              break;
-            }
-            // header + body 全发完，发送尾部 \r\n
-            c->send_st = ST_SEND_SMALL;
-            c->wlen = c->hdr_len + 2;
-            c->wbuf_off = c->hdr_len;
-            post_send_resp(&g_ring, c);
-            break;
-          }
-
-          if (c->send_st == ST_SEND_BULK) {
+            c->bulk_sent += res - c->hdr_len;
+            c->send_st = ST_SEND_BULK;
+          } else if (c->send_st == ST_SEND_BULK) {
             c->bulk_sent += res;
-            if (c->bulk_sent < c->bulk_tt) {
-              post_send_resp(&g_ring, c);
-              break;
-            }
-            // body 发完，发送尾部 \r\n
-            c->send_st = ST_SEND_SMALL;
-            c->wlen = c->hdr_len + 2;
-            c->wbuf_off = c->hdr_len;
-            post_send_resp(&g_ring, c);
+          } else {
+            kvs_logError("ST_SEND unknown state\n");
+            conn_free(c);
+            conn_pool_free(&g_conn_pool, c);
             break;
           }
 
-          kvs_logError("ST_SEND unknown state\n");
-          conn_free(c);
-          conn_pool_free(&g_conn_pool, c);
+          c->wlen = 0; // 重置 wbuf，准备拷贝下一批
+
+          if (c->bulk_sent < c->bulk_tt) {
+            c->bulk_p = c->bulk_data + c->bulk_sent;
+            size_t remain = c->bulk_tt - c->bulk_sent;
+            size_t cp = (remain < RESP_BUF_SIZE) ? remain : RESP_BUF_SIZE;
+            memcpy(c->wbuf, c->bulk_p, cp);
+            c->wlen = cp;
+            if (remain <= RESP_BUF_SIZE) {
+              c->wbuf[c->wlen - 2] = '\r';
+              c->wbuf[c->wlen - 1] = '\n';
+            } else if (remain == RESP_BUF_SIZE + 1) {
+              c->wbuf[c->wlen - 1] = '\r';
+            } else if (remain == 1) {
+              c->wbuf[c->wlen] = '\n';
+            }
+            post_send_resp(&g_ring, c);
+          } else {
+            // bulk 发完了
+            c->state = ST_RECV;
+            c->bulk_p = c->bulk_data = NULL;
+            c->bulk_sent = 0;
+            c->bulk_tt = 0;
+            c->hdr_len = 0;
+            c->wlen = 0;
+            c->send_st = ST_SEND_NOTSET;
+            c->wbuf_full = 0;
+            if (c->rlen > c->parse_done) {
+              run_pipeline(&g_ring, c);
+            } else {
+              post_recv_frame(&g_ring, c);
+            }
+          }
           break;
         }
         case ST_CLOSE: {

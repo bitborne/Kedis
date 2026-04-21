@@ -33,6 +33,7 @@ typedef struct {
 // AOF相关函数声明
 void appendToAofBuffer(int type, const robj* key, const robj* value);  // 添加到AOF缓冲区
 int flushAofBuffer(uint64_t now_ns);  // 刷新AOF缓冲区
+void flush_all_aof_buffers_now(void);  // Pipeline 批量后立即刷新所有 AOF 缓冲区
 int start_aof_fsync_process(void);  // 启动AOF同步线程
 void stop_aof_fsync_process(void);   // 停止AOF同步线程
 void before_sleep(uint64_t now_ns);  // 事件循环前的处理函数

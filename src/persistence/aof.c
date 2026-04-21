@@ -735,6 +735,21 @@ static int flushAofBufferToEngine(int engine_type, uint64_t now_ns) {
 }
 
 /**
+ * Pipeline 批量 AOF 刷新：立即把所有引擎的 AOF 缓冲区写入文件
+ * 在 run_pipeline 结束、发送响应前调用，减少 AOF 延迟
+ */
+void flush_all_aof_buffers_now(void) {
+  uint64_t now_ns = get_monotonic_ns();
+#if ENABLE_MULTI_ENGINE
+  for (int i = 0; i < 4; i++) {
+    flushAofBufferToEngine(i, now_ns);
+  }
+#else
+  flushAofBuffer(now_ns);
+#endif
+}
+
+/**
  * FSYNC线程函数 - 每秒执行一次同步
  */
 void* fsync_thread_func(void* arg) {

@@ -583,7 +583,10 @@ void check_and_perform_autosave() {
 // 发送原始字符串到回复缓冲区，带已知长度
 void add_reply_str_len(struct conn* c, const char* str, size_t len) {
         if (!str) return;
-        if (c->wlen + len > RESP_BUF_SIZE) return; // 简单保护
+        if (c->wlen + len > RESP_BUF_SIZE) {
+                c->wbuf_full = 1; // 通知 pipeline：wbuf 已满，应中断并发送
+                return;
+        }
         memcpy(c->wbuf + c->wlen, str, len);
         c->wlen += len;
 }
@@ -611,9 +614,8 @@ void add_reply_status(struct conn* c, const char* status) {
 }
 
 // 发送批量字符串回复 ($len...)，带已知长度
-// 小 value（<= 1024 字节）直接拷贝到 wbuf 一次性发送，避免零拷贝的额外 io_uring 往返
-#define BULK_ZEROCOPY_THRESHOLD 1024
-
+// 发送批量字符串回复 ($len...)，带已知长度
+// 所有 value 都拷贝到 wbuf 发送，避免零拷贝 sendmsg 的多次 io_uring 往返
 void add_reply_bulk_len(struct conn* c, char* str, size_t len) {
         // 如果 str 为 NULL，返回 Null Bulk String
         if (str == NULL) {
@@ -621,33 +623,32 @@ void add_reply_bulk_len(struct conn* c, char* str, size_t len) {
                 return;
         }
 
-        char hdr_buf[32];
-        size_t hdr_len = sprintf(hdr_buf, "$%zu\r\n", len);
-
-        if (len <= BULK_ZEROCOPY_THRESHOLD) {
-                // 小 value 快速路径：直接写入 wbuf，单次 send 完成
-                memcpy(c->wbuf, hdr_buf, hdr_len);
-                memcpy(c->wbuf + hdr_len, str, len);
-                memcpy(c->wbuf + hdr_len + len, "\r\n", 2);
-                c->wlen = hdr_len + len + 2;
-                c->wbuf_off = 0;
-                c->send_st = ST_SEND_SMALL;
-                return;
-        }
-
-        // 大 value 零拷贝路径：sendmsg + iovec[2]
-        c->bulk_tt = len; // body 原始长度，尾部 \r\n 单独发送
+        c->bulk_tt = len + 2; // 包含尾部 \r\n
         c->bulk_data = str;
-        c->hdr_len = hdr_len;
+        char hdr_buf[32];
+        c->hdr_len = sprintf(hdr_buf, "$%zu\r\n", len);
 
-        memcpy(c->wbuf, hdr_buf, c->hdr_len);
-        // 预先把 \r\n 放在 header 后面，稍后最后发送
-        memcpy(c->wbuf + c->hdr_len, "\r\n", 2);
-        c->wlen = c->hdr_len;
-        c->wbuf_off = 0;
-        c->bulk_sent = 0;
+        memcpy(c->wbuf + c->wlen, hdr_buf, c->hdr_len);
+        c->wlen += c->hdr_len;
 
-        c->send_st = ST_SEND_HDR_SENT;
+        size_t avail = RESP_BUF_SIZE - c->wlen;
+        size_t remain = c->bulk_tt - c->bulk_sent;
+        size_t cp = avail < remain ? avail : remain;
+        memcpy(c->wbuf + c->wlen, str, cp);
+        c->wlen += cp;
+        if (remain <= avail) {
+                c->wbuf[c->wlen - 2] = '\r';
+                c->wbuf[c->wlen - 1] = '\n';
+                c->send_st = ST_SEND_SMALL;
+        } else if (remain == avail + 1) {
+                c->wbuf[c->wlen - 1] = '\r';
+                c->send_st = ST_SEND_HDR_SENT;
+        } else if (remain == 1) {
+                c->wbuf[c->wlen] = '\n';
+                c->send_st = ST_SEND_HDR_SENT;
+        } else {
+                c->send_st = ST_SEND_HDR_SENT;
+        }
 }
 
 // 发送批量字符串回复 ($len...)，供命令处理使用

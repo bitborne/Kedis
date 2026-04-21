@@ -63,6 +63,7 @@ struct conn {
   size_t bulk_sent;      // 已发送的数据长度（用于流式发送跟踪）
   size_t bulk_tt;
   size_t hdr_len;
+  int wbuf_full;         // wbuf 已满标记（由 add_reply_str_len 设置）
 
   /* === 冷字段 / 大缓冲区：低频或间接访问 === */
   char rbuf[IOP_SIZE];   // 读缓冲区（16 KB）
@@ -92,5 +93,8 @@ extern void add_reply_bulk(struct conn* c, char* data);   // 发送批量字符�
 extern void add_reply_bulk_len(struct conn* c, char* data, size_t len); // 带已知长度的批量字符串回复
 extern void add_reply_str(struct conn* c, const char* str);     // 发送原始字符串
 extern void add_reply_str_len(struct conn* c, const char* str, size_t len); // 带已知长度的原始字符串
+
+// RESP 协议解析函数声明
+extern void kvs_resp_pipeline_next(struct conn* c); // pipeline 模式下释放当前命令资源，保留 rbuf
 
 #endif // __KVS_NETWORK_H__

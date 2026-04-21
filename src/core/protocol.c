@@ -48,6 +48,24 @@ void kvs_resp_free_resources(struct conn* c) {
   // wbuf 是由网络层分配和管理的，这里我们只负责 argv 相关的内存
 }
 
+/* --------------  pipeline 模式下释放当前命令资源，保留 rbuf  -------------- */
+void kvs_resp_pipeline_next(struct conn* c) {
+  for (int i = 0; i < c->argc; i++) {
+    if (c->argv[i].ptr && !(c->argv[i].flags & ROBJ_FLAG_RBUF_REF)
+        && c->argv[i].ptr != c->cmd_buf) {
+      kvs_free(c->argv[i].ptr);
+    }
+    c->argv[i].ptr = NULL;
+    c->argv[i].len = 0;
+    c->argv[i].flags = 0;
+  }
+  c->argc = 0;
+  c->argc_done = 0;
+  c->bulk_len = 0;
+  c->bulk_done = 0;
+  c->resp_state = ST_RESP_HDR;
+}
+
 static inline char* find_crlf(const char* s, size_t len) {
     if (len <= 16) {
         const char* end = s + len - 1;
@@ -285,16 +303,6 @@ int kvs_resp_feed(struct conn* c) {
 
             if (c->argc_done == c->argc) {
                 c->resp_state = ST_RESP_OK;
-                if (c->parse_done < c->rlen) {
-                    rbuf_ref_upgrade(c);
-                    size_t remaining = c->rlen - c->parse_done;
-                    memmove(c->rbuf, c->rbuf + c->parse_done, remaining);
-                    c->rlen = remaining;
-                    c->parse_done = 0;
-                } else {
-                    c->rlen = 0;
-                    c->parse_done = 0;
-                }
             } else {
                 c->resp_state = ST_RESP_BULK_LEN;
             }
@@ -355,21 +363,6 @@ int kvs_resp_feed(struct conn* c) {
             // 所有参数解析完毕，切换到完成状态
             // fprintf(stderr, "change to: OK\n");
             c->resp_state = ST_RESP_OK;
-            // 处理粘包, 让下一条命令先留在缓冲区 memmove到开头
-            // fprintf(stderr, "OK==rbuf: %*s\nparse_>done后: %*s\n", IOP_SIZE, c->rbuf, IOP_SIZE - c->parse_done, c->rbuf + c->parse_done);
-            if (c->parse_done < c->rlen) {
-              // fprintf(stderr, "[循环内]判断出了有粘包\n");
-              rbuf_ref_upgrade(c);
-              size_t remaining = c->rlen - c->parse_done;
-              memmove(c->rbuf, c->rbuf + c->parse_done, remaining);
-              c->rlen = remaining;
-              c->parse_done = 0;
-              // fprintf(stderr, "--> 不完美, 有粘包 ?? 你走这里来了?\n");
-            } else {
-              // fprintf(stderr, "--> 完美 你走这里来了?\n");
-              c->rlen = 0;
-              c->parse_done = 0;
-            }
           } else {
             // 继续解析下一个参数，切换到 ST_RESP_BULK_LEN 状态
             c->resp_state = ST_RESP_BULK_LEN;
@@ -455,12 +448,17 @@ int kvs_resp_feed(struct conn* c) {
   }
 
   continue_recv: {
-    if (c->parse_done > 0 && c->rlen >= (IOP_SIZE - 256)) {
-        rbuf_ref_upgrade(c);
-        size_t remaining = c->rlen - c->parse_done;
-        memmove(c->rbuf, c->rbuf + c->parse_done, remaining);
-        c->rlen = remaining;
-        c->parse_done = 0;
+    if (c->rlen >= (IOP_SIZE - 256)) {
+        if (c->parse_done > 0) {
+            rbuf_ref_upgrade(c);
+            size_t remaining = c->rlen - c->parse_done;
+            memmove(c->rbuf, c->rbuf + c->parse_done, remaining);
+            c->rlen = remaining;
+            c->parse_done = 0;
+        } else {
+            kvs_logError("Protocol error: rbuf full without parse progress");
+            goto error;
+        }
     }
     return RESP_CONTINUE_RECV;
   }
