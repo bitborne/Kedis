@@ -18,10 +18,6 @@ SRCS = src/core/kvstore.c \
        src/persistence/ksf.c \
        src/persistence/ksf_stream.c \
        src/persistence/aof.c \
-       src/persistence/aof_io_uring_zerocopy.c \
-       src/persistence/aof_io_uring_buffer.c \
-       src/persistence/aof_io_uring_submit.c \
-       src/persistence/aof_io_uring_group.c \
        src/utils/kmem.c \
        src/utils/kmem_compat.c \
        src/utils/kvs_log.c
