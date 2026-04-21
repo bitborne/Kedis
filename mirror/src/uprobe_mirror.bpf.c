@@ -28,8 +28,7 @@ struct {
 #define CONN_FD_OFFSET         0
 #define CONN_RLEN_OFFSET       16
 #define CONN_PARSE_DONE_OFFSET 40
-#define CONN_RBUF_OFFSET       112
-
+#define CONN_RBUF_OFFSET       116
 SEC("uprobe/kvs_resp_feed")
 int BPF_KPROBE(uprobe_kvs_resp_feed, void *c)
 {
