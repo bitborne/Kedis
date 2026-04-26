@@ -204,6 +204,16 @@ static void post_read_eventfd(struct io_uring* ring, int fd, void* buf) {
   io_uring_sqe_set_data64(sqe, ud);
 }
 
+/* ---------------- Step 2: 按需补投 recv ----------------
+ * 当连接存活、没有 inflight recv、且 rbuf 还有空间时，补投 recv。
+ * 调用位置：OP_RECV case 末尾、OP_SEND case 中 send 完成后。
+ */
+static void maybe_post_recv(struct io_uring* ring, struct conn* c) {
+  if (c->fd >= 0 && c->recv_inflight == 0 && c->rlen < IOP_SIZE) {
+    post_recv_frame(ring, c);
+  }
+}
+
 /* ---------------- 释放连接资源 ---------------- */
 static void conn_free(struct conn* c) {
   if (c->fd >= 0) {
@@ -288,8 +298,6 @@ static void run_pipeline(struct io_uring* ring, struct conn* c) {
       if (c->wlen > 0) {
         c->state = ST_SEND;
         post_send_resp(ring, c);
-      } else {
-        post_recv_frame(ring, c);
       }
       return;
     } else if (ret == RESP_PARSE_OK) {
@@ -497,6 +505,7 @@ int proactor_start(unsigned short port, msg_handler handler) {
 #else
           run_pipeline(&g_ring, c);
 #endif
+          maybe_post_recv(&g_ring, c);
           break;
         }
 
@@ -530,9 +539,8 @@ int proactor_start(unsigned short port, msg_handler handler) {
             c->wbuf_full = 0;
             if (c->rlen > c->parse_done) {
               run_pipeline(&g_ring, c);
-            } else {
-              post_recv_frame(&g_ring, c);
             }
+            maybe_post_recv(&g_ring, c);
             break;
           }
           if (c->send_st == ST_SEND_HDR_SENT) {
@@ -573,9 +581,8 @@ int proactor_start(unsigned short port, msg_handler handler) {
             c->wbuf_full = 0;
             if (c->rlen > c->parse_done) {
               run_pipeline(&g_ring, c);
-            } else {
-              post_recv_frame(&g_ring, c);
             }
+            maybe_post_recv(&g_ring, c);
           }
           break;
         }
