@@ -73,9 +73,9 @@ struct conn {
   char* bulk_p;
   char* wbuf;            // 回包缓冲（+OK\r\n 或 $len\r\n...）
 
-  /* sendmsg 零拷贝用的持久化结构（避免栈上 msghdr 被提前释放） */
-  struct iovec send_iov[2];
-  struct msghdr send_msg;
+  /* Step 1: inflight 计数 */
+  int recv_inflight;
+  int send_inflight;
 };
 
 // 消息处理回调函数定义
