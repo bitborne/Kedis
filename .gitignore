@@ -60,3 +60,7 @@ rdma_sendfile/rdma_client
 rdma_sendfile/sf_client
 rdma_sendfile/rdma_server
 rdma_sendfile/sf_server
+.gitnexus
+results_kedis/
+results_redis/
+results_save/

@@ -125,6 +125,13 @@ static struct conn* conn_pool_alloc(struct conn_pool* pool) {
   struct conn* c = &pool->conns[idx];
   c->recv_inflight = 0;
   c->send_inflight = 0;
+  /* Ensure parser and rbuf_ptr are initialized */
+  if (!c->parser) {
+    c->parser = kvs_calloc(1, sizeof(proto_parser_t));
+  }
+  if (!c->rbuf_ptr) {
+    c->rbuf_ptr = c->rbuf_embedded;
+  }
   return c;
 }
 
@@ -236,6 +243,11 @@ static void conn_free(struct conn* c) {
   if (c->wbuf) {
     kvs_free(c->wbuf);
     c->wbuf = NULL;
+  }
+
+  if (c->parser) {
+    kvs_free(c->parser);
+    c->parser = NULL;
   }
 
   c->fd = -1;
@@ -598,176 +610,8 @@ int proactor_start(unsigned short port, msg_handler handler) {
         }
 
         default: {
-          kvs_logWarn("[Step1-FALLBACK] CQE with untagged user_data=%p, op=%d", ptr, op);
-          struct conn* c = (struct conn*)ptr;
-          if (c != NULL && c != g_event_conn) {
-            struct accept_ctx* accept_ctx = (struct accept_ctx*)c;
-            if (accept_ctx->magic == ACCEPT_CTX_MAGIC) {
-              int new_fd = res;
-              accept_ctx_free(accept_ctx);
-              if (new_fd >= 0) {
-                struct conn* nc = conn_pool_alloc(&g_conn_pool);
-                if (!nc) {
-                  close(new_fd);
-                  kvs_logError("Max conns reached, rejecting connection");
-                } else {
-                  nc->fd = new_fd;
-                  nc->state = ST_RECV;
-                  int nodelay = 1;
-                  setsockopt(new_fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
-                  nc->wbuf = kvs_malloc(RESP_BUF_SIZE);
-                  if (!nc->wbuf) {
-                    conn_pool_free(&g_conn_pool, nc);
-                    close(new_fd);
-                    kvs_logError("Failed to alloc write buffer");
-                  } else {
-                    kvs_resp_reset(nc);
-                    post_recv_frame(&g_ring, nc);
-                  }
-                }
-                post_accept(&g_ring, listenfd);
-              } else {
-                if (new_fd != -EAGAIN && new_fd != -EINTR) perror("accept");
-                post_accept(&g_ring, listenfd);
-              }
-              break;
-            }
-          }
-          if (g_event_conn && c == g_event_conn) {
-            if (res > 0) {
-              uint64_t notify_val = g_event_buf;
-              kvs_logInfo("[Proactor] 收到 RDMA 完成通知，值=%lu", (unsigned long)notify_val);
-              extern int slave_sync_get_state(void);
-              int current_state = slave_sync_get_state();
-              if (current_state == SLAVE_STATE_READY) {
-                extern void slave_sync_drain_backlog(msg_handler handler);
-                slave_sync_drain_backlog(g_kvs_handler);
-                kvs_logInfo("[Proactor] 积压队列回放完成");
-              } else if (current_state == SLAVE_STATE_IDLE) {
-                kvs_logWarn("[Proactor] RDMA 同步失败（状态为 IDLE），无需回放");
-              } else if (current_state == SLAVE_STATE_SYNCING) {
-                kvs_logWarn("[Proactor] 收到通知但状态仍为 SYNCING，等待下次通知");
-              } else {
-                kvs_logError("[Proactor] 未知同步状态: %d", current_state);
-              }
-              post_read_eventfd(&g_ring, g_event_fd, &g_event_buf);
-            } else if (res < 0) {
-              if (res == -EAGAIN || res == -EINTR) {
-                kvs_logDebug("[Proactor] eventfd 可重试错误: %d，重新投递", res);
-                post_read_eventfd(&g_ring, g_event_fd, &g_event_buf);
-              } else {
-                kvs_logError("[Proactor] eventfd 错误: %d，尝试恢复", res);
-                post_read_eventfd(&g_ring, g_event_fd, &g_event_buf);
-              }
-            } else {
-              kvs_logWarn("[Proactor] eventfd 返回 0（对端关闭？），重新注册");
-              post_read_eventfd(&g_ring, g_event_fd, &g_event_buf);
-            }
-            break;
-          }
-          if (res < 0) {
-            if (res == -EAGAIN || res == -EINTR) {
-              if (c->state == ST_RECV) post_recv_frame(&g_ring, c);
-              if (c->state == ST_SEND) post_send_resp(&g_ring, c);
-            } else {
-              conn_free(c);
-              conn_pool_free(&g_conn_pool, c);
-            }
-            break;
-          }
-          switch (c->state) {
-            case ST_RECV: {
-              if (res == 0) {
-                conn_free(c);
-                conn_pool_free(&g_conn_pool, c);
-                break;
-              } else if (res > 0) {
-                c->rlen += res;
-#if ENABLE_ECHO_MODE
-                echo_handler(c);
-                post_send_resp(&g_ring, c);
-#else
-                run_pipeline(&g_ring, c);
-#endif
-              }
-              break;
-            }
-            case ST_SEND: {
-              if (c->wlen - c->wbuf_off != (size_t)res) {
-                c->wbuf_off += res;
-                post_send_resp(&g_ring, c);
-                break;
-              }
-              c->wbuf_off = 0;
-              if (c->send_st == ST_SEND_SMALL) {
-                c->wlen = 0;
-                kvs_logDebug("SEND: Small response");
-                c->state = ST_RECV;
-                c->bulk_p = c->bulk_data = NULL;
-                c->bulk_sent = 0;
-                c->bulk_tt = 0;
-                c->hdr_len = 0;
-                c->send_st = ST_SEND_NOTSET;
-                c->wbuf_full = 0;
-                if (c->rlen > c->parse_done) {
-                  run_pipeline(&g_ring, c);
-                } else {
-                  post_recv_frame(&g_ring, c);
-                }
-                break;
-              }
-              if (c->send_st == ST_SEND_HDR_SENT) {
-                c->bulk_sent += res - c->hdr_len;
-                c->send_st = ST_SEND_BULK;
-              } else if (c->send_st == ST_SEND_BULK) {
-                c->bulk_sent += res;
-              } else {
-                kvs_logError("ST_SEND unknown state\n");
-                conn_free(c);
-                conn_pool_free(&g_conn_pool, c);
-                break;
-              }
-              c->wlen = 0;
-              if (c->bulk_sent < c->bulk_tt) {
-                c->bulk_p = c->bulk_data + c->bulk_sent;
-                size_t remain = c->bulk_tt - c->bulk_sent;
-                size_t cp = (remain < RESP_BUF_SIZE) ? remain : RESP_BUF_SIZE;
-                memcpy(c->wbuf, c->bulk_p, cp);
-                c->wlen = cp;
-                if (remain <= RESP_BUF_SIZE) {
-                  c->wbuf[c->wlen - 2] = '\r';
-                  c->wbuf[c->wlen - 1] = '\n';
-                } else if (remain == RESP_BUF_SIZE + 1) {
-                  c->wbuf[c->wlen - 1] = '\r';
-                } else if (remain == 1) {
-                  c->wbuf[c->wlen] = '\n';
-                }
-                post_send_resp(&g_ring, c);
-              } else {
-                c->state = ST_RECV;
-                c->bulk_p = c->bulk_data = NULL;
-                c->bulk_sent = 0;
-                c->bulk_tt = 0;
-                c->hdr_len = 0;
-                c->wlen = 0;
-                c->send_st = ST_SEND_NOTSET;
-                c->wbuf_full = 0;
-                if (c->rlen > c->parse_done) {
-                  run_pipeline(&g_ring, c);
-                } else {
-                  post_recv_frame(&g_ring, c);
-                }
-              }
-              break;
-            }
-            case ST_CLOSE: {
-              conn_free(c);
-              conn_pool_free(&g_conn_pool, c);
-              break;
-            }
-          }
           break;
-        }
+    }
       }
     }
     io_uring_cq_advance(&g_ring, count);

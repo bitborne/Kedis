@@ -39,9 +39,36 @@ typedef struct {
   unsigned int flags;  // 标志位
 } robj;
 
-/* ---------------- 连接上下文 ---------------- */
+/* ---------------- 协议解析器（从 conn 抽离，支持未来注册缓冲区） ---------------- */
+typedef struct {
+  resp_state_t resp_state;
+  size_t bulk_len;
+  size_t bulk_done;
+  int argc;
+  int argc_done;
+  size_t parse_done;
+  robj argv[MAX_ARGC];
+  char cmd_buf[16];
+  /* Cross-chunk buffer for large objects (reserved for later) */
+  char *querybuf;
+  size_t qb_len;
+  size_t qb_pos;
+} proto_parser_t;
+
+/* ---------------- 发送队列槽 ---------------- */
+#define SEND_QUEUE_MAX 16
+
+typedef struct {
+  char *hdr;
+  size_t hdr_len;
+  char *bulk;
+  size_t bulk_len;
+  size_t sent;
+} send_slot_t;
+
+/* ---------------- 连接上下文（struct conn 保持为主名，net_conn_t 为别名） ---------------- */
 /*
- * 警告：struct conn 的字段布局被 mirror/src/uprobe_mirror.bpf.c 硬编码引用。
+ * 警告：以下偏移量被 mirror/src/uprobe_mirror.bpf.c 硬编码引用。
  * 任何修改（增删字段、改变顺序、调整对齐）都必须同步更新该 BPF 文件中的
  * CONN_FD_OFFSET / CONN_RLEN_OFFSET / CONN_PARSE_DONE_OFFSET / CONN_RBUF_OFFSET。
  */
@@ -76,7 +103,32 @@ struct conn {
   /* Step 1: inflight 计数 */
   int recv_inflight;
   int send_inflight;
+
+  /* === 新字段：追加在末尾，不影响旧字段偏移 === */
+  /* Receive side - pointerized for future registered buffers */
+  char *rbuf_ptr;
+  size_t rbuf_cap;
+  char rbuf_embedded[IOP_SIZE];  /* Default points here */
+
+  /* Send queue */
+  send_slot_t sq[SEND_QUEUE_MAX];
+  int sq_head;
+  int sq_tail;
+
+  int pause_recv;
+
+  /* Layer associations */
+  proto_parser_t *parser;
+  void *app_ctx;
 };
+
+typedef struct conn net_conn_t;
+typedef struct conn conn_t;
+
+/* ---------------- 回复构建器（未来 add_reply_* 的入口） ---------------- */
+typedef struct {
+  net_conn_t *nc;
+} reply_builder_t;
 
 // 消息处理回调函数定义
 typedef int (*msg_handler)(struct conn* c);
@@ -94,7 +146,14 @@ extern void add_reply_bulk_len(struct conn* c, char* data, size_t len); // 带�
 extern void add_reply_str(struct conn* c, const char* str);     // 发送原始字符串
 extern void add_reply_str_len(struct conn* c, const char* str, size_t len); // 带已知长度的原始字符串
 
-// RESP 协议解析函数声明
-extern void kvs_resp_pipeline_next(struct conn* c); // pipeline 模式下释放当前命令资源，保留 rbuf
+// RESP 协议解析函数声明（旧兼容接口）
+extern void kvs_resp_pipeline_next(struct conn* c);
+
+/* ---------------- 协议层新接口（Step C 解耦） ---------------- */
+extern void proto_parser_reset(proto_parser_t *p);
+extern size_t proto_feed(proto_parser_t *p, const char *data, size_t len);
+extern int proto_cmd_ready(const proto_parser_t *p);
+extern int proto_take_cmd(proto_parser_t *p, int *argc_out, robj **argv_out);
+extern void proto_free_argv(int argc, robj *argv);
 
 #endif // __KVS_NETWORK_H__
