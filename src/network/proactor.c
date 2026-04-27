@@ -94,7 +94,7 @@ static void accept_ctx_free(struct accept_ctx* ctx) {
 
 /* ---------------- 连接池管理 ---------------- */
 static void conn_pool_init(struct conn_pool* pool, int max_conns) {
-  pool->conns = kvs_malloc(max_conns * sizeof(struct conn));
+  pool->conns = kvs_calloc(max_conns, sizeof(struct conn));
   if (!pool->conns) {
     perror("kvs_malloc conn pool");
     exit(1);
@@ -125,13 +125,19 @@ static struct conn* conn_pool_alloc(struct conn_pool* pool) {
   struct conn* c = &pool->conns[idx];
   c->recv_inflight = 0;
   c->send_inflight = 0;
+  c->pause_recv = 0;
+  c->sq_head = c->sq_tail = 0;
+  memset(c->sq, 0, sizeof(c->sq));
+
   /* Ensure parser and rbuf_ptr are initialized */
   if (!c->parser) {
     c->parser = kvs_calloc(1, sizeof(proto_parser_t));
   }
+  c->rbuf_cap = IOP_SIZE;
   if (!c->rbuf_ptr) {
     c->rbuf_ptr = c->rbuf_embedded;
   }
+  c->rlen = 0;
   return c;
 }
 
@@ -188,7 +194,7 @@ static void post_accept(struct io_uring* ring, int listenfd) {
 /* ---------------- 提交异步 recv ---------------- */
 static void post_recv_frame(struct io_uring* ring, struct conn* c) {
   struct io_uring_sqe* sqe = sqe_prep_tagged(ring, c, OP_RECV);
-  io_uring_prep_recv(sqe, c->fd, c->rbuf + c->rlen, IOP_SIZE - c->rlen, 0);
+  io_uring_prep_recv(sqe, c->fd, c->rbuf_ptr + c->rlen, c->rbuf_cap - c->rlen, 0);
   c->recv_inflight++;
 }
 
@@ -221,16 +227,6 @@ static void maybe_post_recv(struct io_uring* ring, struct conn* c) {
   }
 }
 
-/* ---------------- Step 3: 统一刷 send 队列 ----------------
- * run_pipeline 只负责生成响应到 wbuf，不再直接提交 send。
- * 由 CQE 处理末尾统一调用本函数提交待发送数据。
- */
-static void flush_send_queue(struct io_uring* ring, struct conn* c) {
-  if (c->fd >= 0 && c->wlen > 0 && c->send_inflight == 0) {
-    post_send_resp(ring, c);
-  }
-}
-
 /* ---------------- 释放连接资源 ---------------- */
 static void conn_free(struct conn* c) {
   if (c->fd >= 0) {
@@ -251,6 +247,90 @@ static void conn_free(struct conn* c) {
   }
 
   c->fd = -1;
+}
+
+/* ---------------- 回复构建器函数（替代 add_reply_*） ---------------- */
+int rb_add_reply_str_len(reply_builder_t *rb, const char *str, size_t len) {
+  net_conn_t *nc = rb->nc;
+  if (!nc || !str) return -1;
+
+  int idx = nc->sq_tail & (SEND_QUEUE_MAX - 1);
+  if (idx == (nc->sq_head & (SEND_QUEUE_MAX - 1)) && nc->sq_tail != nc->sq_head) {
+    nc->pause_recv = 1;
+    return -1;
+  }
+
+  send_slot_t *slot = &nc->sq[idx];
+  if (!slot->hdr) {
+    slot->hdr = kvs_malloc(RESP_BUF_SIZE);
+    if (!slot->hdr) return -1;
+    slot->hdr_len = 0;
+  }
+
+  if (slot->hdr_len + len > RESP_BUF_SIZE) {
+    nc->pause_recv = 1;
+    return -1;
+  }
+
+  memcpy(slot->hdr + slot->hdr_len, str, len);
+  slot->hdr_len += len;
+  return 0;
+}
+
+void rb_add_reply_str(reply_builder_t *rb, const char *str) {
+  rb_add_reply_str_len(rb, str, strlen(str));
+}
+
+void rb_add_reply_error(reply_builder_t *rb, const char *err) {
+  rb_add_reply_str(rb, "-ERR ");
+  rb_add_reply_str(rb, err);
+  rb_add_reply_str(rb, "\r\n");
+}
+
+void rb_add_reply_status(reply_builder_t *rb, const char *status) {
+  rb_add_reply_str(rb, "+");
+  rb_add_reply_str(rb, status);
+  rb_add_reply_str(rb, "\r\n");
+}
+
+void rb_add_reply_bulk_len(reply_builder_t *rb, char *data, size_t len) {
+  char buf[32];
+  snprintf(buf, sizeof(buf), "$%zu\r\n", len);
+  rb_add_reply_str(rb, buf);
+  rb_add_reply_str_len(rb, data, len);
+  rb_add_reply_str(rb, "\r\n");
+}
+
+void rb_add_reply_bulk(reply_builder_t *rb, char *data) {
+  rb_add_reply_bulk_len(rb, data, strlen(data));
+}
+
+/* ---------------- Step 3: 统一刷 send 队列 ---------------- */
+static void flush_send_queue(struct io_uring* ring, struct conn* c) {
+  if (c->fd < 0) return;
+
+  /* 优先发送 send_slot 队列中的响应 */
+  if (c->sq_head != c->sq_tail && c->send_inflight == 0) {
+    send_slot_t *slot = &c->sq[c->sq_head & (SEND_QUEUE_MAX - 1)];
+    struct io_uring_sqe* sqe = sqe_prep_tagged(ring, c, OP_SEND);
+    if (!sqe) return;
+
+    if (slot->sent < slot->hdr_len) {
+      size_t remain = slot->hdr_len - slot->sent;
+      io_uring_prep_send(sqe, c->fd, slot->hdr + slot->sent, remain, 0);
+    } else {
+      size_t offset = slot->sent - slot->hdr_len;
+      size_t remain = slot->hdr_len + slot->bulk_len - slot->sent;
+      io_uring_prep_send(sqe, c->fd, slot->bulk + offset, remain, 0);
+    }
+    c->send_inflight++;
+    return;
+  }
+
+  /* Fallback: 旧 wbuf 路径（业务层仍使用 add_reply_* 时） */
+  if (c->wlen > 0 && c->send_inflight == 0) {
+    post_send_resp(ring, c);
+  }
 }
 
 /* ---------------- 监听端口 ---------------- */
@@ -534,13 +614,40 @@ int proactor_start(unsigned short port, msg_handler handler) {
           c->send_inflight--;
           if (res < 0) {
             if (res == -EAGAIN || res == -EINTR) {
-              post_send_resp(&g_ring, c);
+              flush_send_queue(&g_ring, c);
             } else {
               conn_free(c);
               conn_pool_free(&g_conn_pool, c);
             }
             break;
           }
+
+          /* 优先处理 send_slot */
+          if (c->sq_head != c->sq_tail) {
+            send_slot_t *slot = &c->sq[c->sq_head & (SEND_QUEUE_MAX - 1)];
+            slot->sent += res;
+
+            if (slot->sent >= slot->hdr_len + slot->bulk_len) {
+              /* slot 发送完成 */
+              kvs_free(slot->hdr);
+              slot->hdr = NULL;
+              slot->hdr_len = 0;
+              slot->bulk = NULL;
+              slot->bulk_len = 0;
+              slot->sent = 0;
+              c->sq_head++;
+
+              if (c->pause_recv && c->sq_tail - c->sq_head < SEND_QUEUE_MAX / 2) {
+                c->pause_recv = 0;
+              }
+            }
+
+            flush_send_queue(&g_ring, c);
+            maybe_post_recv(&g_ring, c);
+            break;
+          }
+
+          /* Fallback: 旧 wbuf 路径 */
           if (c->wlen - c->wbuf_off != (size_t)res) {
             c->wbuf_off += res;
             post_send_resp(&g_ring, c);

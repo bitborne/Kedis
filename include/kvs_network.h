@@ -156,4 +156,12 @@ extern int proto_cmd_ready(const proto_parser_t *p);
 extern int proto_take_cmd(proto_parser_t *p, int *argc_out, robj **argv_out);
 extern void proto_free_argv(int argc, robj *argv);
 
+/* ---------------- 回复构建器接口（替代 add_reply_*） ---------------- */
+extern int rb_add_reply_str_len(reply_builder_t *rb, const char *str, size_t len);
+extern void rb_add_reply_str(reply_builder_t *rb, const char *str);
+extern void rb_add_reply_error(reply_builder_t *rb, const char *err);
+extern void rb_add_reply_status(reply_builder_t *rb, const char *status);
+extern void rb_add_reply_bulk_len(reply_builder_t *rb, char *data, size_t len);
+extern void rb_add_reply_bulk(reply_builder_t *rb, char *data);
+
 #endif // __KVS_NETWORK_H__

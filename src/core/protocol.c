@@ -408,6 +408,12 @@ int kvs_resp_feed(struct conn* c) {
   }
 
   if (c->parser->resp_state == ST_RESP_OK) {
+    /* 兼容：同步 parser->argv 到 c->argv，业务层仍从 c->argv 读取 */
+    c->argc = c->parser->argc;
+    c->argc_done = c->parser->argc_done;
+    for (int i = 0; i < c->parser->argc; i++) {
+      c->argv[i] = c->parser->argv[i];
+    }
     if (c->parser->parse_done >= c->rlen) {
       c->rlen = 0;
       c->parser->parse_done = 0;
