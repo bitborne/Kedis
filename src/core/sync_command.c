@@ -101,32 +101,32 @@ int start_slave_sync(void) {
  * 从节点：触发向主节点的存量同步
  * 主节点：返回错误（主节点不接受 SYNC 命令）
  */
-int kvs_cmd_sync(struct conn *c) {
+int kvs_cmd_sync(reply_builder_t *rb) {
     /* 检查当前节点角色 */
     if (g_config.replica_mode == REPLICA_MODE_MASTER) {
-        add_reply_error(c, "SYNC command not accepted on master");
+        rb_add_reply_error(rb, "SYNC command not accepted on master");
         return 0;
     }
 
     /* 检查是否已配置主节点 */
     if (g_config.master_host[0] == '\0') {
-        add_reply_error(c, "No master configured, use REPLICAOF first");
+        rb_add_reply_error(rb, "No master configured, use REPLICAOF first");
         return 0;
     }
 
     /* 检查是否已在同步中 */
     if (rdma_sync_in_progress()) {
-        add_reply_error(c, "Sync already in progress");
+        rb_add_reply_error(rb, "Sync already in progress");
         return 0;
     }
 
     /* 正常: 启动同步 */
     if (start_slave_sync() < 0) {
-        add_reply_error(c, "Failed to start sync");
+        rb_add_reply_error(rb, "Failed to start sync");
         return 0;
     }
 
-    add_reply_status(c, "Background sync started");
+    rb_add_reply_status(rb, "Background sync started");
     return 0;
 }
 
@@ -136,9 +136,9 @@ int kvs_cmd_sync(struct conn *c) {
  * 语法: REPLICAOF <host> <port>
  *       REPLICAOF NO ONE  (取消主从关系)
  */
-int kvs_cmd_replicaof(struct conn *c, int argc, robj *argv) {  // robj 定义在 kvs_network.h
+int kvs_cmd_replicaof(reply_builder_t *rb, int argc, robj *argv) {
     if (argc < 3) {
-        add_reply_error(c, "Wrong number of arguments for 'replicaof' command");
+        rb_add_reply_error(rb, "Wrong number of arguments for 'replicaof' command");
         return 0;
     }
 
@@ -156,21 +156,21 @@ int kvs_cmd_replicaof(struct conn *c, int argc, robj *argv) {  // robj 定义在
         /* 断开 RDMA 连接 */
         rdma_sync_client_disconnect();
 
-        add_reply_status(c, "OK");
+        rb_add_reply_status(rb, "OK");
         kvs_logInfo("[SYNC] 已取消主从关系\n");
         return 0;
     }
 
     /* 验证参数 */
     if (port <= 0 || port > 65535) {
-        add_reply_error(c, "Invalid port");
+        rb_add_reply_error(rb, "Invalid port");
         return 0;
     }
 
     /* 检查是否已经是该主节点的从节点 */
     if (strcmp(g_config.master_host, host) == 0 &&
         g_config.master_port == port) {
-        add_reply_error(c, "Already connected to specified master");
+        rb_add_reply_error(rb, "Already connected to specified master");
         return 0;
     }
 
@@ -186,11 +186,11 @@ int kvs_cmd_replicaof(struct conn *c, int argc, robj *argv) {  // robj 定义在
         g_config.master_port = 0;
         g_config.replica_mode = REPLICA_MODE_NONE;
 
-        add_reply_error(c, "Failed to start replication");
+        rb_add_reply_error(rb, "Failed to start replication");
         return 0;
     }
 
-    add_reply_status(c, "OK");
+    rb_add_reply_status(rb, "OK");
     kvs_logInfo("[SYNC] 已设置主节点: %s:%d\n", host, port);
 
     return 0;

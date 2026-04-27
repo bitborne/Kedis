@@ -504,14 +504,14 @@ void sync_module_cleanup(void);   // 清理同步模块：关闭连接，释放�
  * 如果是主节点收到 SYNC 命令：
  *   返回错误（主节点不接受 SYNC 命令）
  */
-int kvs_cmd_sync(struct conn *c);
+int kvs_cmd_sync(reply_builder_t *rb);
 
 /*
  * REPLICAOF 命令处理函数
  * 用于动态设置/取消主从关系
  * 语法: REPLICAOF <host> <port>  或  REPLICAOF NO ONE
  */
-int kvs_cmd_replicaof(struct conn *c, int argc, robj *argv);  // robj 定义在 kvs_network.h 中
+int kvs_cmd_replicaof(reply_builder_t *rb, int argc, robj *argv);
 
 /*
  * 检查当前节点是否正在进行存量同步

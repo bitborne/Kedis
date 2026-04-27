@@ -131,7 +131,7 @@ typedef struct {
 } reply_builder_t;
 
 // 消息处理回调函数定义
-typedef int (*msg_handler)(struct conn* c);
+typedef int (*msg_handler)(reply_builder_t *rb, int argc, robj *argv);
 
 // 网络模型启动函数声明
 extern int reactor_start(unsigned short port, msg_handler handler);

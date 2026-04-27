@@ -4,7 +4,7 @@
 #include "kvs_network.h"
 
 #if ENABLE_ECHO_MODE
-void echo_handler(struct conn *c);
+void echo_handler(reply_builder_t *rb);
 #endif
 
 #endif

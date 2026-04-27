@@ -579,103 +579,18 @@ void check_and_perform_autosave() {
     }
 }
 
-/* ---------------- RESP 响应辅助函数 ---------------- */
-// 发送原始字符串到回复缓冲区，带已知长度
-void add_reply_str_len(struct conn* c, const char* str, size_t len) {
-        if (!str) return;
-        if (c->wlen + len > RESP_BUF_SIZE) {
-                c->wbuf_full = 1; // 通知 pipeline：wbuf 已满，应中断并发送
-                return;
-        }
-        memcpy(c->wbuf + c->wlen, str, len);
-        c->wlen += len;
+static void rb_add_reply_exist(reply_builder_t *rb, int exists) {
+    char buf[32];
+    sprintf(buf, ":%d\r\n", exists ? 1 : 0);
+    rb_add_reply_str(rb, buf);
 }
-
-// 发送原始字符串到回复缓冲区，供命令处理使用
-void add_reply_str(struct conn* c, const char* str) {
-        if (!str) return;
-        add_reply_str_len(c, str, strlen(str));
-}
-
-// 发送错误回复 (-ERR ...)，供命令处理使用
-void add_reply_error(struct conn* c, const char* err) {
-        add_reply_str_len(c, "-", 1);
-        add_reply_str(c, err);
-        add_reply_str_len(c, "\r\n", 2);
-        c->send_st = ST_SEND_SMALL;
-}
-
-// 发送状态回复 (+OK ...)，供命令处理使用
-void add_reply_status(struct conn* c, const char* status) {
-        add_reply_str_len(c, "+", 1);
-        add_reply_str(c, status);
-        add_reply_str_len(c, "\r\n", 2);
-        c->send_st = ST_SEND_SMALL;
-}
-
-// 发送批量字符串回复 ($len...)，带已知长度
-// 发送批量字符串回复 ($len...)，带已知长度
-// 所有 value 都拷贝到 wbuf 发送，避免零拷贝 sendmsg 的多次 io_uring 往返
-void add_reply_bulk_len(struct conn* c, char* str, size_t len) {
-        // 如果 str 为 NULL，返回 Null Bulk String
-        if (str == NULL) {
-                add_reply_str_len(c, "$-1\r\n", 5); // Null Bulk String
-                return;
-        }
-
-        c->bulk_tt = len + 2; // 包含尾部 \r\n
-        c->bulk_data = str;
-        char hdr_buf[32];
-        c->hdr_len = sprintf(hdr_buf, "$%zu\r\n", len);
-
-        memcpy(c->wbuf + c->wlen, hdr_buf, c->hdr_len);
-        c->wlen += c->hdr_len;
-
-        size_t avail = RESP_BUF_SIZE - c->wlen;
-        size_t remain = c->bulk_tt - c->bulk_sent;
-        size_t cp = avail < remain ? avail : remain;
-        memcpy(c->wbuf + c->wlen, str, cp);
-        c->wlen += cp;
-        if (remain <= avail) {
-                c->wbuf[c->wlen - 2] = '\r';
-                c->wbuf[c->wlen - 1] = '\n';
-                c->send_st = ST_SEND_SMALL;
-        } else if (remain == avail + 1) {
-                c->wbuf[c->wlen - 1] = '\r';
-                c->send_st = ST_SEND_HDR_SENT;
-        } else if (remain == 1) {
-                c->wbuf[c->wlen] = '\n';
-                c->send_st = ST_SEND_HDR_SENT;
-        } else {
-                c->send_st = ST_SEND_HDR_SENT;
-        }
-}
-
-// 发送批量字符串回复 ($len...)，供命令处理使用
-void add_reply_bulk(struct conn* c, char* str) {
-        if (str == NULL) {
-                add_reply_bulk_len(c, NULL, 0);
-                return;
-        }
-        add_reply_bulk_len(c, str, strlen(str));
-}
-
-// 为了兼容旧的 "YES, Exist" 返回格式，这里做个简单映射，也可以直接返回 RESP Integer
-static void add_reply_exist(struct conn* c, int exists) {
-        // 按照 proactor.c 之前的逻辑，返回 :1 或 :0
-        char buf[32];
-        sprintf(buf, ":%d\r\n", exists ? 1 : 0);
-        add_reply_str(c, buf);
-        c->send_st = ST_SEND_SMALL;
-}
-
 
 /* ---------------- 核心命令执行逻辑 ---------------- */
-int kvs_protocol(struct conn* c) {
+int kvs_protocol(reply_builder_t *rb, int argc, robj *argv) {
 
-    char* cmd_name = c->argv[0].ptr;
-    robj* key = &c->argv[1];
-    robj* value = &c->argv[2];
+    char* cmd_name = argv[0].ptr;
+    robj* key = &argv[1];
+    robj* value = &argv[2];
     int use_engine_lock = 0;  /* 在SYNCING状态时设置为1，使用加锁版本的引擎操作 */
 
     /* =========================================================================
@@ -693,7 +608,7 @@ int kvs_protocol(struct conn* c) {
 
     /* 【调试】每次进入 kvs_protocol 都打印关键信息 */
     /* kvs_logInfo("[kvs_protocol ENTRY] replica_mode=%d, cmd='%s', argc=%d, fd=%d\n", */
-                /* g_config.replica_mode, cmd_name ? cmd_name : "NULL", c->argc, c->fd); */
+                /* g_config.replica_mode, cmd_name ? cmd_name : "NULL", argc, rb->nc->fd); */
 
     if (g_config.replica_mode == REPLICA_MODE_SLAVE) {
         extern int slave_sync_get_state(void);
@@ -710,7 +625,7 @@ int kvs_protocol(struct conn* c) {
          * 这防止客户端在数据就绪前读到空结果 */
         if (sync_state == SLAVE_STATE_IDLE) {
             /* kvs_logInfo("[kvs_protocol SLAVE] 状态为 IDLE，返回 LOADING\n"); */
-            add_reply_error(c, "LOADING data from master, please wait");
+            rb_add_reply_error(rb, "LOADING data from master, please wait");
             return 0;  /* 提前返回，不执行命令 */
         }
 
@@ -722,20 +637,20 @@ int kvs_protocol(struct conn* c) {
             /* 写命令：入积压队列，保证最终一致性 */
             int is_write = is_write_command(cmd_name);
             /* kvs_logInfo("[kvs_protocol SYNCING] 命令: '%s', is_write=%d, argc=%d\n", */
-                        /* cmd_name, is_write, c->argc); */
+                        /* cmd_name, is_write, argc); */
 
             if (is_write) {
                 /* kvs_logInfo("[kvs_protocol SYNCING] 检测到写命令 '%s'，准备入队\n", cmd_name); */
-                int ret = slave_sync_enqueue(c->argc, c->argv);
+                int ret = slave_sync_enqueue(argc, argv);
                 if (ret == 0) {
                     /* 入队成功，返回 QUEUED 让客户端知道命令被暂存 */
                     /* kvs_logInfo("[kvs_protocol SYNCING] 写命令 '%s' 已入积压队列，返回 QUEUED\n", cmd_name); */
-                    add_reply_status(c, "QUEUED");
+                    rb_add_reply_status(rb, "QUEUED");
                 } else {
                     /* 入队失败（内存不足），返回错误 */
                     kvs_logError("[kvs_protocol SYNCING] 写命令 '%s' 入队失败: ret=%d\n",
                                  cmd_name, ret);
-                    add_reply_error(c, "Sync queue full");
+                    rb_add_reply_error(rb, "Sync queue full");
                 }
                 /* kvs_logInfo("[kvs_protocol SYNCING] 写命令处理完成，return 0\n"); */
                 return 0;  /* 已处理，不继续执行 */
@@ -772,14 +687,14 @@ int kvs_protocol(struct conn* c) {
             /* kvs_logInfo("[kvs_protocol] 执行 ASET 命令！key(%zu bytes) value(%zu bytes)\n", key->len, value->len); */
             ret = kvs_array_set(&array_engine, key, value);
             if (ret < 0) {
-                add_reply_error(c, "ERROR");
+                rb_add_reply_error(rb, "ERROR");
             } else if (ret == 0) {
                 if (g_config.aof_enabled) {
                     appendToAofBufferToEngine(AOF_ENGINE_TYPE_ARRAY, AOF_CMD_SET, key, value);
                 }
-                add_reply_status(c, "OK");
+                rb_add_reply_status(rb, "OK");
             } else {
-                 add_reply_error(c, "Key has existed");
+                 rb_add_reply_error(rb, "Key has existed");
             }
             break;
         case KVS_CMD_AGET:
@@ -787,48 +702,48 @@ int kvs_protocol(struct conn* c) {
             gotValue = use_engine_lock ? kvs_array_get_safe(&array_engine, key) : kvs_array_get(&array_engine, key);
             // fprintf(stderr, "--> gotValue:\n%s", gotValue);
             if (gotValue == NULL) {
-                add_reply_error(c, "ERROR / Not Exist"); // Redis style: return nil
+                rb_add_reply_error(rb, "ERROR / Not Exist"); // Redis style: return nil
             } else {
-                add_reply_bulk_len(c, gotValue, strlen(gotValue));
+                rb_add_reply_bulk_len(rb, gotValue, strlen(gotValue));
             }
             break;
         case KVS_CMD_ADEL:
             /* kvs_logInfo("ADEL key(%zu bytes) value(%zu bytes)", key->len, value->len); */
             ret = kvs_array_del(&array_engine, key);
             if (ret < 0) {
-                add_reply_error(c, "ERROR");
+                rb_add_reply_error(rb, "ERROR");
             } else if (ret == 0) {
                 if (g_config.aof_enabled) {
                     appendToAofBufferToEngine(AOF_ENGINE_TYPE_ARRAY, AOF_CMD_DEL, key, NULL);
                 }
-                add_reply_status(c, "OK");
+                rb_add_reply_status(rb, "OK");
             } else {
-                add_reply_error(c, "ERROR / Not Exist");
+                rb_add_reply_error(rb, "ERROR / Not Exist");
             }
             break;
         case KVS_CMD_AMOD:
             /* kvs_logInfo("AMOD key(%zu bytes) value(%zu bytes)", key->len, value->len); */
             ret = kvs_array_mod(&array_engine, key, value);
             if (ret < 0) {
-                 add_reply_error(c, "ERROR");
+                 rb_add_reply_error(rb, "ERROR");
             } else if (ret == 0) {
                 if (g_config.aof_enabled) {
                     appendToAofBufferToEngine(AOF_ENGINE_TYPE_ARRAY, AOF_CMD_MOD, key, value);
                 }
-                add_reply_status(c, "OK");
+                rb_add_reply_status(rb, "OK");
             } else {
-                add_reply_error(c, "Not Exist");
+                rb_add_reply_error(rb, "Not Exist");
             }
             break;
         case KVS_CMD_AEXIST:
             /* kvs_logInfo("AEXIST key(%zu bytes) value(%zu bytes)", key->len, value->len); */
             ret = use_engine_lock ? kvs_array_exist_safe(&array_engine, key) : kvs_array_exist(&array_engine, key);
             if (ret > 0) {
-                add_reply_exist(c, 1);
+                rb_add_reply_exist(rb, 1);
             } else if (ret == 0) {
-                add_reply_exist(c, 0);
+                rb_add_reply_exist(rb, 0);
             } else {
-                add_reply_error(c, "ERROR");
+                rb_add_reply_error(rb, "ERROR");
             }
             break;
 
@@ -837,62 +752,62 @@ int kvs_protocol(struct conn* c) {
             /* kvs_logInfo("HSET key(%zu bytes) value(%zu bytes)", key->len, value->len); */
             ret = kvs_hash_set(&hash_engine, key, value);
             if (ret < 0) {
-                 add_reply_error(c, "ERROR");
+                 rb_add_reply_error(rb, "ERROR");
             } else if (ret == 0) {
                 if (g_config.aof_enabled) {
                     appendToAofBufferToEngine(AOF_ENGINE_TYPE_HASH, AOF_CMD_SET, key, value);
                 }
-                add_reply_status(c, "OK");
+                rb_add_reply_status(rb, "OK");
             } else {
-                add_reply_error(c, "Key has existed");
+                rb_add_reply_error(rb, "Key has existed");
             }
             break;
         case KVS_CMD_HGET:
             /* kvs_logInfo("HGET key(%zu bytes) value(%zu bytes)", key->len, value->len); */
             gotValue = use_engine_lock ? kvs_hash_get_safe(&hash_engine, key) : kvs_hash_get(&hash_engine, key);
             if (gotValue == NULL) {
-                add_reply_error(c, "ERROR / Not Exist");
+                rb_add_reply_error(rb, "ERROR / Not Exist");
             } else {
-                add_reply_bulk_len(c, gotValue, strlen(gotValue));
+                rb_add_reply_bulk_len(rb, gotValue, strlen(gotValue));
             }
             break;
         case KVS_CMD_HDEL:
             /* kvs_logInfo("HDEL key(%zu bytes) value(%zu bytes)", key->len, value->len); */
             ret = kvs_hash_del(&hash_engine, key);
             if (ret < 0) {
-                add_reply_error(c, "ERROR");
+                rb_add_reply_error(rb, "ERROR");
             } else if (ret == 0) {
                 if (g_config.aof_enabled) {
                     appendToAofBufferToEngine(AOF_ENGINE_TYPE_HASH, AOF_CMD_DEL, key, NULL);
                 }
-                add_reply_status(c, "OK");
+                rb_add_reply_status(rb, "OK");
             } else {
-                add_reply_error(c, "ERROR / Not Exist");
+                rb_add_reply_error(rb, "ERROR / Not Exist");
             }
             break;
         case KVS_CMD_HMOD:
             /* kvs_logInfo("HMOD key(%zu bytes) value(%zu bytes)", key->len, value->len); */
             ret = kvs_hash_mod(&hash_engine, key, value);
             if (ret < 0) {
-                add_reply_error(c, "ERROR");
+                rb_add_reply_error(rb, "ERROR");
             } else if (ret == 0) {
                 if (g_config.aof_enabled) {
                     appendToAofBufferToEngine(AOF_ENGINE_TYPE_HASH, AOF_CMD_MOD, key, value);
                 }
-                add_reply_status(c, "OK");
+                rb_add_reply_status(rb, "OK");
             } else {
-                add_reply_error(c, "Not Exist");
+                rb_add_reply_error(rb, "Not Exist");
             }
             break;
         case KVS_CMD_HEXIST:
             /* kvs_logInfo("HEXIST key(%zu bytes) value(%zu bytes)", key->len, value->len); */
             ret = use_engine_lock ? kvs_hash_exist_safe(&hash_engine, key) : kvs_hash_exist(&hash_engine, key);
             if (ret > 0) {
-                add_reply_exist(c, 1);
+                rb_add_reply_exist(rb, 1);
             } else if (ret == 0) {
-                add_reply_exist(c, 0);
+                rb_add_reply_exist(rb, 0);
             } else {
-                add_reply_error(c, "ERROR");
+                rb_add_reply_error(rb, "ERROR");
             }
             break;
 
@@ -901,124 +816,124 @@ int kvs_protocol(struct conn* c) {
             /* kvs_logInfo("RSET key(%zu bytes) value(%zu bytes)", key->len, value->len); */
             ret = kvs_rbtree_set(&rbtree_engine, key, value);
             if (ret < 0) {
-                add_reply_error(c, "ERROR");
+                rb_add_reply_error(rb, "ERROR");
             } else if (ret == 0) {
                 if (g_config.aof_enabled) {
                     appendToAofBufferToEngine(AOF_ENGINE_TYPE_RBTREE, AOF_CMD_SET, key, value);
                 }
-                add_reply_status(c, "OK");
+                rb_add_reply_status(rb, "OK");
             } else {
-                add_reply_error(c, "Key has existed");
+                rb_add_reply_error(rb, "Key has existed");
             }
             break;
         case KVS_CMD_RGET:
             /* kvs_logInfo("RGET key(%zu bytes) value(%zu bytes)", key->len, value->len); */
             gotValue = use_engine_lock ? kvs_rbtree_get_safe(&rbtree_engine, key) : kvs_rbtree_get(&rbtree_engine, key);
             if (gotValue == NULL) {
-                add_reply_error(c, "ERROR / Not Exist");
+                rb_add_reply_error(rb, "ERROR / Not Exist");
             } else {
-                add_reply_bulk_len(c, gotValue, strlen(gotValue));
+                rb_add_reply_bulk_len(rb, gotValue, strlen(gotValue));
             }
             break;
         case KVS_CMD_RDEL:
             /* kvs_logInfo("RDEL key(%zu bytes) value(%zu bytes)", key->len, value->len); */
             ret = kvs_rbtree_del(&rbtree_engine, key);
             if (ret < 0) {
-                add_reply_error(c, "ERROR");
+                rb_add_reply_error(rb, "ERROR");
             } else if (ret == 0) {
                 if (g_config.aof_enabled) {
                     appendToAofBufferToEngine(AOF_ENGINE_TYPE_RBTREE, AOF_CMD_DEL, key, NULL);
                 }
-                add_reply_status(c, "OK");
+                rb_add_reply_status(rb, "OK");
             } else {
-                add_reply_error(c, "ERROR / Not Exist");
+                rb_add_reply_error(rb, "ERROR / Not Exist");
             }
             break;
         case KVS_CMD_RMOD:
             /* kvs_logInfo("RMOD key(%zu bytes) value(%zu bytes)", key->len, value->len); */
             ret = kvs_rbtree_mod(&rbtree_engine, key, value);
             if (ret < 0) {
-                add_reply_error(c, "ERROR");
+                rb_add_reply_error(rb, "ERROR");
             } else if (ret == 0) {
                 if (g_config.aof_enabled) {
                     appendToAofBufferToEngine(AOF_ENGINE_TYPE_RBTREE, AOF_CMD_MOD, key, value);
                 }
-                add_reply_status(c, "OK");
+                rb_add_reply_status(rb, "OK");
             } else {
-                add_reply_error(c, "Not Exist");
+                rb_add_reply_error(rb, "Not Exist");
             }
             break;
         case KVS_CMD_REXIST:
             /* kvs_logInfo("REXIST key(%zu bytes) value(%zu bytes)", key->len, value->len); */
             ret = use_engine_lock ? kvs_rbtree_exist_safe(&rbtree_engine, key) : kvs_rbtree_exist(&rbtree_engine, key);
             if (ret > 0) {
-                add_reply_exist(c, 1);
+                rb_add_reply_exist(rb, 1);
             } else if (ret == 0) {
-                add_reply_exist(c, 0);
+                rb_add_reply_exist(rb, 0);
             } else {
-                add_reply_error(c, "ERROR");
+                rb_add_reply_error(rb, "ERROR");
             }
             break;
         case KVS_CMD_SSET:
             /* kvs_logInfo("SSET key(%zu bytes) value(%zu bytes)", key->len, value->len); */
             ret = kvs_skiplist_set(&skiplist_engine, key, value);
             if (ret < 0) {
-                add_reply_error(c, "ERROR");
+                rb_add_reply_error(rb, "ERROR");
             } else if (ret == 0) {
                 if (g_config.aof_enabled) {
                     appendToAofBufferToEngine(AOF_ENGINE_TYPE_SKIPLIST, AOF_CMD_SET, key, value);
                 }
-                add_reply_status(c, "OK");
+                rb_add_reply_status(rb, "OK");
             } else {
-                add_reply_error(c, "Key has existed");
+                rb_add_reply_error(rb, "Key has existed");
             }
             break;
         case KVS_CMD_SGET:
             /* kvs_logInfo("SGET key(%zu bytes) value(%zu bytes)", key->len, value->len); */
             gotValue = use_engine_lock ? kvs_skiplist_get_safe(&skiplist_engine, key) : kvs_skiplist_get(&skiplist_engine, key);
             if (gotValue == NULL) {
-                add_reply_error(c, "ERROR / Not Exist");
+                rb_add_reply_error(rb, "ERROR / Not Exist");
             } else {
-                add_reply_bulk_len(c, gotValue, strlen(gotValue));
+                rb_add_reply_bulk_len(rb, gotValue, strlen(gotValue));
             }
             break;
         case KVS_CMD_SDEL:
             /* kvs_logInfo("SDEL key(%zu bytes) value(%zu bytes)", key->len, value->len); */
             ret = kvs_skiplist_del(&skiplist_engine, key);
             if (ret < 0) {
-                add_reply_error(c, "ERROR");
+                rb_add_reply_error(rb, "ERROR");
             } else if (ret == 0) {
                 if (g_config.aof_enabled) {
                     appendToAofBufferToEngine(AOF_ENGINE_TYPE_SKIPLIST, AOF_CMD_DEL, key, NULL);
                 }
-                add_reply_status(c, "OK");
+                rb_add_reply_status(rb, "OK");
             } else {
-                add_reply_error(c, "ERROR / Not Exist");
+                rb_add_reply_error(rb, "ERROR / Not Exist");
             }
             break;
         case KVS_CMD_SMOD:
             /* kvs_logInfo("SMOD key(%zu bytes) value(%zu bytes)", key->len, value->len); */
             ret = kvs_skiplist_mod(&skiplist_engine, key, value);
             if (ret < 0) {
-                add_reply_error(c, "ERROR");
+                rb_add_reply_error(rb, "ERROR");
             } else if (ret == 0) {
                 if (g_config.aof_enabled) {
                     appendToAofBufferToEngine(AOF_ENGINE_TYPE_SKIPLIST, AOF_CMD_MOD, key, value);
                 }
-                add_reply_status(c, "OK");
+                rb_add_reply_status(rb, "OK");
             } else {
-                add_reply_error(c, "Not Exist");
+                rb_add_reply_error(rb, "Not Exist");
             }
             break;
         case KVS_CMD_SEXIST:
             /* kvs_logInfo("SEXIST key(%zu bytes) value(%zu bytes)", key->len, value->len); */
             ret = use_engine_lock ? kvs_skiplist_exist_safe(&skiplist_engine, key) : kvs_skiplist_exist(&skiplist_engine, key);
             if (ret > 0) {
-                add_reply_exist(c, 1);
+                rb_add_reply_exist(rb, 1);
             } else if (ret == 0) {
-                add_reply_exist(c, 0);
+                rb_add_reply_exist(rb, 0);
             } else {
-                add_reply_error(c, "ERROR");
+                rb_add_reply_error(rb, "ERROR");
             }
             break;
 #else
@@ -1026,62 +941,62 @@ int kvs_protocol(struct conn* c) {
             /* kvs_logInfo("SET key(%zu bytes) value(%zu bytes)", key->len, value->len); */
             ret = kvs_main_set(&global_main_engine, key, value);
             if (ret < 0) {
-                add_reply_error(c, "ERROR");
+                rb_add_reply_error(rb, "ERROR");
             } else if (ret == 0) {
                 if (g_config.aof_enabled) {
                     appendToAofBuffer(AOF_CMD_SET, key, value);
                 }
-                add_reply_status(c, "OK");
+                rb_add_reply_status(rb, "OK");
             } else {
-                add_reply_error(c, "Key has existed");
+                rb_add_reply_error(rb, "Key has existed");
             }
             break;
         case KVS_CMD_GET:
             /* kvs_logInfo("GET key(%zu bytes) value(%zu bytes)", key->len, value->len); */
             gotValue = use_engine_lock ? kvs_main_get_safe(&global_main_engine, key) : kvs_main_get(&global_main_engine, key);
             if (gotValue == NULL) {
-                add_reply_error(c, "ERROR / Not Exist");
+                rb_add_reply_error(rb, "ERROR / Not Exist");
             } else {
-                add_reply_bulk_len(c, gotValue, strlen(gotValue));
+                rb_add_reply_bulk_len(rb, gotValue, strlen(gotValue));
             }
             break;
         case KVS_CMD_DEL:
             /* kvs_logInfo("DEL key(%zu bytes) value(%zu bytes)", key->len, value->len); */
             ret = kvs_main_del(&global_main_engine, key);
             if (ret < 0) {
-                add_reply_error(c, "ERROR");
+                rb_add_reply_error(rb, "ERROR");
             } else if (ret == 0) {
                 if (g_config.aof_enabled) {
                     appendToAofBuffer(AOF_CMD_DEL, key, NULL);
                 }
-                add_reply_status(c, "OK");
+                rb_add_reply_status(rb, "OK");
             } else {
-                add_reply_error(c, "Not Exist");
+                rb_add_reply_error(rb, "Not Exist");
             }
             break;
         case KVS_CMD_MOD:
             /* kvs_logInfo("MOD key(%zu bytes) value(%zu bytes)", key->len, value->len); */
             ret = kvs_main_mod(&global_main_engine, key, value);
             if (ret < 0) {
-                add_reply_error(c, "ERROR");
+                rb_add_reply_error(rb, "ERROR");
             } else if (ret == 0) {
                 if (g_config.aof_enabled) {
                     appendToAofBuffer(AOF_CMD_MOD, key, value);
                 }
-                add_reply_status(c, "OK");
+                rb_add_reply_status(rb, "OK");
             } else {
-                add_reply_error(c, "Not Exist");
+                rb_add_reply_error(rb, "Not Exist");
             }
             break;
         case KVS_CMD_EXIST:
             /* kvs_logInfo("EXIST key(%zu bytes) value(%zu bytes)", key->len, value->len); */
             ret = use_engine_lock ? kvs_main_exist_safe(&global_main_engine, key) : kvs_main_exist(&global_main_engine, key);
             if (ret > 0) {
-                add_reply_exist(c, 1);
+                rb_add_reply_exist(rb, 1);
             } else if (ret == 0) {
-                add_reply_exist(c, 0);
+                rb_add_reply_exist(rb, 0);
             } else {
-                add_reply_error(c, "ERROR");
+                rb_add_reply_error(rb, "ERROR");
             }
             break;
 #endif
@@ -1093,25 +1008,25 @@ int kvs_protocol(struct conn* c) {
         #else
             ksfSave(snap_filename);
         #endif 
-            add_reply_status(c, "OK");
+            rb_add_reply_status(rb, "OK");
             break;
         case KVS_CMD_BGSAVE:
             // 异步保存快照
             ksfSaveBackground();
-            add_reply_status(c, "Background saving started");
+            rb_add_reply_status(rb, "Background saving started");
             break;
         case KVS_CMD_SYNC:
             // SYNC 命令：触发从节点向主节点执行 RDMA 存量同步
             // 仅可在从节点上执行，主节点会返回错误
-            return kvs_cmd_sync(c);  // 调用 sync_command.c 中实现的命令处理函数
+            return kvs_cmd_sync(rb);  // 调用 sync_command.c 中实现的命令处理函数
         case KVS_CMD_REPLICAOF:
             // REPLICAOF 命令：设置或取消主从复制关系
             // 用法: REPLICAOF <host> <port>  或  REPLICAOF NO ONE
-            if (c->argc < 3) {
-                add_reply_error(c, "wrong number of arguments for 'replicaof' command");
+            if (argc < 3) {
+                rb_add_reply_error(rb, "wrong number of arguments for 'replicaof' command");
                 return 0;
             }
-            return kvs_cmd_replicaof(c, c->argc, c->argv);  // 调用 sync_command.c 中的处理函数
+            return kvs_cmd_replicaof(rb, argc, argv);  // 调用 sync_command.c 中的处理函数
 
         case KVS_CMD_RDMASYNC:
             /*
@@ -1133,20 +1048,20 @@ int kvs_protocol(struct conn* c) {
             {
                 /* 1. 检查是否为主节点 */
                 if (g_config.replica_mode != REPLICA_MODE_MASTER) {
-                    add_reply_error(c, "RDMASYNC only available on master");
+                    rb_add_reply_error(rb, "RDMASYNC only available on master");
                     return 0;
                 }
 
                 /* 2. 检查参数 */
-                if (c->argc < 2) {
-                    add_reply_error(c, "wrong number of arguments for 'rdmasync' command");
+                if (argc < 2) {
+                    rb_add_reply_error(rb, "wrong number of arguments for 'rdmasync' command");
                     return 0;
                 }
 
                 /* 3. 解析引擎类型 */
-                int engine_type = atoi(c->argv[1].ptr);
+                int engine_type = atoi(argv[1].ptr);
                 if (engine_type < 0 || engine_type > ENGINE_COUNT) {
-                    add_reply_error(c, "invalid engine type");
+                    rb_add_reply_error(rb, "invalid engine type");
                     return 0;
                 }
 
@@ -1157,14 +1072,14 @@ int kvs_protocol(struct conn* c) {
                 pid_t pid = fork();
                 if (pid < 0) {
                     kvs_logError("[RDMASYNC] fork失败: %s\n", strerror(errno));
-                    add_reply_error(c, "fork failed");
+                    rb_add_reply_error(rb, "fork failed");
                     return 0;
                 }
 
                 if (pid == 0) {
                     /* ========== 子进程 ========== */
                     /* 子进程接管TCP fd，处理RDMA同步 */
-                    int tcp_fd = c->fd;
+                    int tcp_fd = rb->nc->fd;
 
                     /*
                      * 注意: 子进程继承父进程的内存空间（COW），
@@ -1184,20 +1099,20 @@ int kvs_protocol(struct conn* c) {
                  * 发送+FORKED响应给客户端
                  * 子进程随后会发送+RDMA_READY和+RDMA_DONE
                  */
-                add_reply_status(c, "FORKED");
+                rb_add_reply_status(rb, "FORKED");
 
                 /*
                  * 重要: 标记连接fd为已移交
                  * 防止父进程在连接清理时关闭该fd（子进程正在使用）
                  */
-                c->fd = -1;  /* fd已移交给子进程 */
-                c->state = ST_CLOSE;  /* 标记连接需要清理（但不关闭fd） */
+                rb->nc->fd = -1;  /* fd已移交给子进程 */
+                rb->nc->state = ST_CLOSE;  /* 标记连接需要清理（但不关闭fd） */
 
                 return 0;
             }
 
         default:
-            add_reply_error(c, "UNKNOWN COMMAND");
+            rb_add_reply_error(rb, "UNKNOWN COMMAND");
     }
     
 
@@ -1208,7 +1123,7 @@ int kvs_protocol(struct conn* c) {
         check_and_perform_autosave();
     }
 
-    return c->wlen;
+    return rb->nc->wlen;
 }
 
 int init_kvengine(void) {

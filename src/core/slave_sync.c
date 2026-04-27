@@ -442,44 +442,40 @@ void slave_sync_drain_backlog(msg_handler handler) {
         }
         g_backlog.count--;
 
-        /* 创建临时 conn 结构来执行命令
-         * 原因：handler 期望一个完整的 conn 结构，包含 fd/wbuf 等字段
+        /* 创建临时网络层结构来执行命令
          * 注意：这只是模拟网络连接，实际不通过 socket 发送响应 */
-        struct conn temp_conn = {0};
-
-        /* 复制命令参数 */
-        temp_conn.argc = cmd->argc;
-        for (int i = 0; i < cmd->argc && i < MAX_ARGC; i++) {
-            /* 浅拷贝 robj：复制 len 和 ptr 指针
-             * 注意：ptr 指向的内存仍由 cmd->argv[i] 拥有，稍后释放 */
-            temp_conn.argv[i].len = cmd->argv[i].len;
-            temp_conn.argv[i].ptr = cmd->argv[i].ptr;
-        }
-
-        /* 分配写缓冲区（handler 需要写入响应） */
-        temp_conn.wbuf = kvs_malloc(RESP_BUF_SIZE);
-        if (!temp_conn.wbuf) {
-            kvs_logError("[Slave Sync] 分配 wbuf 失败，跳过命令 #%d\n", processed + 1);
+        net_conn_t fake_nc = {0};
+        fake_nc.fd = -1;
+        fake_nc.parser = kvs_calloc(1, sizeof(proto_parser_t));
+        if (!fake_nc.parser) {
+            kvs_logError("[Slave Sync] 分配 parser 失败，跳过命令 #%d\n", processed + 1);
             failed++;
-            goto cleanup_cmd;  /* 跳过执行，直接清理命令资源 */
+            goto cleanup_cmd;
         }
-        temp_conn.wlen = 0;
-        memset(temp_conn.wbuf, 0, RESP_BUF_SIZE);
 
-        /* 标记为内部连接（fd = -1 表示非网络连接）
-         * 这用于区分积压回放命令和普通客户端命令，便于调试 */
-        temp_conn.fd = -1;
-        temp_conn.state = ST_RECV;
-        temp_conn.send_st = ST_SEND_SMALL;
+        /* 复制命令参数到 parser->argv */
+        fake_nc.parser->argc = cmd->argc;
+        for (int i = 0; i < cmd->argc && i < MAX_ARGC; i++) {
+            fake_nc.parser->argv[i].len = cmd->argv[i].len;
+            fake_nc.parser->argv[i].ptr = cmd->argv[i].ptr;
+        }
 
-        /* 执行命令：调用 kvs_protocol 处理命令 */
-        handler(&temp_conn);
+        reply_builder_t rb = {.nc = &fake_nc};
+        handler(&rb, fake_nc.parser->argc, fake_nc.parser->argv);
 
         /* 注意：积压命令的响应不发送给任何客户端（fd = -1）
          * 这是因为这些命令来自 TCP mirror，客户端在主节点已收到响应
          * 从节点只需要保证数据一致性，不需要返回响应 */
 
-        kvs_free(temp_conn.wbuf);
+        /* 释放 send_slot 中可能分配的 hdr */
+        for (int i = 0; i < SEND_QUEUE_MAX; i++) {
+            if (fake_nc.sq[i].hdr) {
+                kvs_free(fake_nc.sq[i].hdr);
+            }
+        }
+        if (fake_nc.parser) {
+            kvs_free(fake_nc.parser);
+        }
 
     cleanup_cmd:
         /* 释放命令资源：argv 数组和其中的字符串缓冲区 */

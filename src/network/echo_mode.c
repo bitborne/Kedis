@@ -3,17 +3,11 @@
 
 #if ENABLE_ECHO_MODE
 
-void echo_handler(struct conn *c) {
-    // 将本次接收到的所有数据原封不动拷贝到发送缓冲区
-    memcpy(c->wbuf, c->rbuf, c->rlen);
-    c->wlen = c->rlen;
-
-    // 重置接收缓冲区，准备下一次 recv
-    c->rlen = 0;
-
-    // 切换到发送状态，走 SMALL 响应路径
-    c->state = ST_SEND;
-    c->send_st = ST_SEND_SMALL;
+void echo_handler(reply_builder_t *rb) {
+    net_conn_t *nc = rb->nc;
+    // 将本次接收到的所有数据原封不动写入回复构建器
+    rb_add_reply_str_len(rb, nc->rbuf_ptr, nc->rlen);
+    nc->rlen = 0;
 }
 
 #endif

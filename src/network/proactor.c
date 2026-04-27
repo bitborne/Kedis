@@ -377,50 +377,6 @@ static int init_listen(uint16_t port, const char* bind_addr) {
   return fd;
 }
 
-#if !ENABLE_ECHO_MODE
-/* --------------  业务入口：处理解析好的argv,并准备wbuf  -------------- */
-static int processCommand(struct conn* c) {
-  // 直接调用核心逻辑
-  // 核心逻辑会根据 c->argv 处理命令，并将结果写入 c->wbuf
-  return g_kvs_handler(c);
-}
-
-/* --------------  pipeline 主循环：批量解析并执行命令  -------------- */
-static void run_pipeline(struct io_uring* ring, struct conn* c) {
-  while (1) {
-    int ret = kvs_resp_feed(c);
-    if (ret == RESP_ERROR) {
-      kvs_logError("kvs_resp_feed: RESP parse error");
-      conn_free(c);
-      conn_pool_free(&g_conn_pool, c);
-      return;
-    } else if (ret == RESP_CONTINUE_RECV) {
-      kvs_logDebug("RESP continue recv");
-      flush_all_aof_buffers_now();
-      if (c->wlen > 0) {
-        c->state = ST_SEND;
-      }
-      return;
-    } else if (ret == RESP_PARSE_OK) {
-      kvs_logDebug("RESP parse OK");
-      processCommand(c);
-      kvs_resp_pipeline_next(c);
-      if (c->send_st == ST_SEND_HDR_SENT) {
-        flush_all_aof_buffers_now();
-        c->state = ST_SEND;
-        return;
-      }
-      if (c->wbuf_full) {
-        flush_all_aof_buffers_now();
-        c->state = ST_SEND;
-        return;
-      }
-      continue;
-    }
-  }
-}
-#endif
-
 /* --------------  proactor_start：主入口  -------------- */
 int proactor_start(unsigned short port, msg_handler handler) {
   int listenfd = init_listen(port, g_config.bind_addr);
@@ -599,11 +555,30 @@ int proactor_start(unsigned short port, msg_handler handler) {
           }
           c->rlen += res;
 #if ENABLE_ECHO_MODE
-          echo_handler(c);
-          post_send_resp(&g_ring, c);
+          {
+            reply_builder_t rb = {.nc = c};
+            echo_handler(&rb);
+          }
 #else
-          run_pipeline(&g_ring, c);
+          while (1) {
+            int ret = kvs_resp_feed(c);
+            if (ret == RESP_ERROR) {
+              conn_free(c);
+              conn_pool_free(&g_conn_pool, c);
+              break;
+            } else if (ret == RESP_CONTINUE_RECV) {
+              break;
+            } else if (ret == RESP_PARSE_OK) {
+              reply_builder_t rb = {.nc = c};
+              g_kvs_handler(&rb, c->argc, c->argv);
+              kvs_resp_pipeline_next(c);
+              continue;
+            }
+          }
 #endif
+          if (c->sq_tail - c->sq_head >= SEND_QUEUE_MAX - 2) {
+            c->pause_recv = 1;
+          }
           flush_send_queue(&g_ring, c);
           maybe_post_recv(&g_ring, c);
           break;
@@ -664,9 +639,6 @@ int proactor_start(unsigned short port, msg_handler handler) {
             c->hdr_len = 0;
             c->send_st = ST_SEND_NOTSET;
             c->wbuf_full = 0;
-            if (c->rlen > c->parse_done) {
-              run_pipeline(&g_ring, c);
-            }
             flush_send_queue(&g_ring, c);
             maybe_post_recv(&g_ring, c);
             break;
@@ -707,9 +679,6 @@ int proactor_start(unsigned short port, msg_handler handler) {
             c->wlen = 0;
             c->send_st = ST_SEND_NOTSET;
             c->wbuf_full = 0;
-            if (c->rlen > c->parse_done) {
-              run_pipeline(&g_ring, c);
-            }
             flush_send_queue(&g_ring, c);
             maybe_post_recv(&g_ring, c);
           }
