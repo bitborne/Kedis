@@ -214,6 +214,16 @@ static void maybe_post_recv(struct io_uring* ring, struct conn* c) {
   }
 }
 
+/* ---------------- Step 3: 统一刷 send 队列 ----------------
+ * run_pipeline 只负责生成响应到 wbuf，不再直接提交 send。
+ * 由 CQE 处理末尾统一调用本函数提交待发送数据。
+ */
+static void flush_send_queue(struct io_uring* ring, struct conn* c) {
+  if (c->fd >= 0 && c->wlen > 0 && c->send_inflight == 0) {
+    post_send_resp(ring, c);
+  }
+}
+
 /* ---------------- 释放连接资源 ---------------- */
 static void conn_free(struct conn* c) {
   if (c->fd >= 0) {
@@ -297,7 +307,6 @@ static void run_pipeline(struct io_uring* ring, struct conn* c) {
       flush_all_aof_buffers_now();
       if (c->wlen > 0) {
         c->state = ST_SEND;
-        post_send_resp(ring, c);
       }
       return;
     } else if (ret == RESP_PARSE_OK) {
@@ -307,13 +316,11 @@ static void run_pipeline(struct io_uring* ring, struct conn* c) {
       if (c->send_st == ST_SEND_HDR_SENT) {
         flush_all_aof_buffers_now();
         c->state = ST_SEND;
-        post_send_resp(ring, c);
         return;
       }
       if (c->wbuf_full) {
         flush_all_aof_buffers_now();
         c->state = ST_SEND;
-        post_send_resp(ring, c);
         return;
       }
       continue;
@@ -505,6 +512,7 @@ int proactor_start(unsigned short port, msg_handler handler) {
 #else
           run_pipeline(&g_ring, c);
 #endif
+          flush_send_queue(&g_ring, c);
           maybe_post_recv(&g_ring, c);
           break;
         }
@@ -540,6 +548,7 @@ int proactor_start(unsigned short port, msg_handler handler) {
             if (c->rlen > c->parse_done) {
               run_pipeline(&g_ring, c);
             }
+            flush_send_queue(&g_ring, c);
             maybe_post_recv(&g_ring, c);
             break;
           }
@@ -582,6 +591,7 @@ int proactor_start(unsigned short port, msg_handler handler) {
             if (c->rlen > c->parse_done) {
               run_pipeline(&g_ring, c);
             }
+            flush_send_queue(&g_ring, c);
             maybe_post_recv(&g_ring, c);
           }
           break;
