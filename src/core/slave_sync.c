@@ -467,12 +467,6 @@ void slave_sync_drain_backlog(msg_handler handler) {
          * 这是因为这些命令来自 TCP mirror，客户端在主节点已收到响应
          * 从节点只需要保证数据一致性，不需要返回响应 */
 
-        /* 释放 send_slot 中可能分配的 hdr */
-        for (int i = 0; i < SEND_QUEUE_MAX; i++) {
-            if (fake_nc.sq[i].hdr) {
-                kvs_free(fake_nc.sq[i].hdr);
-            }
-        }
         if (fake_nc.parser) {
             kvs_free(fake_nc.parser);
         }

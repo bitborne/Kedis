@@ -6,12 +6,8 @@
 
 void proto_parser_reset(proto_parser_t *p) {
   if (!p) return;
-  int argc_done = p->argc_done;
-  if (argc_done < MAX_ARGC && p->argv[argc_done].ptr)
-    argc_done++;
-  for (int i = 0; i < argc_done; i++) {
-    if (p->argv[i].ptr && !(p->argv[i].flags & ROBJ_FLAG_RBUF_REF)
-        && p->argv[i].ptr != p->cmd_buf) {
+  for (int i = 0; i < MAX_ARGC; i++) {
+    if (p->argv[i].ptr && p->argv[i].ptr != p->cmd_buf) {
       kvs_free(p->argv[i].ptr);
     }
     p->argv[i].ptr = NULL;
@@ -23,46 +19,20 @@ void proto_parser_reset(proto_parser_t *p) {
   p->parse_done = 0;
 }
 
-void kvs_resp_reset(struct conn* c) {
-  c->rlen = 0;
-  c->wlen = c->wbuf_off = c->bulk_sent = 0;
-  c->bulk_p = NULL;
-  c->send_st = ST_SEND_NOTSET;
-
-  if (c->parser) {
-    proto_parser_reset(c->parser);
+void kvs_resp_reset(proto_parser_t *p) {
+  if (p) {
+    proto_parser_reset(p);
   }
 }
 
-void kvs_resp_free_resources(struct conn* c) {
-  if (c->parser) {
-    for (int i = 0; i < c->parser->argc; i++) {
-      if (c->parser->argv[i].ptr && !(c->parser->argv[i].flags & ROBJ_FLAG_RBUF_REF)
-          && c->parser->argv[i].ptr != c->parser->cmd_buf) {
-        kvs_free(c->parser->argv[i].ptr);
-        c->parser->argv[i].ptr = NULL;
-      }
+void kvs_resp_free_resources(proto_parser_t *p) {
+  if (!p) return;
+  for (int i = 0; i < MAX_ARGC; i++) {
+    if (p->argv[i].ptr && p->argv[i].ptr != p->cmd_buf) {
+      kvs_free(p->argv[i].ptr);
+      p->argv[i].ptr = NULL;
     }
   }
-}
-
-/* --------------  pipeline 模式下释放当前命令资源，保留 rbuf  -------------- */
-void kvs_resp_pipeline_next(struct conn* c) {
-  if (!c->parser) return;
-  for (int i = 0; i < c->parser->argc; i++) {
-    if (c->parser->argv[i].ptr && !(c->parser->argv[i].flags & ROBJ_FLAG_RBUF_REF)
-        && c->parser->argv[i].ptr != c->parser->cmd_buf) {
-      kvs_free(c->parser->argv[i].ptr);
-    }
-    c->parser->argv[i].ptr = NULL;
-    c->parser->argv[i].len = 0;
-    c->parser->argv[i].flags = 0;
-  }
-  c->parser->argc = 0;
-  c->parser->argc_done = 0;
-  c->parser->bulk_len = 0;
-  c->parser->bulk_done = 0;
-  c->parser->resp_state = ST_RESP_HDR;
 }
 
 static inline char* find_crlf(const char* s, size_t len) {
@@ -117,23 +87,6 @@ static inline int64_t fast_atoi_safe(const char* s, size_t len) {
         n = n * 10 + digit;
     }
     return n;
-}
-
-/* 在 memmove rbuf 前，将所有指向 rbuf 的 argv 指针升级到堆内存 */
-static inline void rbuf_ref_upgrade(struct conn* c) {
-    if (!c->parser) return;
-    for (int i = 0; i < c->parser->argc_done; i++) {
-        if (c->parser->argv[i].ptr && (c->parser->argv[i].flags & ROBJ_FLAG_RBUF_REF)) {
-            char* old_ptr = c->parser->argv[i].ptr;
-            size_t old_len = c->parser->argv[i].len;
-            c->parser->argv[i].ptr = kvs_malloc(old_len + 1);
-            if (c->parser->argv[i].ptr) {
-                memcpy(c->parser->argv[i].ptr, old_ptr, old_len);
-                c->parser->argv[i].ptr[old_len] = '\0';
-            }
-            c->parser->argv[i].flags &= ~ROBJ_FLAG_RBUF_REF;
-        }
-    }
 }
 
 /* --------------  RESP 流式解析：啃掉 chunk[]，返回已消费字节数  -------------- */
@@ -267,36 +220,6 @@ size_t proto_feed(proto_parser_t *p, const char *chunk, size_t chunk_len) {
         // 计算 chunk 中还有多少数据可用
         size_t avail = chunk_len - p->parse_done;
 
-        // 【零拷贝快速路径】整个 bulk 数据（含 \r\n）已经到达且尚未拷贝
-        // 注意：argv[0] 是命令名，下游用 strcasecmp/djb2 做字符串比较，需要 \0 结尾，
-        // 因此命令名不走零拷贝，总是 malloc+copy 保证 null-terminated。
-        if (p->argc_done > 0 && p->bulk_done == 0 && avail >= p->bulk_len + 2) {
-            // 直接让 argv 指向 chunk 内部
-            p->argv[p->argc_done].ptr = (char*)chunk + p->parse_done;
-            p->argv[p->argc_done].len = p->bulk_len;
-            p->argv[p->argc_done].flags = ROBJ_FLAG_RBUF_REF;
-            p->parse_done += p->bulk_len;
-            // 检查 \r\n
-            if (chunk[p->parse_done] != '\r' ||
-                chunk[p->parse_done + 1] != '\n') {
-                kvs_logError("Bulk should end with \\r\\n");
-                goto error;
-            }
-            // 将 \r 覆写为 \0，使零拷贝指针对引擎的 strcmp/strlen 安全
-            // NOTE: caller must ensure chunk is writable (rbuf is writable)
-            // This is a design constraint - proto_feed requires writable buffer
-            *((char*)chunk + p->parse_done) = '\0';
-            p->parse_done += 2;
-            p->argc_done++;
-
-            if (p->argc_done == p->argc) {
-                p->resp_state = ST_RESP_OK;
-            } else {
-                p->resp_state = ST_RESP_BULK_LEN;
-            }
-            break;
-        }
-
         // 计算本次可以复制的数据量（取 want 和 avail 的较小值）
         size_t cp = (want < avail) ? want : avail;
         // 从 chunk 复制数据到 argv[argc_done].ptr
@@ -366,20 +289,10 @@ int proto_take_cmd(proto_parser_t *p, int *argc_out, robj **argv_out) {
   if (!proto_cmd_ready(p)) return 0;
   *argc_out = p->argc;
   *argv_out = p->argv;
-  /* Upgrade RBUF_REF argv entries to heap memory before handing to business layer */
-  for (int i = 0; i < p->argc; i++) {
-    if (p->argv[i].flags & ROBJ_FLAG_RBUF_REF) {
-      char *old = p->argv[i].ptr;
-      size_t old_len = p->argv[i].len;
-      p->argv[i].ptr = kvs_malloc(old_len + 1);
-      if (p->argv[i].ptr) {
-        memcpy(p->argv[i].ptr, old, old_len);
-        p->argv[i].ptr[old_len] = '\0';
-      }
-      p->argv[i].flags &= ~ROBJ_FLAG_RBUF_REF;
-    }
-  }
-  /* Reset parser state for next command, but DO NOT free argv (caller now owns them) */
+  /* Reset parser state for next command.
+   * p->argv contents remain intact for the caller; proto_free_argv will
+   * release heap pointers and clear them. RBUF_REF entries are left as-is
+   * since they point into rbuf and do not need freeing. */
   p->resp_state = ST_RESP_HDR;
   p->argc_done = 0;
   p->bulk_len = p->bulk_done = 0;
@@ -389,68 +302,10 @@ int proto_take_cmd(proto_parser_t *p, int *argc_out, robj **argv_out) {
 
 void proto_free_argv(int argc, robj *argv) {
   for (int i = 0; i < argc; i++) {
-    if (argv[i].ptr && !(argv[i].flags & ROBJ_FLAG_RBUF_REF)) {
+    if (argv[i].ptr) {
       kvs_free(argv[i].ptr);
       argv[i].ptr = NULL;
     }
   }
 }
 
-/* --------------  旧兼容包装器  -------------- */
-int kvs_resp_feed(struct conn* c) {
-  if (!c->parser) return RESP_ERROR;
-  size_t consumed = proto_feed(c->parser, c->rbuf_ptr, c->rlen);
-
-  if (consumed == (size_t)-1) {
-    c->rlen = c->parser->parse_done = 0;
-    c->parser->resp_state = ST_RESP_HDR;
-    return RESP_ERROR;
-  }
-
-  if (c->parser->resp_state == ST_RESP_OK) {
-    /* 兼容：同步 parser->argv 到 c->argv，业务层仍从 c->argv 读取 */
-    c->argc = c->parser->argc;
-    c->argc_done = c->parser->argc_done;
-    for (int i = 0; i < c->parser->argc; i++) {
-      c->argv[i] = c->parser->argv[i];
-    }
-    if (c->parser->parse_done >= c->rlen) {
-      c->rlen = 0;
-      c->parser->parse_done = 0;
-      return RESP_PARSE_OK;
-    } else {
-      c->parser->resp_state = ST_RESP_HDR;
-      c->parser->argc_done = 0;
-      return RESP_PARSE_OK;
-    }
-  }
-
-  /* For CONTINUE_RECV: handle rbuf compaction if buffer is nearly full */
-  if (c->rlen >= (IOP_SIZE - 256)) {
-    if (c->parser->parse_done > 0) {
-      /* upgrade rbuf refs before memmove */
-      for (int i = 0; i < c->parser->argc_done; i++) {
-        if (c->parser->argv[i].ptr && (c->parser->argv[i].flags & ROBJ_FLAG_RBUF_REF)) {
-          char* old_ptr = c->parser->argv[i].ptr;
-          size_t old_len = c->parser->argv[i].len;
-          c->parser->argv[i].ptr = kvs_malloc(old_len + 1);
-          if (c->parser->argv[i].ptr) {
-            memcpy(c->parser->argv[i].ptr, old_ptr, old_len);
-            c->parser->argv[i].ptr[old_len] = '\0';
-          }
-          c->parser->argv[i].flags &= ~ROBJ_FLAG_RBUF_REF;
-        }
-      }
-      size_t remaining = c->rlen - c->parser->parse_done;
-      memmove(c->rbuf_ptr, c->rbuf_ptr + c->parser->parse_done, remaining);
-      c->rlen = remaining;
-      c->parser->parse_done = 0;
-    } else {
-      kvs_logError("Protocol error: rbuf full without parse progress");
-      c->rlen = c->parser->parse_done = 0;
-      c->parser->resp_state = ST_RESP_HDR;
-      return RESP_ERROR;
-    }
-  }
-  return RESP_CONTINUE_RECV;
-}

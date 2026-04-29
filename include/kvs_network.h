@@ -2,69 +2,18 @@
 #define __KVS_NETWORK_H__
 
 #include <stddef.h>
-#include <sys/socket.h>  /* for struct msghdr / iovec */
+#include <string.h>
+#include <stdio.h>
+#include "kvs_protocol.h"
 
 /* ---------------- 常量定义 ---------------- */
 #define IOP_SIZE (4 * 1024)               // 每次 recv/send 的帧大小（16 KB）
-#define MAX_ARGC (8)                        // 最大参数个数
 #define RESP_BUF_SIZE (4 * 1024)          // 响应缓冲区大小
-#define MAX_SEG_SIZE (1024 * 1024 * 1024)  // 单段最大 1 GB
 
 /* ---------------- 连接状态机 ---------------- */
 #define ST_RECV 1
 #define ST_SEND 2
 #define ST_CLOSE 3
-
-/* ---------------- RESP 状态机枚举 ---------------- */
-typedef enum {
-  ST_RESP_HDR,        // 等待解析 *<argc> (命令开始)
-  ST_RESP_BULK_LEN,   // 等待解析 $<len> (参数长度)
-  ST_RESP_BULK_DATA,  // 正在收 bulk 内容
-  ST_RESP_OK
-} resp_state_t;
-
-typedef enum {
-  ST_SEND_SMALL,   // 等待解析 $<len> (参数长度)
-  ST_SEND_HDR_SENT,        // 等待解析 *<argc> (命令开始)
-  ST_SEND_BULK,  // 正在收 bulk 内容
-  ST_SEND_NOTSET
-} send_state_t;
-
-/* ---------------- 段对象：只挂指针，不拷贝数据 ---------------- */
-#define ROBJ_FLAG_RBUF_REF 0x01  // ptr 直接指向 rbuf 内部，无需 free
-
-typedef struct {
-  char* ptr;   // 指向数据（可能是堆内存，也可能直接指向 rbuf）
-  size_t len;  // 段长度
-  unsigned int flags;  // 标志位
-} robj;
-
-/* ---------------- 协议解析器（从 conn 抽离，支持未来注册缓冲区） ---------------- */
-typedef struct {
-  resp_state_t resp_state;
-  size_t bulk_len;
-  size_t bulk_done;
-  int argc;
-  int argc_done;
-  size_t parse_done;
-  robj argv[MAX_ARGC];
-  char cmd_buf[16];
-  /* Cross-chunk buffer for large objects (reserved for later) */
-  char *querybuf;
-  size_t qb_len;
-  size_t qb_pos;
-} proto_parser_t;
-
-/* ---------------- 发送队列槽 ---------------- */
-#define SEND_QUEUE_MAX 16
-
-typedef struct {
-  char *hdr;
-  size_t hdr_len;
-  char *bulk;
-  size_t bulk_len;
-  size_t sent;
-} send_slot_t;
 
 /* ---------------- 连接上下文（struct conn 保持为主名，net_conn_t 为别名） ---------------- */
 /*
@@ -77,28 +26,10 @@ struct conn {
   int fd;                // TCP 套接字
   int state;             // io_uring 状态：ST_RECV / ST_SEND / ST_CLOSE
   int next_free;         // 空闲链表中的下一个连接索引
-  size_t rlen;           // 缓冲区内有效数据长度
-  size_t wlen;           // wbuf 有效数据总长度
-  size_t wbuf_off;       // wbuf 已发送偏移（保持 wbuf 指针不动）
-  size_t parse_done;     // 缓冲区内已解析长度
-  resp_state_t resp_state;
-  size_t bulk_len;       // 当前段长度 (需要读取的长度)
-  int argc;              // 期望的参数个数 (argc)
-  int argc_done;         // 已解析完成的参数个数 (用于跟踪解析进度)
-  size_t bulk_done;      // 当前 bulk 已解析长度
-  send_state_t send_st;
-  size_t bulk_sent;      // 已发送的数据长度（用于流式发送跟踪）
-  size_t bulk_tt;
-  size_t hdr_len;
-  int wbuf_full;         // wbuf 已满标记（由 add_reply_str_len 设置）
+  size_t rlen;           // 未消费数据长度（从 rbuf_off 开始）
+  size_t rbuf_off;       // 未消费数据起始偏移量
 
   /* === 冷字段 / 大缓冲区：低频或间接访问 === */
-  char rbuf[IOP_SIZE];   // 读缓冲区（16 KB）
-  char cmd_buf[16];      // argv[0] 短命令名内联缓冲，避免 malloc
-  robj argv[MAX_ARGC];   // 命令段数组 (每个 ptr 都需要 malloc)
-  char* bulk_data;       // 大数据源指针（用于流式发送）
-  char* bulk_p;
-  char* wbuf;            // 回包缓冲（+OK\r\n 或 $len\r\n...）
 
   /* Step 1: inflight 计数 */
   int recv_inflight;
@@ -110,10 +41,16 @@ struct conn {
   size_t rbuf_cap;
   char rbuf_embedded[IOP_SIZE];  /* Default points here */
 
-  /* Send queue */
-  send_slot_t sq[SEND_QUEUE_MAX];
-  int sq_head;
-  int sq_tail;
+  /* Send buffer: 单 wbuf 批量累积，替代 send_slot 队列 */
+  char wbuf[RESP_BUF_SIZE];
+  size_t wlen;
+
+  /* 大响应零拷贝分片：wbuf 满后引用外部数据 */
+  char *iov_data;
+  size_t iov_len;
+  int has_bulk_suffix;   // 标记 iov_data 发完后还需发送 \r\n
+
+  int dead;              // 连接待释放（有 inflight send 时延迟释放）
 
   int pause_recv;
 
@@ -125,7 +62,7 @@ struct conn {
 typedef struct conn net_conn_t;
 typedef struct conn conn_t;
 
-/* ---------------- 回复构建器（未来 add_reply_* 的入口） ---------------- */
+/* ---------------- 回复构建器 ---------------- */
 typedef struct {
   net_conn_t *nc;
 } reply_builder_t;
@@ -138,30 +75,79 @@ extern int reactor_start(unsigned short port, msg_handler handler);
 extern int proactor_start(unsigned short port, msg_handler handler);
 extern int ntyco_start(unsigned short port, msg_handler handler);
 
-// RESP 协议回复函数声明（供命令处理使用）
-extern void add_reply_error(struct conn* c, const char* err);    // 发送错误回复 (-ERR ...)
-extern void add_reply_status(struct conn* c, const char* status); // 发送状态回复 (+OK ...)
-extern void add_reply_bulk(struct conn* c, char* data);   // 发送批量字符串回复 ($len...)
-extern void add_reply_bulk_len(struct conn* c, char* data, size_t len); // 带已知长度的批量字符串回复
-extern void add_reply_str(struct conn* c, const char* str);     // 发送原始字符串
-extern void add_reply_str_len(struct conn* c, const char* str, size_t len); // 带已知长度的原始字符串
-
-// RESP 协议解析函数声明（旧兼容接口）
-extern void kvs_resp_pipeline_next(struct conn* c);
-
-/* ---------------- 协议层新接口（Step C 解耦） ---------------- */
-extern void proto_parser_reset(proto_parser_t *p);
-extern size_t proto_feed(proto_parser_t *p, const char *data, size_t len);
-extern int proto_cmd_ready(const proto_parser_t *p);
-extern int proto_take_cmd(proto_parser_t *p, int *argc_out, robj **argv_out);
-extern void proto_free_argv(int argc, robj *argv);
+/* ---------------- 内存分配前向声明（供 inline 回复构建器使用） ---------------- */
+extern void* kvs_malloc(size_t size);
+extern void kvs_free(void *ptr);
 
 /* ---------------- 回复构建器接口（替代 add_reply_*） ---------------- */
-extern int rb_add_reply_str_len(reply_builder_t *rb, const char *str, size_t len);
-extern void rb_add_reply_str(reply_builder_t *rb, const char *str);
-extern void rb_add_reply_error(reply_builder_t *rb, const char *err);
-extern void rb_add_reply_status(reply_builder_t *rb, const char *status);
-extern void rb_add_reply_bulk_len(reply_builder_t *rb, char *data, size_t len);
-extern void rb_add_reply_bulk(reply_builder_t *rb, char *data);
+static inline int __attribute__((always_inline)) rb_add_reply_str_len(reply_builder_t *rb, const char *str, size_t len) {
+  net_conn_t *nc = rb->nc;
+  if (!nc || !str) return -1;
+
+  if (nc->wlen + len > RESP_BUF_SIZE) {
+    nc->state = ST_CLOSE;  // wbuf 溢出会导致协议流错位，必须关闭连接
+    return -1;
+  }
+  memcpy(nc->wbuf + nc->wlen, str, len);
+  nc->wlen += len;
+  return 0;
+}
+
+static inline void __attribute__((always_inline)) rb_add_reply_str(reply_builder_t *rb, const char *str) {
+  rb_add_reply_str_len(rb, str, strlen(str));
+}
+
+static inline void __attribute__((always_inline)) rb_add_reply_error(reply_builder_t *rb, const char *err) {
+  rb_add_reply_str(rb, "-ERR ");
+  rb_add_reply_str(rb, err);
+  rb_add_reply_str(rb, "\r\n");
+}
+
+static inline void __attribute__((always_inline)) rb_add_reply_status(reply_builder_t *rb, const char *status) {
+  rb_add_reply_str(rb, "+");
+  rb_add_reply_str(rb, status);
+  rb_add_reply_str(rb, "\r\n");
+}
+
+static inline void __attribute__((always_inline)) rb_add_reply_bulk_len(reply_builder_t *rb, char *data, size_t len) {
+  char buf[32];
+  int n = snprintf(buf, sizeof(buf), "$%zu\r\n", len);
+
+  net_conn_t *nc = rb->nc;
+  if (nc->wlen + n > RESP_BUF_SIZE) {
+    nc->state = ST_CLOSE;
+    return;
+  }
+  memcpy(nc->wbuf + nc->wlen, buf, n);
+  nc->wlen += n;
+
+  size_t space = RESP_BUF_SIZE - nc->wlen;
+  if (len <= space) {
+    // 能完全放入 wbuf
+    memcpy(nc->wbuf + nc->wlen, data, len);
+    nc->wlen += len;
+    if (nc->wlen + 2 > RESP_BUF_SIZE) {
+      nc->state = ST_CLOSE;
+      return;
+    }
+    memcpy(nc->wbuf + nc->wlen, "\r\n", 2);
+    nc->wlen += 2;
+  } else {
+    // wbuf 装不下，填充 wbuf 后剩余部分挂 iov_data
+    if (space > 0) {
+      memcpy(nc->wbuf + nc->wlen, data, space);
+      nc->wlen += space;
+      data += space;
+      len -= space;
+    }
+    nc->iov_data = data;
+    nc->iov_len = len;
+    nc->has_bulk_suffix = 1;  // 发送完 iov_data 后需要补发 \r\n
+  }
+}
+
+static inline void __attribute__((always_inline)) rb_add_reply_bulk(reply_builder_t *rb, char *data) {
+  rb_add_reply_bulk_len(rb, data, strlen(data));
+}
 
 #endif // __KVS_NETWORK_H__

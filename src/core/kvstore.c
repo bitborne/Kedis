@@ -1123,7 +1123,7 @@ int kvs_protocol(reply_builder_t *rb, int argc, robj *argv) {
         check_and_perform_autosave();
     }
 
-    return rb->nc->wlen;
+    return 0;
 }
 
 int init_kvengine(void) {

@@ -126,8 +126,11 @@ static struct conn* conn_pool_alloc(struct conn_pool* pool) {
   c->recv_inflight = 0;
   c->send_inflight = 0;
   c->pause_recv = 0;
-  c->sq_head = c->sq_tail = 0;
-  memset(c->sq, 0, sizeof(c->sq));
+  c->wlen = 0;
+  c->iov_data = NULL;
+  c->iov_len = 0;
+  c->has_bulk_suffix = 0;
+  c->dead = 0;
 
   /* Ensure parser and rbuf_ptr are initialized */
   if (!c->parser) {
@@ -138,6 +141,7 @@ static struct conn* conn_pool_alloc(struct conn_pool* pool) {
     c->rbuf_ptr = c->rbuf_embedded;
   }
   c->rlen = 0;
+  c->rbuf_off = 0;
   return c;
 }
 
@@ -194,15 +198,8 @@ static void post_accept(struct io_uring* ring, int listenfd) {
 /* ---------------- 提交异步 recv ---------------- */
 static void post_recv_frame(struct io_uring* ring, struct conn* c) {
   struct io_uring_sqe* sqe = sqe_prep_tagged(ring, c, OP_RECV);
-  io_uring_prep_recv(sqe, c->fd, c->rbuf_ptr + c->rlen, c->rbuf_cap - c->rlen, 0);
+  io_uring_prep_recv(sqe, c->fd, c->rbuf_ptr + c->rbuf_off + c->rlen, c->rbuf_cap - (c->rbuf_off + c->rlen), 0);
   c->recv_inflight++;
-}
-
-/* ---------------- 提交异步 send：回 RESP 包 ---------------- */
-static void post_send_resp(struct io_uring* ring, struct conn* c) {
-  struct io_uring_sqe* sqe = sqe_prep_tagged(ring, c, OP_SEND);
-  io_uring_prep_send(sqe, c->fd, c->wbuf + c->wbuf_off, c->wlen - c->wbuf_off, 0);
-  c->send_inflight++;
 }
 
 /* ---------------- 提交异步 read：用于 eventfd ---------------- */
@@ -222,7 +219,7 @@ static void post_read_eventfd(struct io_uring* ring, int fd, void* buf) {
  * 调用位置：OP_RECV case 末尾、OP_SEND case 中 send 完成后。
  */
 static void maybe_post_recv(struct io_uring* ring, struct conn* c) {
-  if (c->fd >= 0 && c->recv_inflight == 0 && c->rlen < IOP_SIZE) {
+  if (c->fd >= 0 && c->recv_inflight == 0 && c->rbuf_off + c->rlen < IOP_SIZE) {
     post_recv_frame(ring, c);
   }
 }
@@ -234,103 +231,118 @@ static void conn_free(struct conn* c) {
   }
 
   // 释放协议相关资源
-  kvs_resp_free_resources(c);
-
-  if (c->wbuf) {
-    kvs_free(c->wbuf);
-    c->wbuf = NULL;
-  }
-
   if (c->parser) {
+    kvs_resp_free_resources(c->parser);
     kvs_free(c->parser);
     c->parser = NULL;
   }
 
+  if (c->fd >= 0) {
+    close(c->fd);
+  }
   c->fd = -1;
 }
 
-/* ---------------- 回复构建器函数（替代 add_reply_*） ---------------- */
-int rb_add_reply_str_len(reply_builder_t *rb, const char *str, size_t len) {
-  net_conn_t *nc = rb->nc;
-  if (!nc || !str) return -1;
-
-  int idx = nc->sq_tail & (SEND_QUEUE_MAX - 1);
-  if (idx == (nc->sq_head & (SEND_QUEUE_MAX - 1)) && nc->sq_tail != nc->sq_head) {
-    nc->pause_recv = 1;
-    return -1;
+/* ---------------- 安全释放连接：如果有 inflight send，延迟释放 ---------------- */
+static void conn_close_or_defer(struct conn_pool* pool, struct conn* c) {
+  if (c->send_inflight > 0 || c->has_bulk_suffix || c->iov_len > 0) {
+    /* 还有未发完的数据，不能 close(fd)，否则发送 RST */
+    c->dead = 1;
+  } else {
+    conn_free(c);
+    conn_pool_free(pool, c);
   }
-
-  send_slot_t *slot = &nc->sq[idx];
-  if (!slot->hdr) {
-    slot->hdr = kvs_malloc(RESP_BUF_SIZE);
-    if (!slot->hdr) return -1;
-    slot->hdr_len = 0;
-  }
-
-  if (slot->hdr_len + len > RESP_BUF_SIZE) {
-    nc->pause_recv = 1;
-    return -1;
-  }
-
-  memcpy(slot->hdr + slot->hdr_len, str, len);
-  slot->hdr_len += len;
-  return 0;
-}
-
-void rb_add_reply_str(reply_builder_t *rb, const char *str) {
-  rb_add_reply_str_len(rb, str, strlen(str));
-}
-
-void rb_add_reply_error(reply_builder_t *rb, const char *err) {
-  rb_add_reply_str(rb, "-ERR ");
-  rb_add_reply_str(rb, err);
-  rb_add_reply_str(rb, "\r\n");
-}
-
-void rb_add_reply_status(reply_builder_t *rb, const char *status) {
-  rb_add_reply_str(rb, "+");
-  rb_add_reply_str(rb, status);
-  rb_add_reply_str(rb, "\r\n");
-}
-
-void rb_add_reply_bulk_len(reply_builder_t *rb, char *data, size_t len) {
-  char buf[32];
-  snprintf(buf, sizeof(buf), "$%zu\r\n", len);
-  rb_add_reply_str(rb, buf);
-  rb_add_reply_str_len(rb, data, len);
-  rb_add_reply_str(rb, "\r\n");
-}
-
-void rb_add_reply_bulk(reply_builder_t *rb, char *data) {
-  rb_add_reply_bulk_len(rb, data, strlen(data));
 }
 
 /* ---------------- Step 3: 统一刷 send 队列 ---------------- */
 static void flush_send_queue(struct io_uring* ring, struct conn* c) {
-  if (c->fd < 0) return;
+  if (c->fd < 0 || c->send_inflight) return;
 
-  /* 优先发送 send_slot 队列中的响应 */
-  if (c->sq_head != c->sq_tail && c->send_inflight == 0) {
-    send_slot_t *slot = &c->sq[c->sq_head & (SEND_QUEUE_MAX - 1)];
-    struct io_uring_sqe* sqe = sqe_prep_tagged(ring, c, OP_SEND);
+  struct io_uring_sqe* sqe;
+
+  if (c->wlen > 0) {
+    sqe = sqe_prep_tagged(ring, c, OP_SEND);
     if (!sqe) return;
-
-    if (slot->sent < slot->hdr_len) {
-      size_t remain = slot->hdr_len - slot->sent;
-      io_uring_prep_send(sqe, c->fd, slot->hdr + slot->sent, remain, 0);
-    } else {
-      size_t offset = slot->sent - slot->hdr_len;
-      size_t remain = slot->hdr_len + slot->bulk_len - slot->sent;
-      io_uring_prep_send(sqe, c->fd, slot->bulk + offset, remain, 0);
-    }
+    io_uring_prep_send(sqe, c->fd, c->wbuf, c->wlen, 0);
     c->send_inflight++;
-    return;
+  } else if (c->iov_len > 0) {
+    sqe = sqe_prep_tagged(ring, c, OP_SEND);
+    if (!sqe) return;
+    io_uring_prep_send(sqe, c->fd, c->iov_data, c->iov_len, 0);
+    c->send_inflight++;
+  } else if (c->has_bulk_suffix) {
+    memcpy(c->wbuf, "\r\n", 2);
+    c->wlen = 2;
+    c->has_bulk_suffix = 0;
+    sqe = sqe_prep_tagged(ring, c, OP_SEND);
+    if (!sqe) return;
+    io_uring_prep_send(sqe, c->fd, c->wbuf, c->wlen, 0);
+    c->send_inflight++;
+  }
+}
+
+/* ---------------- 命令处理：提取为函数，支持 OP_SEND 完成后续处理 ---------------- */
+static int process_commands(struct io_uring* ring, struct conn* c) {
+  /* 惰性紧缩 rbuf */
+  if (c->rbuf_off > 0 && c->rbuf_off + c->rlen >= IOP_SIZE - 256) {
+    memmove(c->rbuf_ptr, c->rbuf_ptr + c->rbuf_off, c->rlen);
+    c->rbuf_off = 0;
   }
 
-  /* Fallback: 旧 wbuf 路径（业务层仍使用 add_reply_* 时） */
-  if (c->wlen > 0 && c->send_inflight == 0) {
-    post_send_resp(ring, c);
+  while (1) {
+    size_t consumed = proto_feed(c->parser, c->rbuf_ptr + c->rbuf_off, c->rlen);
+    if (consumed == (size_t)-1) {
+      conn_close_or_defer(&g_conn_pool, c);
+      return -1;
+    }
+
+    if (proto_cmd_ready(c->parser)) {
+      /* wbuf 快满时暂停处理，等 OP_SEND 完成、wbuf 清空后再续处理。
+       * 必须在 proto_take_cmd 之前检查，否则命令被取出后无法回退。 */
+      if (c->wlen > RESP_BUF_SIZE - 512) {
+        return 1;
+      }
+
+      int argc;
+      robj *argv;
+      proto_take_cmd(c->parser, &argc, &argv);
+      reply_builder_t rb = {.nc = c};
+      g_kvs_handler(&rb, argc, argv);
+
+      if (c->state == ST_CLOSE) {
+        proto_free_argv(argc, argv);
+        conn_close_or_defer(&g_conn_pool, c);
+        return -1;
+      }
+
+      proto_free_argv(argc, argv);
+      flush_send_queue(ring, c);
+
+      c->rbuf_off += consumed;
+      c->rlen -= consumed;
+      if (c->rlen > 0) {
+        continue;
+      }
+      c->rbuf_off = 0;
+      continue;
+    }
+
+    /* 保护：rbuf 几乎满了但 parser 没有任何进度，视为协议错误 */
+    if (c->rbuf_off + c->rlen >= (IOP_SIZE - 256) && c->parser->parse_done == 0) {
+      conn_close_or_defer(&g_conn_pool, c);
+      return -1;
+    }
+
+    /* 大 key/value 续传：parser 消费了全部数据但命令仍未完整 */
+    if (c->rbuf_off + c->rlen >= IOP_SIZE && c->parser->parse_done == c->rlen) {
+      c->rbuf_off = 0;
+      c->rlen = 0;
+      c->parser->parse_done = 0;
+    }
+
+    break;
   }
+  return 0;
 }
 
 /* ---------------- 监听端口 ---------------- */
@@ -483,15 +495,12 @@ int proactor_start(unsigned short port, msg_handler handler) {
               nc->state = ST_RECV;
               int nodelay = 1;
               setsockopt(new_fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
-              nc->wbuf = kvs_malloc(RESP_BUF_SIZE);
-              if (!nc->wbuf) {
-                conn_pool_free(&g_conn_pool, nc);
-                close(new_fd);
-                kvs_logError("Failed to alloc write buffer");
-              } else {
-                kvs_resp_reset(nc);
-                post_recv_frame(&g_ring, nc);
+              nc->rlen = 0;
+              nc->rbuf_off = 0;
+              if (nc->parser) {
+                kvs_resp_reset(nc->parser);
               }
+              post_recv_frame(&g_ring, nc);
             }
             post_accept(&g_ring, listenfd);
           } else {
@@ -543,14 +552,12 @@ int proactor_start(unsigned short port, msg_handler handler) {
             if (res == -EAGAIN || res == -EINTR) {
               post_recv_frame(&g_ring, c);
             } else {
-              conn_free(c);
-              conn_pool_free(&g_conn_pool, c);
+              conn_close_or_defer(&g_conn_pool, c);
             }
             break;
           }
           if (res == 0) {
-            conn_free(c);
-            conn_pool_free(&g_conn_pool, c);
+            conn_close_or_defer(&g_conn_pool, c);
             break;
           }
           c->rlen += res;
@@ -560,25 +567,10 @@ int proactor_start(unsigned short port, msg_handler handler) {
             echo_handler(&rb);
           }
 #else
-          while (1) {
-            int ret = kvs_resp_feed(c);
-            if (ret == RESP_ERROR) {
-              conn_free(c);
-              conn_pool_free(&g_conn_pool, c);
-              break;
-            } else if (ret == RESP_CONTINUE_RECV) {
-              break;
-            } else if (ret == RESP_PARSE_OK) {
-              reply_builder_t rb = {.nc = c};
-              g_kvs_handler(&rb, c->argc, c->argv);
-              kvs_resp_pipeline_next(c);
-              continue;
-            }
+          if (process_commands(&g_ring, c) < 0) {
+            break;
           }
 #endif
-          if (c->sq_tail - c->sq_head >= SEND_QUEUE_MAX - 2) {
-            c->pause_recv = 1;
-          }
           flush_send_queue(&g_ring, c);
           maybe_post_recv(&g_ring, c);
           break;
@@ -591,97 +583,51 @@ int proactor_start(unsigned short port, msg_handler handler) {
             if (res == -EAGAIN || res == -EINTR) {
               flush_send_queue(&g_ring, c);
             } else {
-              conn_free(c);
-              conn_pool_free(&g_conn_pool, c);
+              conn_close_or_defer(&g_conn_pool, c);
             }
             break;
           }
 
-          /* 优先处理 send_slot */
-          if (c->sq_head != c->sq_tail) {
-            send_slot_t *slot = &c->sq[c->sq_head & (SEND_QUEUE_MAX - 1)];
-            slot->sent += res;
-
-            if (slot->sent >= slot->hdr_len + slot->bulk_len) {
-              /* slot 发送完成 */
-              kvs_free(slot->hdr);
-              slot->hdr = NULL;
-              slot->hdr_len = 0;
-              slot->bulk = NULL;
-              slot->bulk_len = 0;
-              slot->sent = 0;
-              c->sq_head++;
-
-              if (c->pause_recv && c->sq_tail - c->sq_head < SEND_QUEUE_MAX / 2) {
-                c->pause_recv = 0;
-              }
+          if (c->wlen > 0) {
+            if ((size_t)res >= c->wlen) {
+              c->wlen = 0;
+            } else {
+              memmove(c->wbuf, c->wbuf + res, c->wlen - res);
+              c->wlen -= res;
             }
-
-            flush_send_queue(&g_ring, c);
-            maybe_post_recv(&g_ring, c);
-            break;
+          } else if (c->iov_len > 0) {
+            if ((size_t)res >= c->iov_len) {
+              c->iov_data = NULL;
+              c->iov_len = 0;
+            } else {
+              c->iov_data += res;
+              c->iov_len -= res;
+            }
           }
 
-          /* Fallback: 旧 wbuf 路径 */
-          if (c->wlen - c->wbuf_off != (size_t)res) {
-            c->wbuf_off += res;
-            post_send_resp(&g_ring, c);
-            break;
-          }
-          c->wbuf_off = 0;
-          if (c->send_st == ST_SEND_SMALL) {
-            c->wlen = 0;
-            kvs_logDebug("SEND: Small response");
-            c->state = ST_RECV;
-            c->bulk_p = c->bulk_data = NULL;
-            c->bulk_sent = 0;
-            c->bulk_tt = 0;
-            c->hdr_len = 0;
-            c->send_st = ST_SEND_NOTSET;
-            c->wbuf_full = 0;
-            flush_send_queue(&g_ring, c);
-            maybe_post_recv(&g_ring, c);
-            break;
-          }
-          if (c->send_st == ST_SEND_HDR_SENT) {
-            c->bulk_sent += res - c->hdr_len;
-            c->send_st = ST_SEND_BULK;
-          } else if (c->send_st == ST_SEND_BULK) {
-            c->bulk_sent += res;
-          } else {
-            kvs_logError("ST_SEND unknown state\n");
+          if (c->dead && c->send_inflight == 0) {
             conn_free(c);
             conn_pool_free(&g_conn_pool, c);
             break;
           }
-          c->wlen = 0;
-          if (c->bulk_sent < c->bulk_tt) {
-            c->bulk_p = c->bulk_data + c->bulk_sent;
-            size_t remain = c->bulk_tt - c->bulk_sent;
-            size_t cp = (remain < RESP_BUF_SIZE) ? remain : RESP_BUF_SIZE;
-            memcpy(c->wbuf, c->bulk_p, cp);
-            c->wlen = cp;
-            if (remain <= RESP_BUF_SIZE) {
-              c->wbuf[c->wlen - 2] = '\r';
-              c->wbuf[c->wlen - 1] = '\n';
-            } else if (remain == RESP_BUF_SIZE + 1) {
-              c->wbuf[c->wlen - 1] = '\r';
-            } else if (remain == 1) {
-              c->wbuf[c->wlen] = '\n';
-            }
-            post_send_resp(&g_ring, c);
-          } else {
-            c->state = ST_RECV;
-            c->bulk_p = c->bulk_data = NULL;
-            c->bulk_sent = 0;
-            c->bulk_tt = 0;
-            c->hdr_len = 0;
-            c->wlen = 0;
-            c->send_st = ST_SEND_NOTSET;
-            c->wbuf_full = 0;
+
+          if (c->wlen > 0 || c->iov_len > 0) {
             flush_send_queue(&g_ring, c);
-            maybe_post_recv(&g_ring, c);
+          } else if (c->has_bulk_suffix) {
+            memcpy(c->wbuf, "\r\n", 2);
+            c->wlen = 2;
+            c->has_bulk_suffix = 0;
+            flush_send_queue(&g_ring, c);
           }
+
+          /* wbuf 已空，rbuf 还有数据，继续处理剩余命令 */
+          if (c->rlen > 0 && c->wlen == 0 && c->iov_len == 0 && !c->has_bulk_suffix) {
+            if (process_commands(&g_ring, c) < 0) {
+              break;
+            }
+          }
+
+          maybe_post_recv(&g_ring, c);
           break;
         }
 

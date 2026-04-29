@@ -38,7 +38,6 @@
 #include "config.h"
 
 #include "kvs_network.h"
-#include "kvs_protocol.h"
 
 #include "kvs_hash.h"
 #include "kvs_rbtree.h"
