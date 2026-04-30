@@ -245,7 +245,11 @@ static void conn_free(struct conn* c) {
 
 /* ---------------- 安全释放连接：如果有 inflight send，延迟释放 ---------------- */
 static void conn_close_or_defer(struct conn_pool* pool, struct conn* c) {
-  if (c->send_inflight > 0 || c->has_bulk_suffix || c->iov_len > 0) {
+  int defer = (c->send_inflight > 0 || c->has_bulk_suffix || c->iov_len > 0);
+  kvs_logDebug("[conn_close_or_defer] fd=%d send_inflight=%d has_bulk=%d iov_len=%zu dead=%d -> %s",
+               c->fd, c->send_inflight, c->has_bulk_suffix, c->iov_len, c->dead,
+               defer ? "defer" : "free");
+  if (defer) {
     /* 还有未发完的数据，不能 close(fd)，否则发送 RST */
     c->dead = 1;
   } else {
@@ -256,21 +260,27 @@ static void conn_close_or_defer(struct conn_pool* pool, struct conn* c) {
 
 /* ---------------- Step 3: 统一刷 send 队列 ---------------- */
 static void flush_send_queue(struct io_uring* ring, struct conn* c) {
-  if (c->fd < 0 || c->send_inflight) return;
+  if (c->fd < 0 || c->send_inflight) {
+    kvs_logDebug("[flush_send_queue] fd=%d skip (inflight=%d)", c->fd, c->send_inflight);
+    return;
+  }
 
   struct io_uring_sqe* sqe;
 
   if (c->wlen > 0) {
+    kvs_logDebug("[flush_send_queue] fd=%d send wbuf wlen=%zu", c->fd, c->wlen);
     sqe = sqe_prep_tagged(ring, c, OP_SEND);
     if (!sqe) return;
     io_uring_prep_send(sqe, c->fd, c->wbuf, c->wlen, 0);
     c->send_inflight++;
   } else if (c->iov_len > 0) {
+    kvs_logDebug("[flush_send_queue] fd=%d send iov_len=%zu", c->fd, c->iov_len);
     sqe = sqe_prep_tagged(ring, c, OP_SEND);
     if (!sqe) return;
     io_uring_prep_send(sqe, c->fd, c->iov_data, c->iov_len, 0);
     c->send_inflight++;
   } else if (c->has_bulk_suffix) {
+    kvs_logDebug("[flush_send_queue] fd=%d send bulk_suffix \\r\\n", c->fd);
     memcpy(c->wbuf, "\r\n", 2);
     c->wlen = 2;
     c->has_bulk_suffix = 0;
@@ -283,6 +293,9 @@ static void flush_send_queue(struct io_uring* ring, struct conn* c) {
 
 /* ---------------- 命令处理：提取为函数，支持 OP_SEND 完成后续处理 ---------------- */
 static int process_commands(struct io_uring* ring, struct conn* c) {
+  kvs_logDebug("[process_commands] fd=%d enter rlen=%zu rbuf_off=%zu wlen=%zu send_inflight=%d",
+               c->fd, c->rlen, c->rbuf_off, c->wlen, c->send_inflight);
+
   /* 惰性紧缩 rbuf */
   if (c->rbuf_off > 0 && c->rbuf_off + c->rlen >= IOP_SIZE - 256) {
     memmove(c->rbuf_ptr, c->rbuf_ptr + c->rbuf_off, c->rlen);
@@ -292,6 +305,7 @@ static int process_commands(struct io_uring* ring, struct conn* c) {
   while (1) {
     size_t consumed = proto_feed(c->parser, c->rbuf_ptr + c->rbuf_off, c->rlen);
     if (consumed == (size_t)-1) {
+      kvs_logDebug("[process_commands] fd=%d parse error", c->fd);
       conn_close_or_defer(&g_conn_pool, c);
       return -1;
     }
@@ -300,6 +314,8 @@ static int process_commands(struct io_uring* ring, struct conn* c) {
       /* wbuf 快满时暂停处理，等 OP_SEND 完成、wbuf 清空后再续处理。
        * 必须在 proto_take_cmd 之前检查，否则命令被取出后无法回退。 */
       if (c->wlen > RESP_BUF_SIZE - 512) {
+        kvs_logDebug("[process_commands] fd=%d wbuf nearly full wlen=%zu > %d, return 1",
+                     c->fd, c->wlen, RESP_BUF_SIZE - 512);
         return 1;
       }
 
@@ -310,6 +326,7 @@ static int process_commands(struct io_uring* ring, struct conn* c) {
       g_kvs_handler(&rb, argc, argv);
 
       if (c->state == ST_CLOSE) {
+        kvs_logDebug("[process_commands] fd=%d ST_CLOSE after handler, closing", c->fd);
         proto_free_argv(argc, argv);
         conn_close_or_defer(&g_conn_pool, c);
         return -1;
@@ -327,8 +344,22 @@ static int process_commands(struct io_uring* ring, struct conn* c) {
       continue;
     }
 
-    /* 保护：rbuf 几乎满了但 parser 没有任何进度，视为协议错误 */
+    /* 没有未消费数据，正常退出循环 */
+    if (c->rlen == 0) {
+      c->rbuf_off = 0;
+      break;
+    }
+
+    /* 数据不足但还有未消费数据：紧缩 rbuf 腾出接收空间，等待更多数据 */
+    if (c->rbuf_off > 0) {
+      memmove(c->rbuf_ptr, c->rbuf_ptr + c->rbuf_off, c->rlen);
+      c->rbuf_off = 0;
+      kvs_logDebug("[process_commands] fd=%d rbuf compacted, rlen=%zu\n", c->fd, c->rlen);
+    }
+
+    /* 保护：rbuf 已满且紧缩后 parser 仍无进度，视为协议错误 */
     if (c->rbuf_off + c->rlen >= (IOP_SIZE - 256) && c->parser->parse_done == 0) {
+      kvs_logDebug("[process_commands] fd=%d rbuf full no progress, closing\n", c->fd);
       conn_close_or_defer(&g_conn_pool, c);
       return -1;
     }
@@ -548,15 +579,19 @@ int proactor_start(unsigned short port, msg_handler handler) {
         case OP_RECV: {
           struct conn* c = (struct conn*)ptr;
           c->recv_inflight--;
+          kvs_logDebug("[OP_RECV] fd=%d res=%d recv_inflight=%d rlen=%zu",
+                       c->fd, res, c->recv_inflight, c->rlen);
           if (res < 0) {
             if (res == -EAGAIN || res == -EINTR) {
               post_recv_frame(&g_ring, c);
             } else {
+              kvs_logDebug("[OP_RECV] fd=%d recv error %d, closing", c->fd, res);
               conn_close_or_defer(&g_conn_pool, c);
             }
             break;
           }
           if (res == 0) {
+            kvs_logDebug("[OP_RECV] fd=%d peer closed", c->fd);
             conn_close_or_defer(&g_conn_pool, c);
             break;
           }
@@ -567,8 +602,11 @@ int proactor_start(unsigned short port, msg_handler handler) {
             echo_handler(&rb);
           }
 #else
-          if (process_commands(&g_ring, c) < 0) {
-            break;
+          {
+            int ret = process_commands(&g_ring, c);
+            if (ret < 0) {
+              break;
+            }
           }
 #endif
           flush_send_queue(&g_ring, c);
@@ -579,10 +617,13 @@ int proactor_start(unsigned short port, msg_handler handler) {
         case OP_SEND: {
           struct conn* c = (struct conn*)ptr;
           c->send_inflight--;
+          kvs_logDebug("[OP_SEND] fd=%d res=%d send_inflight=%d wlen=%zu iov_len=%zu",
+                       c->fd, res, c->send_inflight, c->wlen, c->iov_len);
           if (res < 0) {
             if (res == -EAGAIN || res == -EINTR) {
               flush_send_queue(&g_ring, c);
             } else {
+              kvs_logDebug("[OP_SEND] fd=%d send error %d, closing", c->fd, res);
               conn_close_or_defer(&g_conn_pool, c);
             }
             break;
@@ -606,6 +647,7 @@ int proactor_start(unsigned short port, msg_handler handler) {
           }
 
           if (c->dead && c->send_inflight == 0) {
+            kvs_logDebug("[OP_SEND] fd=%d dead and no inflight, freeing", c->fd);
             conn_free(c);
             conn_pool_free(&g_conn_pool, c);
             break;
@@ -622,7 +664,9 @@ int proactor_start(unsigned short port, msg_handler handler) {
 
           /* wbuf 已空，rbuf 还有数据，继续处理剩余命令 */
           if (c->rlen > 0 && c->wlen == 0 && c->iov_len == 0 && !c->has_bulk_suffix) {
-            if (process_commands(&g_ring, c) < 0) {
+            kvs_logDebug("[OP_SEND] fd=%d continue processing rlen=%zu", c->fd, c->rlen);
+            int ret = process_commands(&g_ring, c);
+            if (ret < 0) {
               break;
             }
           }

@@ -5,6 +5,7 @@
 #include <string.h>
 #include <stdio.h>
 #include "kvs_protocol.h"
+#include "kvs_log.h"
 
 /* ---------------- 常量定义 ---------------- */
 #define IOP_SIZE (4 * 1024)               // 每次 recv/send 的帧大小（16 KB）
@@ -85,6 +86,8 @@ static inline int __attribute__((always_inline)) rb_add_reply_str_len(reply_buil
   if (!nc || !str) return -1;
 
   if (nc->wlen + len > RESP_BUF_SIZE) {
+    kvs_logDebug("[rb_add_reply_str_len] fd=%d overflow wlen=%zu + len=%zu > %d\n",
+                 nc->fd, nc->wlen, len, RESP_BUF_SIZE);
     nc->state = ST_CLOSE;  // wbuf 溢出会导致协议流错位，必须关闭连接
     return -1;
   }
