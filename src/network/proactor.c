@@ -77,7 +77,7 @@ extern int slave_sync_get_eventfd(void);
 extern void slave_sync_drain_backlog(msg_handler handler);
 
 /* ---------------- 外部函数声明 ---------------- */
-extern void before_sleep(uint64_t now_ns);
+extern void before_sleep(void);
 
 /* ---------------- 优雅退出支持 ---------------- */
 void proactor_stop(void) {
@@ -484,8 +484,6 @@ int proactor_start(unsigned short port, msg_handler handler) {
 
   kvs_logInfo("Proactor server listening on port %d...", port);
 
-  struct timespec last_before_sleep = {0};
-
   while (g_proactor_running) {
     if (io_uring_sq_ready(&g_ring) > 0) {
         io_uring_submit(&g_ring);
@@ -497,7 +495,7 @@ int proactor_start(unsigned short port, msg_handler handler) {
     int ret = io_uring_wait_cqe_timeout(&g_ring, &cqe, &ts);
 
     if (ret == -ETIME) {
-      before_sleep(0);
+      if (g_config.aof_enabled) before_sleep();
       continue;
     }
     if (ret < 0) break;
@@ -681,15 +679,7 @@ int proactor_start(unsigned short port, msg_handler handler) {
       }
     }
     io_uring_cq_advance(&g_ring, count);
-
-    struct timespec now;
-    clock_gettime(CLOCK_MONOTONIC, &now);
-    uint64_t now_ns = (uint64_t)now.tv_sec * 1000000000ULL + now.tv_nsec;
-    uint64_t last_ns = (uint64_t)last_before_sleep.tv_sec * 1000000000ULL + last_before_sleep.tv_nsec;
-    if (count == 0 || now_ns - last_ns >= 1000000ULL) { // 至少每 1ms 调用一次
-      before_sleep(now_ns);
-      last_before_sleep = now;
-    }
+    if (g_config.aof_enabled) before_sleep();
   } /* while */
 
   close(listenfd);

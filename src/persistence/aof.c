@@ -682,11 +682,11 @@ static int flushAofBuffer_force(uint64_t now_ns) {
 
 int flushAofBuffer(uint64_t now_ns) {
   if (aofBuffer.len > 0 && aof_fd != -1) {
-    if (aofBuffer.len < AOF_FLUSH_MIN_SIZE &&
-        (now_ns - aofBuffer.last_flush_ns) < AOF_FLUSH_MIN_NS) {
-      return 0;
-    }
-    return flushAofBuffer_force(now_ns);
+    if (aofBuffer.len >= AOF_FLUSH_MIN_SIZE)
+      return flushAofBuffer_force(now_ns);
+    if ((now_ns - aofBuffer.last_flush_ns) >= AOF_FLUSH_MIN_NS)
+      return flushAofBuffer_force(now_ns);
+    return 0;
   }
   return 0;
 }
@@ -722,11 +722,11 @@ static int flushAofBufferToEngine_force(int engine_type, uint64_t now_ns) {
 static int flushAofBufferToEngine(int engine_type, uint64_t now_ns) {
 #if ENABLE_MULTI_ENGINE
   if (aofBuffer[engine_type].len > 0) {
-    if (aofBuffer[engine_type].len < AOF_FLUSH_MIN_SIZE &&
-        (now_ns - aofBuffer[engine_type].last_flush_ns) < AOF_FLUSH_MIN_NS) {
-      return 0;
-    }
-    return flushAofBufferToEngine_force(engine_type, now_ns);
+    if (aofBuffer[engine_type].len >= AOF_FLUSH_MIN_SIZE)
+      return flushAofBufferToEngine_force(engine_type, now_ns);
+    if ((now_ns - aofBuffer[engine_type].last_flush_ns) >= AOF_FLUSH_MIN_NS)
+      return flushAofBufferToEngine_force(engine_type, now_ns);
+    return 0;
   }
   return 0;
 #else
@@ -939,7 +939,8 @@ void stop_aof_fsync_process() {
   kvs_logInfo("AOF FSYNC后台线程已停止");
 }
 
-void before_sleep(uint64_t now_ns) {
+void before_sleep(void) {
+  uint64_t now_ns = get_monotonic_ns();
   // 刷新AOF缓冲区到文件
 #if ENABLE_MULTI_ENGINE
 // 多引擎模式：刷新所有引擎的AOF缓冲区
