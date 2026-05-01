@@ -31,7 +31,12 @@ def format_si(val, pos):
     return f'{val:.0f}'
 
 
-def plot_grouped_bar(ax, data, title, palette):
+def get_max_qps(data):
+    """获取数据集中最大的 QPS 值"""
+    return max(max(v.values()) for v in data.values())
+
+
+def plot_grouped_bar(ax, data, title, palette, ylim=None):
     commands = sorted(data.keys())
     pipelines = sorted(next(iter(data.values())).keys())
 
@@ -69,6 +74,10 @@ def plot_grouped_bar(ax, data, title, palette):
     # 关键：修复Y轴刻度为专业格式
     ax.yaxis.set_major_formatter(FuncFormatter(format_si))
 
+    # 统一纵坐标范围（以 Kedis 为准）
+    if ylim is not None:
+        ax.set_ylim(0, ylim)
+
 
 # ---------------- 路径处理 ----------------
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -85,6 +94,11 @@ if not os.path.exists(redis_path):
 redis_data = load_csv(redis_path)
 kedis_data = load_csv(kedis_path)
 
+# ---------------- 计算统一 Y 轴上限（以 Kedis 为准） ----------------
+kedis_max = get_max_qps(kedis_data)
+# 预留 15% 的顶部空间，确保柱顶标注不溢出
+unified_ylim = kedis_max * 1.15
+
 # ---------------- 绘图 ----------------
 fig, axes = plt.subplots(1, 2, figsize=(13, 5.5))
 
@@ -93,8 +107,8 @@ palette = {
     'SET':  '#E74C3C', 'GET':  '#3498DB', 'DEL':  '#2ECC71'
 }
 
-plot_grouped_bar(axes[0], redis_data, 'Redis', palette)
-plot_grouped_bar(axes[1], kedis_data, 'Kedis', palette)
+plot_grouped_bar(axes[0], redis_data, 'Redis', palette, ylim=unified_ylim)
+plot_grouped_bar(axes[1], kedis_data, 'Kedis', palette, ylim=unified_ylim)
 
 plt.tight_layout()
 out_path = os.path.join(script_dir, 'benchmark_comparison.png')

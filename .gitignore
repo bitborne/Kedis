@@ -64,3 +64,4 @@ rdma_sendfile/sf_server
 results_kedis/
 results_redis/
 results_save/
+results_aof/

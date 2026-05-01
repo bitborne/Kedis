@@ -22,12 +22,16 @@ KEYS=1000000
 THREADS=4
 CONN=50
 REQS_PER_CLIENT=$((KEYS / (THREADS * CONN)))
+OUTPUT_DIR="results_mirror"
+mkdir -p "$OUTPUT_DIR"
+echo "mode,operation,qps" > "$OUTPUT_DIR/summary.csv"
 
 HGET_CMD="HGET __key__"
 
 run_benchmark() {
     local label=$1
     local cmd=$2
+    local json_file="$OUTPUT_DIR/${label}.json"
     echo -e "\n========== [$label] =========="
     memtier_benchmark \
         -s ${HOST} \
@@ -42,7 +46,18 @@ run_benchmark() {
         --key-prefix="k" \
         --key-minimum=1 \
         --key-maximum=${KEYS} \
+        --json-out-file="$json_file" \
         --hide-histogram
+
+    local qps=$(python3 -c "
+import json
+with open('$json_file') as f: d=json.load(f)
+print(d['ALL STATS']['Totals']['Ops/sec'])
+")
+    local mode=$(echo "$label" | cut -d'-' -f2-)
+    local op=$(echo "$label" | cut -d'-' -f1)
+    echo "$mode,$op,$qps" >> "$OUTPUT_DIR/summary.csv"
+    echo "  $label -> QPS: $qps"
 }
 
 run_round() {

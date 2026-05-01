@@ -13,6 +13,11 @@ KEYS=1000000
 THREADS=4
 CONN=50
 REQS_PER_CLIENT=$((KEYS / (THREADS * CONN)))
+OUTPUT_DIR="results_aof"
+mkdir -p "$OUTPUT_DIR"
+if [ ! -f "$OUTPUT_DIR/summary.csv" ]; then
+    echo "system,aof,operation,qps" > "$OUTPUT_DIR/summary.csv"
+fi
 
 
 echo "KVStore AOF测试 - 端口:$PORT | AOF=$AOF | 总key数:$KEYS | 每客户端请求数:$REQS_PER_CLIENT"
@@ -20,6 +25,7 @@ echo "3秒后开始测试..."
 sleep 3
 
 echo -e "\n========== [HSET测试] =========="
+json_file="$OUTPUT_DIR/kedis_${AOF}_hset.json"
 memtier_benchmark \
     -s ${HOST} \
     -p ${PORT} \
@@ -33,9 +39,19 @@ memtier_benchmark \
     --key-prefix="k" \
     --key-minimum=1 \
     --key-maximum=${KEYS} \
+    --json-out-file="$json_file" \
     --hide-histogram
 
+qps=$(python3 -c "
+import json
+with open('$json_file') as f: d=json.load(f)
+print(d['ALL STATS']['Totals']['Ops/sec'])
+")
+echo "kedis,$AOF,HSET,$qps" >> "$OUTPUT_DIR/summary.csv"
+echo "  kedis AOF=$AOF HSET -> QPS: $qps"
+
 echo -e "\n========== [HDEL测试] =========="
+json_file="$OUTPUT_DIR/kedis_${AOF}_hdel.json"
 memtier_benchmark \
     -s ${HOST} \
     -p ${PORT} \
@@ -48,6 +64,15 @@ memtier_benchmark \
     --key-prefix="k" \
     --key-minimum=1 \
     --key-maximum=${KEYS} \
+    --json-out-file="$json_file" \
     --hide-histogram
 
-echo -e "\n完成！"
+qps=$(python3 -c "
+import json
+with open('$json_file') as f: d=json.load(f)
+print(d['ALL STATS']['Totals']['Ops/sec'])
+")
+echo "kedis,$AOF,HDEL,$qps" >> "$OUTPUT_DIR/summary.csv"
+echo "  kedis AOF=$AOF HDEL -> QPS: $qps"
+
+echo -e "\n完成！结果: $OUTPUT_DIR/summary.csv"
