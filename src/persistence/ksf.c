@@ -571,6 +571,8 @@ int ksfSaveBackground() {
  */
 static int ksfLoadToEngine(const char* filename, int engine_type) {
   kvs_logInfo("开始加载KSF快照文件: %s", filename);
+  struct timespec ts_start, ts_end;
+  clock_gettime(CLOCK_MONOTONIC, &ts_start);
 
   // 检查文件是否存在
   FILE* file = fopen(filename, "rb");
@@ -690,7 +692,10 @@ static int ksfLoadToEngine(const char* filename, int engine_type) {
   }
 
   kvs_free(buffer);
-  kvs_logInfo("KSF快照文件加载完成: %s", filename);
+  clock_gettime(CLOCK_MONOTONIC, &ts_end);
+  double elapsed_ms = (ts_end.tv_sec - ts_start.tv_sec) * 1000.0 +
+                      (ts_end.tv_nsec - ts_start.tv_nsec) / 1000000.0;
+  kvs_logInfo("KSF快照文件加载完成: %s (耗时 %.3f ms)", filename, elapsed_ms);
   return 0;
 }
 
@@ -700,13 +705,20 @@ static int ksfLoadToEngine(const char* filename, int engine_type) {
  * @return 成功返回0，失败返回-1
  */
 int ksfLoad(const char* filename) {
+  struct timespec ts_start, ts_end;
+  clock_gettime(CLOCK_MONOTONIC, &ts_start);
 #if !ENABLE_MULTI_ENGINE
-  return ksfLoadToEngine(filename, -1);
+  int ret = ksfLoadToEngine(filename, -1);
 #else
   // 多引擎模式不应该调用这个函数
   kvs_logError("多引擎模式下请使用 ksfLoadAll()");
-  return -1;
+  int ret = -1;
 #endif
+  clock_gettime(CLOCK_MONOTONIC, &ts_end);
+  double elapsed_ms = (ts_end.tv_sec - ts_start.tv_sec) * 1000.0 +
+                      (ts_end.tv_nsec - ts_start.tv_nsec) / 1000000.0;
+  kvs_logInfo("KSF快照加载总耗时: %.3f ms", elapsed_ms);
+  return ret;
 }
 
 /**
@@ -717,6 +729,8 @@ int ksfLoad(const char* filename) {
  */
 static int ksfLoadToEngine_mmap(const char* filename, int engine_type) {
     kvs_logInfo("开始加载 KSF 快照文件（mmap 方式）: %s", filename);
+    struct timespec ts_start, ts_end;
+    clock_gettime(CLOCK_MONOTONIC, &ts_start);
 
     // 初始化 mmap 上下文
     mmap_context_t ctx = {0};
@@ -800,7 +814,10 @@ static int ksfLoadToEngine_mmap(const char* filename, int engine_type) {
     // 关闭 mmap 映射
     mmap_close_file(&ctx);
 
-    kvs_logInfo("KSF 快照文件加载完成: %s (共 %d 条记录)", filename, kv_count);
+    clock_gettime(CLOCK_MONOTONIC, &ts_end);
+    double elapsed_ms = (ts_end.tv_sec - ts_start.tv_sec) * 1000.0 +
+                        (ts_end.tv_nsec - ts_start.tv_nsec) / 1000000.0;
+    kvs_logInfo("KSF 快照文件加载完成: %s (共 %d 条记录, 耗时 %.3f ms)", filename, kv_count, elapsed_ms);
     return 0;
 }
 
@@ -809,34 +826,61 @@ static int ksfLoadToEngine_mmap(const char* filename, int engine_type) {
  * @return 成功返回 0，失败返回 -1
  */
 int ksfLoadAll_mmap() {
+  struct timespec ts_start, ts_end;
+  clock_gettime(CLOCK_MONOTONIC, &ts_start);
 #if ENABLE_MULTI_ENGINE
     #if ENABLE_ARRAY
     if (ksfLoadToEngine_mmap(ksf_filename_array, 0) != 0) {
+        clock_gettime(CLOCK_MONOTONIC, &ts_end);
+        double elapsed_ms = (ts_end.tv_sec - ts_start.tv_sec) * 1000.0 +
+                            (ts_end.tv_nsec - ts_start.tv_nsec) / 1000000.0;
+        kvs_logInfo("KSF快照全部加载完成 (mmap方式, 总耗时 %.3f ms)", elapsed_ms);
         return -1;
     }
     #endif
 
     #if ENABLE_HASH
     if (ksfLoadToEngine_mmap(ksf_filename_hash, 1) != 0) {
+        clock_gettime(CLOCK_MONOTONIC, &ts_end);
+        double elapsed_ms = (ts_end.tv_sec - ts_start.tv_sec) * 1000.0 +
+                            (ts_end.tv_nsec - ts_start.tv_nsec) / 1000000.0;
+        kvs_logInfo("KSF快照全部加载完成 (mmap方式, 总耗时 %.3f ms)", elapsed_ms);
         return -1;
     }
     #endif
 
     #if ENABLE_RBTREE
     if (ksfLoadToEngine_mmap(ksf_filename_rbtree, 2) != 0) {
+        clock_gettime(CLOCK_MONOTONIC, &ts_end);
+        double elapsed_ms = (ts_end.tv_sec - ts_start.tv_sec) * 1000.0 +
+                            (ts_end.tv_nsec - ts_start.tv_nsec) / 1000000.0;
+        kvs_logInfo("KSF快照全部加载完成 (mmap方式, 总耗时 %.3f ms)", elapsed_ms);
         return -1;
     }
     #endif
 
     #if ENABLE_SKIPLIST
     if (ksfLoadToEngine_mmap(ksf_filename_skiplist, 3) != 0) {
+        clock_gettime(CLOCK_MONOTONIC, &ts_end);
+        double elapsed_ms = (ts_end.tv_sec - ts_start.tv_sec) * 1000.0 +
+                            (ts_end.tv_nsec - ts_start.tv_nsec) / 1000000.0;
+        kvs_logInfo("KSF快照全部加载完成 (mmap方式, 总耗时 %.3f ms)", elapsed_ms);
         return -1;
     }
     #endif
 
+    clock_gettime(CLOCK_MONOTONIC, &ts_end);
+    double elapsed_ms = (ts_end.tv_sec - ts_start.tv_sec) * 1000.0 +
+                        (ts_end.tv_nsec - ts_start.tv_nsec) / 1000000.0;
+    kvs_logInfo("KSF快照全部加载完成 (mmap方式, 总耗时 %.3f ms)", elapsed_ms);
     return 0;
 #else
-    return ksfLoadToEngine_mmap(ksf_filename_default, -1);
+    int ret = ksfLoadToEngine_mmap(ksf_filename_default, -1);
+    clock_gettime(CLOCK_MONOTONIC, &ts_end);
+    double elapsed_ms = (ts_end.tv_sec - ts_start.tv_sec) * 1000.0 +
+                        (ts_end.tv_nsec - ts_start.tv_nsec) / 1000000.0;
+    kvs_logInfo("KSF快照全部加载完成 (mmap方式, 总耗时 %.3f ms)", elapsed_ms);
+    return ret;
 #endif
 }
 
@@ -845,34 +889,61 @@ int ksfLoadAll_mmap() {
  * @return 成功返回0，失败返回-1
  */
 int ksfLoadAll() {
+  struct timespec ts_start, ts_end;
+  clock_gettime(CLOCK_MONOTONIC, &ts_start);
 #if ENABLE_MULTI_ENGINE
   #if ENABLE_ARRAY
   if (ksfLoadToEngine(ksf_filename_array, 0) != 0) {
+    clock_gettime(CLOCK_MONOTONIC, &ts_end);
+    double elapsed_ms = (ts_end.tv_sec - ts_start.tv_sec) * 1000.0 +
+                        (ts_end.tv_nsec - ts_start.tv_nsec) / 1000000.0;
+    kvs_logInfo("KSF快照全部加载完成 (总耗时 %.3f ms)", elapsed_ms);
     return -1;
   }
   #endif
 
   #if ENABLE_HASH
   if (ksfLoadToEngine(ksf_filename_hash, 1) != 0) {
+    clock_gettime(CLOCK_MONOTONIC, &ts_end);
+    double elapsed_ms = (ts_end.tv_sec - ts_start.tv_sec) * 1000.0 +
+                        (ts_end.tv_nsec - ts_start.tv_nsec) / 1000000.0;
+    kvs_logInfo("KSF快照全部加载完成 (总耗时 %.3f ms)", elapsed_ms);
     return -1;
   }
   #endif
 
   #if ENABLE_RBTREE
   if (ksfLoadToEngine(ksf_filename_rbtree, 2) != 0) {
+    clock_gettime(CLOCK_MONOTONIC, &ts_end);
+    double elapsed_ms = (ts_end.tv_sec - ts_start.tv_sec) * 1000.0 +
+                        (ts_end.tv_nsec - ts_start.tv_nsec) / 1000000.0;
+    kvs_logInfo("KSF快照全部加载完成 (总耗时 %.3f ms)", elapsed_ms);
     return -1;
   }
   #endif
 
   #if ENABLE_SKIPLIST
   if (ksfLoadToEngine(ksf_filename_skiplist, 3) != 0) {
+    clock_gettime(CLOCK_MONOTONIC, &ts_end);
+    double elapsed_ms = (ts_end.tv_sec - ts_start.tv_sec) * 1000.0 +
+                        (ts_end.tv_nsec - ts_start.tv_nsec) / 1000000.0;
+    kvs_logInfo("KSF快照全部加载完成 (总耗时 %.3f ms)", elapsed_ms);
     return -1;
   }
   #endif
 
+  clock_gettime(CLOCK_MONOTONIC, &ts_end);
+  double elapsed_ms = (ts_end.tv_sec - ts_start.tv_sec) * 1000.0 +
+                      (ts_end.tv_nsec - ts_start.tv_nsec) / 1000000.0;
+  kvs_logInfo("KSF快照全部加载完成 (总耗时 %.3f ms)", elapsed_ms);
   return 0;
 #else
   // 单引擎模式：只加载主引擎
-  return ksfLoadToEngine(ksf_filename_default, -1);
+  int ret = ksfLoadToEngine(ksf_filename_default, -1);
+  clock_gettime(CLOCK_MONOTONIC, &ts_end);
+  double elapsed_ms = (ts_end.tv_sec - ts_start.tv_sec) * 1000.0 +
+                      (ts_end.tv_nsec - ts_start.tv_nsec) / 1000000.0;
+  kvs_logInfo("KSF快照全部加载完成 (总耗时 %.3f ms)", elapsed_ms);
+  return ret;
 #endif
 }
