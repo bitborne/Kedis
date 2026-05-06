@@ -22,6 +22,8 @@ typedef struct {
   unsigned int flags;  // 标志位
 } robj;
 
+#define ROBJ_HEAP  0x00000001  // ptr 指向堆分配内存，需要 kvs_free
+
 /* ---------------- 协议解析器（从 conn 抽离，支持未来注册缓冲区） ---------------- */
 typedef struct {
   resp_state_t resp_state;

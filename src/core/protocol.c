@@ -7,7 +7,7 @@
 void proto_parser_reset(proto_parser_t *p) {
   if (!p) return;
   for (int i = 0; i < MAX_ARGC; i++) {
-    if (p->argv[i].ptr && p->argv[i].ptr != p->cmd_buf) {
+    if (p->argv[i].ptr && (p->argv[i].flags & ROBJ_HEAP)) {
       kvs_free(p->argv[i].ptr);
     }
     p->argv[i].ptr = NULL;
@@ -28,7 +28,7 @@ void kvs_resp_reset(proto_parser_t *p) {
 void kvs_resp_free_resources(proto_parser_t *p) {
   if (!p) return;
   for (int i = 0; i < MAX_ARGC; i++) {
-    if (p->argv[i].ptr && p->argv[i].ptr != p->cmd_buf) {
+    if (p->argv[i].ptr && (p->argv[i].flags & ROBJ_HEAP)) {
       kvs_free(p->argv[i].ptr);
       p->argv[i].ptr = NULL;
     }
@@ -197,16 +197,17 @@ size_t proto_feed(proto_parser_t *p, const char *chunk, size_t chunk_len) {
         // argv[0] 命令名内联到 cmd_buf，避免短命令的 malloc/free
         if (p->argc_done == 0 && p->bulk_len < sizeof(p->cmd_buf)) {
           p->argv[0].ptr = p->cmd_buf;
+          p->argv[0].flags = 0;  // 内联，非堆
         } else {
           p->argv[p->argc_done].ptr = kvs_malloc(p->bulk_len + 1);
           if (!p->argv[p->argc_done].ptr) {
             kvs_logError("Bulk malloc fail");
             goto error;  // 内存分配失败
           }
+          p->argv[p->argc_done].flags = ROBJ_HEAP;  // 堆分配
         }
         p->argv[p->argc_done].len = p->bulk_len;        // 记录长度
         p->argv[p->argc_done].ptr[p->bulk_len] = '\0';  // 添加 null terminator
-        p->argv[p->argc_done].flags = 0;
 
         // 切换到 ST_RESP_BULK_DATA 状态，准备接收 bulk data
         p->bulk_done = 0;  // 重置已接收的 bulk data 长度
@@ -302,7 +303,7 @@ int proto_take_cmd(proto_parser_t *p, int *argc_out, robj **argv_out) {
 
 void proto_free_argv(int argc, robj *argv) {
   for (int i = 0; i < argc; i++) {
-    if (argv[i].ptr) {
+    if (argv[i].ptr && (argv[i].flags & ROBJ_HEAP)) {
       kvs_free(argv[i].ptr);
       argv[i].ptr = NULL;
     }
