@@ -436,7 +436,7 @@ cd tests && ./run_full_benchmark_suite.sh --mixed
 
 #### 吞吐量对比
 
-![复制吞吐量对比](README.assets/repl_throughput.png)
+![复制吞吐量对比](README.assets/01_repl_throughput.png)
 
 **关键发现**:
 - **TC Ingress** 表现最佳，仅损失 9.6% 吞吐量 (70.4K vs 77.8K QPS)
@@ -447,19 +447,19 @@ cd tests && ./run_full_benchmark_suite.sh --mixed
 
 ##### 平均延迟
 
-![复制平均延迟](README.assets/repl_average_latency.png)
+![复制平均延迟](README.assets/02_repl_average_latency.png)
 
 平均延迟的增长趋势与吞吐量损失基本线性对应。TC 和 XDP 维持在 5.7ms 左右，RESP_feed 上升到 6.71ms。
 
 ##### P99 尾延迟
 
-![复制P99延迟](README.assets/repl_p99_latency.png)
+![复制P99延迟](README.assets/03_repl_p99_latency.png)
 
 **意外的发现**: XDP 的 P99 延迟 (9.98ms) 反而优于 No Mirror (11.52ms)。深入分析后我认为这是**eBPF 缓存预热效应**导致的——XDP 程序在内核态持续运行，其指令和数据结构保持在 CPU L1/L2 缓存中，减少了内核网络栈路径上的缓存未命中。这个反直觉的结果说明 eBPF 不仅能做功能扩展，在某些场景下还能优化数据局部性。
 
 ##### 完整延迟百分位数
 
-![复制延迟百分位数](README.assets/repl_latency_percentiles.png)
+![复制延迟百分位数](README.assets/04_repl_latency_percentiles.png)
 
 从 P50 到 P99.9 的分布可以看出：
 - **TC/XDP** 在各分位点表现稳定，延迟方差小
@@ -468,11 +468,11 @@ cd tests && ./run_full_benchmark_suite.sh --mixed
 
 #### 性能开销总结
 
-![复制性能开销](README.assets/repl_overhead.png)
+![复制性能开销](README.assets/05_repl_overhead.png)
 
 #### 数据汇总表
 
-![复制性能汇总表](README.assets/repl_summary_table.png)
+![复制性能汇总表](README.assets/06_repl_summary_table.png)
 
 #### 技术决策建议
 
