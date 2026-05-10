@@ -1029,8 +1029,9 @@ int kvs_protocol(reply_builder_t *rb, int argc, robj *argv) {
             return kvs_cmd_replicaof(rb, argc, argv);  // 调用 sync_command.c 中的处理函数
 
         case KVS_CMD_REPLCONF:
+            /* 注册从节点，不回复 +OK。
+             * 该连接用于主节点单向推送写命令，从节点侧无需确认。 */
             slave_register(rb->nc);
-            rb_add_reply_status(rb, "OK");
             break;
 
         case KVS_CMD_RDMASYNC:
