@@ -276,6 +276,14 @@ static void conn_free(struct conn* c) {
 
 /* ---------------- 安全释放连接：如果有 inflight send，延迟释放 ---------------- */
 static void conn_close_or_defer(struct conn_pool* pool, struct conn* c) {
+  c->state = ST_CLOSE;
+
+  /* 清理从节点注册表中的 dead 连接 */
+  if (c->is_slave) {
+    extern void slave_cleanup_dead(void);
+    slave_cleanup_dead();
+  }
+
   int defer = (c->send_inflight > 0 || c->has_bulk_suffix || c->iov_len > 0);
   kvs_logDebug("[conn_close_or_defer] fd=%d send_inflight=%d has_bulk=%d iov_len=%zu dead=%d -> %s",
                c->fd, c->send_inflight, c->has_bulk_suffix, c->iov_len, c->dead,
@@ -635,19 +643,28 @@ int proactor_start(unsigned short port, msg_handler handler) {
             break;
           }
           c->rlen += res;
+
+          if (c->is_slave) {
+            /* 从节点连接：主节点单向推送写命令，不期望接收数据。
+             * 从节点执行命令后可能回复 +OK，直接丢弃以避免 parse error 关闭连接。
+             * 对端正常关闭（res == 0）或错误在前面已处理。 */
+            c->rbuf_off = 0;
+            c->rlen = 0;
+          } else {
 #if ENABLE_ECHO_MODE
-          {
-            reply_builder_t rb = {.nc = c};
-            echo_handler(&rb);
-          }
-#else
-          {
-            int ret = process_commands(&g_ring, c);
-            if (ret < 0) {
-              break;
+            {
+              reply_builder_t rb = {.nc = c};
+              echo_handler(&rb);
             }
-          }
+#else
+            {
+              int ret = process_commands(&g_ring, c);
+              if (ret < 0) {
+                break;
+              }
+            }
 #endif
+          }
           flush_send_queue(&g_ring, c);
           maybe_post_recv(&g_ring, c);
           break;
