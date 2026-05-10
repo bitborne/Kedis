@@ -58,6 +58,12 @@ struct conn {
   /* Layer associations */
   proto_parser_t *parser;
   void *app_ctx;
+
+  int is_slave;            // 标记该连接是从节点同步通道
+
+  /* 新增：支持广播大命令时 iov_data 的内存自管理 */
+  char *iov_base;          // iov_data 的原始分配指针（如果需要释放）
+  int iov_needs_free;      // 标记 iov_base 是否需要 kvs_free
 };
 
 typedef struct conn net_conn_t;
@@ -76,12 +82,19 @@ extern int reactor_start(unsigned short port, msg_handler handler);
 extern int proactor_start(unsigned short port, msg_handler handler);
 extern int ntyco_start(unsigned short port, msg_handler handler);
 
+/* 全局 io_uring 实例（定义在 proactor.c） */
+struct io_uring;
+extern struct io_uring g_ring;
+
+/* 统一刷 send 队列（定义在 proactor.c） */
+extern void flush_send_queue(struct io_uring *ring, struct conn *c);
+
 /* ---------------- 内存分配前向声明（供 inline 回复构建器使用） ---------------- */
 extern void* kvs_malloc(size_t size);
 extern void kvs_free(void *ptr);
 
 /* ---------------- 回复构建器接口（替代 add_reply_*） ---------------- */
-static inline int __attribute__((always_inline)) rb_add_reply_str_len(reply_builder_t *rb, const char *str, size_t len) {
+static inline int rb_add_reply_str_len(reply_builder_t *rb, const char *str, size_t len) {
   net_conn_t *nc = rb->nc;
   if (!nc || !str) return -1;
 
@@ -96,23 +109,23 @@ static inline int __attribute__((always_inline)) rb_add_reply_str_len(reply_buil
   return 0;
 }
 
-static inline void __attribute__((always_inline)) rb_add_reply_str(reply_builder_t *rb, const char *str) {
+static inline void rb_add_reply_str(reply_builder_t *rb, const char *str) {
   rb_add_reply_str_len(rb, str, strlen(str));
 }
 
-static inline void __attribute__((always_inline)) rb_add_reply_error(reply_builder_t *rb, const char *err) {
+static inline void rb_add_reply_error(reply_builder_t *rb, const char *err) {
   rb_add_reply_str(rb, "-ERR ");
   rb_add_reply_str(rb, err);
   rb_add_reply_str(rb, "\r\n");
 }
 
-static inline void __attribute__((always_inline)) rb_add_reply_status(reply_builder_t *rb, const char *status) {
+static inline void rb_add_reply_status(reply_builder_t *rb, const char *status) {
   rb_add_reply_str(rb, "+");
   rb_add_reply_str(rb, status);
   rb_add_reply_str(rb, "\r\n");
 }
 
-static inline void __attribute__((always_inline)) rb_add_reply_bulk_len(reply_builder_t *rb, char *data, size_t len) {
+static inline void rb_add_reply_bulk_len(reply_builder_t *rb, char *data, size_t len) {
   char buf[32];
   int n = snprintf(buf, sizeof(buf), "$%zu\r\n", len);
 
@@ -149,7 +162,7 @@ static inline void __attribute__((always_inline)) rb_add_reply_bulk_len(reply_bu
   }
 }
 
-static inline void __attribute__((always_inline)) rb_add_reply_bulk(reply_builder_t *rb, char *data) {
+static inline void rb_add_reply_bulk(reply_builder_t *rb, char *data) {
   rb_add_reply_bulk_len(rb, data, strlen(data));
 }
 

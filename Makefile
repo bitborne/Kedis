@@ -8,6 +8,7 @@ SRCS = src/core/kvstore.c \
        src/core/config.c \
        src/core/sync_command.c \
        src/core/slave_sync.c \
+       src/core/repl_master.c \
        src/network/proactor.c \
        src/network/echo_mode.c \
        src/network/rdma_sync.c \

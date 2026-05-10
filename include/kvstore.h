@@ -114,6 +114,7 @@ enum {
      *   - 父进程立即返回+FORKED，后续通信由子进程处理
      */
     KVS_CMD_RDMASYNC,
+    KVS_CMD_REPLCONF,      // 从节点注册命令
 
     KVS_CMD_COUNT
 };
@@ -168,5 +169,10 @@ int kvs_main_del_safe(void *inst, robj* key);
 int kvs_main_mod_safe(void *inst, robj* key, robj* value);
 int kvs_main_exist_safe(void *inst, robj* key);
 #endif
+
+/* 主从命令传播 */
+struct io_uring;  /* 前向声明 */
+void slave_register(struct conn *nc);
+void repl_propagate(struct io_uring *ring, int argc, robj *argv);
 
 #endif

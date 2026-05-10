@@ -116,7 +116,7 @@ const char*
                  "HDEL", "HMOD", "HEXIST", "RSET", "RGET", "RDEL",
                  "RMOD", "REXIST", "SSET", "SGET", "SDEL", "SMOD",
                  "SEXIST", "SAVE", "BGSAVE", "SYNC", "REPLICAOF",
-                 "RDMASYNC"};    // 添加SAVE、BGSAVE、SYNC、REPLICAOF和RDMASYNC命令
+                 "RDMASYNC", "REPLCONF"};    // 添加SAVE、BGSAVE、SYNC、REPLICAOF和RDMASYNC命令
 
 
 // 命令查找 hash 表（开放寻址）
@@ -1028,6 +1028,11 @@ int kvs_protocol(reply_builder_t *rb, int argc, robj *argv) {
             }
             return kvs_cmd_replicaof(rb, argc, argv);  // 调用 sync_command.c 中的处理函数
 
+        case KVS_CMD_REPLCONF:
+            slave_register(rb->nc);
+            rb_add_reply_status(rb, "OK");
+            break;
+
         case KVS_CMD_RDMASYNC:
             /*
              * 【方案C核心】RDMASYNC 命令处理
@@ -1119,8 +1124,13 @@ int kvs_protocol(reply_builder_t *rb, int argc, robj *argv) {
     if (g_config.auto_save_enabled) {
 
         // 检查是否需要计数（自动保存）
-        changes_since_last_save += is_write_command(cmd_name);    
+        changes_since_last_save += is_write_command(cmd_name);
         check_and_perform_autosave();
+    }
+
+    /* 主节点：写命令执行后广播给所有已注册从节点 */
+    if (g_config.replica_mode == REPLICA_MODE_MASTER && is_write_command(cmd_name)) {
+        repl_propagate(&g_ring, argc, argv);
     }
 
     return 0;

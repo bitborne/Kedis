@@ -54,7 +54,7 @@ struct conn_pool {
 
 /* ---------------- 全局变量 ---------------- */
 static struct conn_pool g_conn_pool;  // 全局连接池
-static struct io_uring g_ring;        // 全局 io_uring 实例
+struct io_uring g_ring;        // 全局 io_uring 实例
 static msg_handler g_kvs_handler;     // KV 协议处理器
 static int g_listenfd = -1;           // 监听 fd
 static volatile int g_proactor_running = 1;  // 运行标志，用于优雅退出
@@ -130,6 +130,9 @@ static struct conn* conn_pool_alloc(struct conn_pool* pool) {
   c->iov_data = NULL;
   c->iov_len = 0;
   c->has_bulk_suffix = 0;
+  c->iov_base = NULL;
+  c->iov_needs_free = 0;
+  c->is_slave = 0;
   c->dead = 0;
 
   /* Ensure parser and rbuf_ptr are initialized */
@@ -226,6 +229,13 @@ static void maybe_post_recv(struct io_uring* ring, struct conn* c) {
 
 /* ---------------- 释放连接资源 ---------------- */
 static void conn_free(struct conn* c) {
+  /* 释放广播大命令时分配的 iov_base */
+  if (c->iov_needs_free && c->iov_base) {
+    kvs_free(c->iov_base);
+    c->iov_base = NULL;
+    c->iov_needs_free = 0;
+  }
+
   if (c->fd >= 0) {
     close(c->fd);
   }
@@ -259,7 +269,7 @@ static void conn_close_or_defer(struct conn_pool* pool, struct conn* c) {
 }
 
 /* ---------------- Step 3: 统一刷 send 队列 ---------------- */
-static void flush_send_queue(struct io_uring* ring, struct conn* c) {
+void flush_send_queue(struct io_uring* ring, struct conn* c) {
   if (c->fd < 0 || c->send_inflight) {
     kvs_logDebug("[flush_send_queue] fd=%d skip (inflight=%d)", c->fd, c->send_inflight);
     return;
@@ -667,6 +677,13 @@ int proactor_start(unsigned short port, msg_handler handler) {
             if (ret < 0) {
               break;
             }
+          }
+
+          /* 释放广播大命令时分配的 iov_base */
+          if (c->iov_needs_free && c->wlen == 0 && c->iov_len == 0 && !c->has_bulk_suffix) {
+            kvs_free(c->iov_base);
+            c->iov_base = NULL;
+            c->iov_needs_free = 0;
           }
 
           maybe_post_recv(&g_ring, c);
