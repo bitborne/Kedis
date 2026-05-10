@@ -10,8 +10,12 @@
 #include "../../include/kvstore.h"
 #include "../../include/kvs_rdma_sync.h"
 #include <sys/eventfd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include <unistd.h>
 #include <string.h>
+#include <errno.h>
 
 /* ============================================================================
  * 全局状态
@@ -22,6 +26,9 @@ static volatile int g_sync_state = SLAVE_STATE_IDLE;
 
 /* eventfd - 用于 RDMA 线程通知主线程 */
 static int g_event_fd = -1;
+
+/* REPLCONF 连接 fd - 由 RDMA 线程创建，主线程通过 slave_sync_take_repl_fd() 取用 */
+static int g_repl_fd = -1;
 
 /* 积压队列 - 仅主线程访问，无锁 */
 struct backlog_queue {
@@ -111,6 +118,48 @@ static void *rdma_sync_thread_fn(void *arg) {
         __sync_synchronize();  /* 内存屏障：确保状态更新可见 */
     } else {
         kvs_logInfo("[RDMA Thread] 存量同步成功完成\n");
+
+        /* -------------------------------------------------------------------------
+         * 建立到主节点的 REPLCONF 连接
+         *
+         * RDMA 同步期间原 TCP 连接已被子进程关闭，必须重新连接。
+         * 此处使用阻塞 connect/send，因本线程生命周期已结束，不影响主循环。
+         * 连接 fd 存入 g_repl_fd，主线程通过 eventfd 通知后取用。
+         * ------------------------------------------------------------------------- */
+        if (g_repl_fd >= 0) {
+            close(g_repl_fd);
+            g_repl_fd = -1;
+        }
+
+        int repl_fd = socket(AF_INET, SOCK_STREAM, 0);
+        if (repl_fd >= 0) {
+            struct sockaddr_in addr;
+            memset(&addr, 0, sizeof(addr));
+            addr.sin_family = AF_INET;
+            addr.sin_port = htons(args->master_port);
+            if (inet_pton(AF_INET, args->master_host, &addr.sin_addr) == 1) {
+                if (connect(repl_fd, (struct sockaddr *)&addr, sizeof(addr)) == 0) {
+                    const char *replconf = "*1\r\n$8\r\nREPLCONF\r\n";
+                    ssize_t n = send(repl_fd, replconf, strlen(replconf), MSG_NOSIGNAL);
+                    if (n == (ssize_t)strlen(replconf)) {
+                        g_repl_fd = repl_fd;
+                        kvs_logInfo("[RDMA Thread] REPLCONF 已发送 fd=%d\n", repl_fd);
+                    } else {
+                        kvs_logError("[RDMA Thread] send REPLCONF 失败: %s\n", strerror(errno));
+                        close(repl_fd);
+                    }
+                } else {
+                    kvs_logError("[RDMA Thread] connect 到 %s:%d 失败: %s\n",
+                                 args->master_host, args->master_port, strerror(errno));
+                    close(repl_fd);
+                }
+            } else {
+                kvs_logError("[RDMA Thread] inet_pton 失败: %s\n", strerror(errno));
+                close(repl_fd);
+            }
+        } else {
+            kvs_logError("[RDMA Thread] socket 创建失败: %s\n", strerror(errno));
+        }
 
         /* 设置状态为 READY，积压队列将在 eventfd 通知后回放 */
         g_sync_state = SLAVE_STATE_READY;
@@ -223,6 +272,14 @@ void slave_sync_cleanup(void) {
 /* 获取 eventfd（供 proactor 注册到 io_uring） */
 int slave_sync_get_eventfd(void) {
     return g_event_fd;
+}
+
+/* 获取 REPLCONF 连接 fd（供 proactor 在 eventfd 通知后注册到 io_uring）
+ * 返回后全局变量清零，只允许取用一次 */
+int slave_sync_take_repl_fd(void) {
+    int fd = g_repl_fd;
+    g_repl_fd = -1;
+    return fd;
 }
 
 /* 获取当前状态 */

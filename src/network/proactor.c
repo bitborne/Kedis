@@ -75,6 +75,7 @@ struct accept_ctx {
 /* 从节点同步管理 */
 extern int slave_sync_get_eventfd(void);
 extern void slave_sync_drain_backlog(msg_handler handler);
+extern int slave_sync_take_repl_fd(void);
 
 /* ---------------- 外部函数声明 ---------------- */
 extern void before_sleep(void);
@@ -215,6 +216,26 @@ static void post_read_eventfd(struct io_uring* ring, int fd, void* buf) {
   io_uring_prep_read(sqe, fd, buf, 8, 0);
   uint64_t ud = ((uint64_t)g_event_conn & ~OP_MASK) | OP_EVENTFD;
   io_uring_sqe_set_data64(sqe, ud);
+}
+
+/* ---------------- 将外部 fd 附加到连接池，由 io_uring 管理 ---------------- */
+struct conn* conn_attach_fd(int fd) {
+  struct conn* c = conn_pool_alloc(&g_conn_pool);
+  if (!c) {
+    close(fd);
+    return NULL;
+  }
+  c->fd = fd;
+  c->state = ST_RECV;
+  c->rlen = 0;
+  c->rbuf_off = 0;
+  if (c->parser) {
+    kvs_resp_reset(c->parser);
+  }
+  int nodelay = 1;
+  setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
+  post_recv_frame(&g_ring, c);
+  return c;
 }
 
 /* ---------------- Step 2: 按需补投 recv ----------------
@@ -560,6 +581,16 @@ int proactor_start(unsigned short port, msg_handler handler) {
                 extern void slave_sync_drain_backlog(msg_handler handler);
                 slave_sync_drain_backlog(g_kvs_handler);
                 kvs_logInfo("[Proactor] 积压队列回放完成");
+
+                int repl_fd = slave_sync_take_repl_fd();
+                if (repl_fd >= 0) {
+                  struct conn *nc = conn_attach_fd(repl_fd);
+                  if (nc) {
+                    kvs_logInfo("[Proactor] REPLCONF 连接已注册 fd=%d", repl_fd);
+                  } else {
+                    kvs_logError("[Proactor] conn_attach_fd 失败 fd=%d", repl_fd);
+                  }
+                }
               } else if (current_state == SLAVE_STATE_IDLE) {
                 kvs_logWarn("[Proactor] RDMA 同步失败（状态为 IDLE），无需回放");
               } else if (current_state == SLAVE_STATE_SYNCING) {
