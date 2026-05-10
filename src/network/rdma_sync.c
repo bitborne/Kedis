@@ -966,7 +966,7 @@ int rdma_sync_child_server(int tcp_fd, rdma_engine_type_t engine_type) {
         };
         resp.payload.buf_attr.addr = (uint64_t)ctx.data_buf;
         resp.payload.buf_attr.length = (uint32_t)ctx.data_buf_size;
-        resp.payload.buf_attr.rkey = ctx.mr_data->rkey;
+        resp.payload.buf_attr.rkey = ctx.mr_data ? ctx.mr_data->rkey : 0;
 
         /* 使用 ctx.ctrl_buf 作为发送缓冲区（复用） */
         memcpy(ctx.ctrl_buf, &resp, sizeof(resp));
@@ -1003,7 +1003,7 @@ int rdma_sync_child_server(int tcp_fd, rdma_engine_type_t engine_type) {
         }
 
         kvs_logInfo("[子进程] 已发送 READY: addr=%lx, rkey=%u, len=%zu\n",
-                    (uint64_t)ctx.data_buf, ctx.mr_data->rkey, ctx.data_buf_size);
+                    (uint64_t)ctx.data_buf, ctx.mr_data ? ctx.mr_data->rkey : 0, ctx.data_buf_size);
 
         /*
          * 步骤4: 等待 COMPLETE 命令
