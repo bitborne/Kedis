@@ -331,7 +331,7 @@ void flush_send_queue(struct io_uring* ring, struct conn* c) {
 }
 
 /* ---------------- 命令处理：提取为函数，支持 OP_SEND 完成后续处理 ---------------- */
-static int process_commands(struct io_uring* ring, struct conn* c) {
+int process_commands(struct io_uring* ring, struct conn* c) {
   kvs_logDebug("[process_commands] fd=%d enter rlen=%zu rbuf_off=%zu wlen=%zu send_inflight=%d",
                c->fd, c->rlen, c->rbuf_off, c->wlen, c->send_inflight);
 

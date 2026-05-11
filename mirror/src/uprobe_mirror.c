@@ -289,11 +289,11 @@ static void print_debug_stats(struct uprobe_mirror_bpf* skel) {
     __u32 key;
     __u64 count;
     const char *labels[] = {
-        "总调用", "c=NULL", "读fd失败", "fd<0", 
-        "读rlen失败", "读parse_done失败", "rlen无效", "ringbuf满", "成功"
+        "总调用", "c=NULL", "读fd失败", "fd<0",
+        "读rlen/rbuf失败", "rlen无效/rbuf为空", "ringbuf满", "成功"
     };
-    
-    for (int i = 0; i < 9; i++) {
+
+    for (int i = 0; i < 8; i++) {
         key = i;
         if (bpf_map_lookup_elem(debug_fd, &key, &count) == 0 && count > 0) {
             mirror_logInfo("[DEBUG] %s: %llu", labels[i], count);
@@ -342,21 +342,21 @@ int main(int argc, char** argv) {
     mirror_logInfo("目标程序: %s", kvstore_path);
     mirror_logInfo("目标进程: PID=%d", target_pid);
     mirror_logInfo("从节点: %s:%d", target_ip, target_port);
-    mirror_logInfo("探测点: kvs_resp_feed (uprobe)");
+    mirror_logInfo("探测点: process_commands (uprobe)");
     mirror_logInfo("流管理: 按 fd 区分，超时 %d 秒 (5分钟)", FLOW_TIMEOUT_SEC);
     mirror_logInfo("========================================");
 
     signal(SIGINT, sig_handler);
     signal(SIGTERM, sig_handler);
 
-    // 动态获取 kvs_resp_feed 符号地址
-    size_t func_offset = get_symbol_offset(kvstore_path, "kvs_resp_feed");
+    // 动态获取 process_commands 符号地址
+    size_t func_offset = get_symbol_offset(kvstore_path, "process_commands");
     if (func_offset == 0) {
-        mirror_logError("无法获取 %s 的地址，使用默认地址 0x6910", "kvs_resp_feed");
-        func_offset = 0x6910;  // 后备默认值
+        mirror_logError("无法获取 %s 的地址", "process_commands");
+        goto cleanup;
     }
-    
-    mirror_logInfo("函数 %s 的偏移量: 0x%lx", "kvs_resp_feed", func_offset);
+
+    mirror_logInfo("函数 %s 的偏移量: 0x%lx", "process_commands", func_offset);
 
     // 加载 BPF
     struct uprobe_mirror_bpf* skel = uprobe_mirror_bpf__open_and_load();
@@ -369,18 +369,18 @@ int main(int argc, char** argv) {
     
     // 附加 uprobe 到指定 PID
     struct bpf_link *link = bpf_program__attach_uprobe(
-        skel->progs.uprobe_kvs_resp_feed,
+        skel->progs.uprobe_process_commands,
         false,        // retprobe = false (entry)
         target_pid,   // 指定 PID
         kvstore_path,
         func_offset   // 函数偏移量
     );
     if (!link) {
-        mirror_logError("附加 uprobe kvs_resp_feed 失败");
+        mirror_logError("附加 uprobe process_commands 失败");
         goto cleanup;
     }
 
-    mirror_logInfo("uprobe 已附加到 PID=%d:%s:kvs_resp_feed (offset=0x%lx)", 
+    mirror_logInfo("uprobe 已附加到 PID=%d:%s:process_commands (offset=0x%lx)",
                    target_pid, kvstore_path, func_offset);
 
     // 创建 ring buffer

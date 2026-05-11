@@ -92,6 +92,9 @@ extern void flush_send_queue(struct io_uring *ring, struct conn *c);
 /* 将外部 fd 附加到连接池，由 io_uring 管理（定义在 proactor.c） */
 extern struct conn *conn_attach_fd(int fd);
 
+/* 命令处理主循环（uprobe mirror 挂载点，需外部可见） */
+extern int process_commands(struct io_uring *ring, struct conn *c);
+
 /* ---------------- 内存分配前向声明（供 inline 回复构建器使用） ---------------- */
 extern void* kvs_malloc(size_t size);
 extern void kvs_free(void *ptr);
