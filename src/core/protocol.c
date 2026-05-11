@@ -98,6 +98,11 @@ size_t proto_feed(proto_parser_t *p, const char *chunk, size_t chunk_len) {
       case ST_RESP_HDR: {
         // 检查是否以 * 开头（Array 格式）
         if (chunk[p->parse_done] != '*') {
+            char hexbuf[64];
+            int hn = 0;
+            for (int i = 0; i < 16 && i < (int)chunk_len; i++)
+                hn += snprintf(hexbuf + hn, sizeof(hexbuf) - hn, "%02x ", (unsigned char)chunk[i]);
+            debug("ST_RESP_HDR bad first char parse_done=%zu chunk_len=%zu hex=%s", p->parse_done, chunk_len, hexbuf);
             kvs_logError("The first char must be *");
           goto error;  // 协议错误：不是 Array 格式
         }

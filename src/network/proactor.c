@@ -304,6 +304,12 @@ void flush_send_queue(struct io_uring* ring, struct conn* c) {
     return;
   }
 
+  char hexbuf[64];
+  int hn = 0;
+  for (int i = 0; i < 16 && i < (int)c->wlen; i++)
+    hn += snprintf(hexbuf + hn, sizeof(hexbuf) - hn, "%02x ", (unsigned char)c->wbuf[i]);
+  debug("flush_send fd=%d wlen=%zu iov_len=%zu wbuf_hex=%s", c->fd, c->wlen, c->iov_len, hexbuf);
+
   struct io_uring_sqe* sqe;
 
   if (c->wlen > 0) {
@@ -334,6 +340,13 @@ void flush_send_queue(struct io_uring* ring, struct conn* c) {
 int process_commands(struct io_uring* ring, struct conn* c) {
   kvs_logDebug("[process_commands] fd=%d enter rlen=%zu rbuf_off=%zu wlen=%zu send_inflight=%d",
                c->fd, c->rlen, c->rbuf_off, c->wlen, c->send_inflight);
+  if (c->rlen > 0) {
+    char hexbuf[64];
+    int hn = 0;
+    for (int i = 0; i < 16 && i < (int)c->rlen; i++)
+      hn += snprintf(hexbuf + hn, sizeof(hexbuf) - hn, "%02x ", (unsigned char)c->rbuf_ptr[c->rbuf_off + i]);
+    debug("rbuf hex: %s", hexbuf);
+  }
 
   /* 惰性紧缩 rbuf */
   if (c->rbuf_off > 0 && c->rbuf_off + c->rlen >= IOP_SIZE - 256) {

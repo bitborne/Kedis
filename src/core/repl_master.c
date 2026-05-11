@@ -80,9 +80,17 @@ void repl_propagate(struct io_uring *ring, int argc, robj *argv)
 		return;
 	}
 
+	char hexbuf[64];
+	int hn = 0;
+	for (int i = 0; i < 16 && i < (int)len; i++)
+		hn += snprintf(hexbuf + hn, sizeof(hexbuf) - hn, "%02x ", (unsigned char)cmd[i]);
+	debug("propagate cmd=%s len=%zu hex=%s", argv[0].ptr ? argv[0].ptr : "NULL", len, hexbuf);
+
 	for (struct slave_conn *s = g_slaves; s; s = s->next) {
 		struct conn *nc = s->nc;
 		if (nc->fd < 0 || nc->state == ST_CLOSE) continue;
+
+		debug("slave fd=%d wlen=%zu iov_len=%zu", nc->fd, nc->wlen, nc->iov_len);
 
 		if (nc->wlen + len <= RESP_BUF_SIZE) {
 			/* 小命令：直接塞 wbuf */
