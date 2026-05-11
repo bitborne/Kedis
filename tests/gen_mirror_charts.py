@@ -27,7 +27,7 @@ operations = ['HSET', 'HGET', 'HDEL']
 x = range(len(modes))
 width = 0.25
 
-fig, ax = plt.subplots(figsize=(9, 5))
+fig, ax = plt.subplots(figsize=(11, 5))
 
 colors = ['#2ECC71', '#3498DB', '#E74C3C']
 for i, op in enumerate(operations):

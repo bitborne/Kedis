@@ -11,7 +11,8 @@ if [ -z "$PORT" ] || [ -z "$MODE" ]; then
     echo "    uprobe : 测无 mirror 基线 + uprobe mirror"
     echo "    xdp    : 测无 mirror 基线 + xdp mirror"
     echo "    tc     : 测无 mirror 基线 + tc mirror"
-    echo "    all    : 依次测 none -> uprobe -> xdp -> tc（需手动切换）"
+    echo "    repl   : 测无 mirror 基线 + 主从写命令传播 (repl_propagate)"
+    echo "    all    : 依次测 none -> uprobe -> xdp -> tc -> repl（需手动切换）"
     echo ""
     echo "  服务和 mirror 均需手动启动，脚本仅负责提示与跑 benchmark。"
     exit 1
@@ -93,9 +94,9 @@ if [ "$MODE" == "none" ]; then
 fi
 
 # 通用：先测 none 基线
-if [ "$MODE" == "all" ] || [ "$MODE" == "uprobe" ] || [ "$MODE" == "xdp" ] || [ "$MODE" == "tc" ]; then
+if [ "$MODE" == "all" ] || [ "$MODE" == "uprobe" ] || [ "$MODE" == "xdp" ] || [ "$MODE" == "tc" ] || [ "$MODE" == "repl" ]; then
     echo ""
-    echo ">>> 阶段 1/4 : [none] 无 mirror 基线"
+    echo ">>> 阶段 1/5 : [none] 无 mirror 基线"
     echo "    请确保 kvstore 正在运行，且无 mirror 启动"
     echo "    按 Enter 开始..."
     read
@@ -118,6 +119,7 @@ if [ "$MODE" == "all" ]; then
     test_mirror "uprobe"
     test_mirror "xdp"
     test_mirror "tc"
+    test_mirror "repl"
     echo -e "\n全部测试完成！"
 elif [ "$MODE" == "uprobe" ]; then
     test_mirror "uprobe"
@@ -127,6 +129,9 @@ elif [ "$MODE" == "xdp" ]; then
     echo -e "\n完成！"
 elif [ "$MODE" == "tc" ]; then
     test_mirror "tc"
+    echo -e "\n完成！"
+elif [ "$MODE" == "repl" ]; then
+    test_mirror "repl"
     echo -e "\n完成！"
 else
     echo "未知模式: $MODE"
