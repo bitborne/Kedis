@@ -107,7 +107,8 @@ void repl_propagate(struct io_uring *ring, int argc, robj *argv)
 			}
 			if (old_iov > 0) {
 				memcpy(new_base, nc->iov_data, old_iov);
-				kvs_free(old_base);
+				/* 旧 buffer 可能还有内核 inflight send，延迟释放 */
+				nc->iov_pending_free = old_base;
 			}
 			memcpy(new_base + old_iov, cmd, len);
 

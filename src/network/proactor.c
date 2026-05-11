@@ -133,6 +133,7 @@ static struct conn* conn_pool_alloc(struct conn_pool* pool) {
   c->has_bulk_suffix = 0;
   c->iov_base = NULL;
   c->iov_needs_free = 0;
+  c->iov_pending_free = NULL;
   c->is_slave = 0;
   c->dead = 0;
 
@@ -255,6 +256,10 @@ static void conn_free(struct conn* c) {
     kvs_free(c->iov_base);
     c->iov_base = NULL;
     c->iov_needs_free = 0;
+  }
+  if (c->iov_pending_free) {
+    kvs_free(c->iov_pending_free);
+    c->iov_pending_free = NULL;
   }
 
   if (c->fd >= 0) {
@@ -687,6 +692,11 @@ int proactor_start(unsigned short port, msg_handler handler) {
         case OP_SEND: {
           struct conn* c = (struct conn*)ptr;
           c->send_inflight--;
+          /* 当前 send 已完成，若没有其它 inflight，可安全释放旧 iov buffer */
+          if (c->send_inflight == 0 && c->iov_pending_free) {
+            kvs_free(c->iov_pending_free);
+            c->iov_pending_free = NULL;
+          }
           kvs_logDebug("[OP_SEND] fd=%d res=%d send_inflight=%d wlen=%zu iov_len=%zu",
                        c->fd, res, c->send_inflight, c->wlen, c->iov_len);
           if (res < 0) {

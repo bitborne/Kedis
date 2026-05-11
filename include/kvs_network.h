@@ -66,6 +66,9 @@ struct conn {
   int iov_needs_free;      // 标记 iov_base 是否需要 kvs_free
 
   int is_replconf;         // 标记该连接是从节点到主节点的 REPLCONF 同步通道
+
+  /* 延迟释放：repl_propagate 合并 iov 时，旧 buffer 可能还有内核 inflight send */
+  char *iov_pending_free;
 };
 
 typedef struct conn net_conn_t;
