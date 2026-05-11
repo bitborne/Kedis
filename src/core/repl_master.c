@@ -97,25 +97,31 @@ void repl_propagate(struct io_uring *ring, int argc, robj *argv)
 			memcpy(nc->wbuf + nc->wlen, cmd, len);
 			nc->wlen += len;
 		} else {
-			/* 大命令：独立分配 buffer，塞满 wbuf 后剩余挂 iov_data */
-			char *buf = kvs_malloc(len);
-			if (!buf) {
+			/* 大命令：wbuf 满后追加到 iov，若已有 iov 则合并追加 */
+			size_t old_iov = nc->iov_len;
+			char *old_base = nc->iov_base;
+			char *new_base = kvs_malloc(old_iov + len);
+			if (!new_base) {
 				nc->state = ST_CLOSE;
 				continue;
 			}
-			memcpy(buf, cmd, len);
+			if (old_iov > 0) {
+				memcpy(new_base, nc->iov_data, old_iov);
+				kvs_free(old_base);
+			}
+			memcpy(new_base + old_iov, cmd, len);
 
 			size_t space = RESP_BUF_SIZE - nc->wlen;
 			if (space > 0) {
-				memcpy(nc->wbuf + nc->wlen, buf, space);
+				memcpy(nc->wbuf + nc->wlen, new_base, space);
 				nc->wlen += space;
-				nc->iov_data = buf + space;
-				nc->iov_len = len - space;
+				nc->iov_data = new_base + space;
+				nc->iov_len = old_iov + len - space;
 			} else {
-				nc->iov_data = buf;
-				nc->iov_len = len;
+				nc->iov_data = new_base;
+				nc->iov_len = old_iov + len;
 			}
-			nc->iov_base = buf;
+			nc->iov_base = new_base;
 			nc->iov_needs_free = 1;
 		}
 		flush_send_queue(ring, nc);
