@@ -594,6 +594,7 @@ int proactor_start(unsigned short port, msg_handler handler) {
                 if (repl_fd >= 0) {
                   struct conn *nc = conn_attach_fd(repl_fd);
                   if (nc) {
+                    nc->is_replconf = 1;
                     kvs_logInfo("[Proactor] REPLCONF 连接已注册 fd=%d", repl_fd);
                   } else {
                     kvs_logError("[Proactor] conn_attach_fd 失败 fd=%d", repl_fd);

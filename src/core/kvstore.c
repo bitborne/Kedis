@@ -588,6 +588,11 @@ static void rb_add_reply_exist(reply_builder_t *rb, int exists) {
 /* ---------------- 核心命令执行逻辑 ---------------- */
 int kvs_protocol(reply_builder_t *rb, int argc, robj *argv) {
 
+    /* REPLCONF 连接：主节点单向推送 propagated 命令，从节点无需回复 */
+    if (rb->nc->is_replconf) {
+        rb->silent = 1;
+    }
+
     char* cmd_name = argv[0].ptr;
     robj* key = &argv[1];
     robj* value = &argv[2];

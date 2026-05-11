@@ -64,6 +64,8 @@ struct conn {
   /* 新增：支持广播大命令时 iov_data 的内存自管理 */
   char *iov_base;          // iov_data 的原始分配指针（如果需要释放）
   int iov_needs_free;      // 标记 iov_base 是否需要 kvs_free
+
+  int is_replconf;         // 标记该连接是从节点到主节点的 REPLCONF 同步通道
 };
 
 typedef struct conn net_conn_t;
@@ -72,6 +74,7 @@ typedef struct conn conn_t;
 /* ---------------- 回复构建器 ---------------- */
 typedef struct {
   net_conn_t *nc;
+  int silent;              // 静默模式：不写入 wbuf（用于从节点处理 propagated 命令）
 } reply_builder_t;
 
 // 消息处理回调函数定义
@@ -101,6 +104,7 @@ extern void kvs_free(void *ptr);
 
 /* ---------------- 回复构建器接口（替代 add_reply_*） ---------------- */
 static inline int rb_add_reply_str_len(reply_builder_t *rb, const char *str, size_t len) {
+  if (rb->silent) return 0;
   net_conn_t *nc = rb->nc;
   if (!nc || !str) return -1;
 
@@ -132,6 +136,7 @@ static inline void rb_add_reply_status(reply_builder_t *rb, const char *status) 
 }
 
 static inline void rb_add_reply_bulk_len(reply_builder_t *rb, char *data, size_t len) {
+  if (rb->silent) return;
   char buf[32];
   int n = snprintf(buf, sizeof(buf), "$%zu\r\n", len);
 
