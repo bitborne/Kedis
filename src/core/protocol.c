@@ -250,6 +250,14 @@ size_t proto_feed(proto_parser_t *p, const char *chunk, size_t chunk_len) {
           // 检查 \r\n 是否正确
           if (chunk[p->parse_done] != '\r' ||
             chunk[p->parse_done + 1] != '\n') {
+              char hexbuf[128];
+              int hn = 0;
+              size_t dump_start = p->parse_done > 16 ? p->parse_done - 16 : 0;
+              size_t dump_end = p->parse_done + 16 < chunk_len ? p->parse_done + 16 : chunk_len;
+              for (size_t i = dump_start; i < dump_end; i++)
+                hn += snprintf(hexbuf + hn, sizeof(hexbuf) - hn, "%02x ", (unsigned char)chunk[i]);
+              debug("BULK_END_FAIL bulk_len=%zu bulk_done=%zu argc_done=%d parse_done=%zu chunk_len=%zu hex=%s",
+                    p->bulk_len, p->bulk_done, p->argc_done, p->parse_done, chunk_len, hexbuf);
               kvs_logError("Bulk should end with \\r\\n");
               goto error;  // 协议错误：缺少 \r\n
           }

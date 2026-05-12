@@ -325,6 +325,10 @@ void flush_send_queue(struct io_uring* ring, struct conn* c) {
     c->send_inflight++;
   } else if (c->iov_len > 0) {
     kvs_logDebug("[flush_send_queue] fd=%d send iov_len=%zu", c->fd, c->iov_len);
+    hn = 0;
+    for (int i = 0; i < 16 && i < (int)c->iov_len; i++)
+      hn += snprintf(hexbuf + hn, sizeof(hexbuf) - hn, "%02x ", (unsigned char)c->iov_data[i]);
+    debug("send iov fd=%d hex=%s", c->fd, hexbuf);
     sqe = sqe_prep_tagged(ring, c, OP_SEND);
     if (!sqe) return;
     io_uring_prep_send(sqe, c->fd, c->iov_data, c->iov_len, 0);
@@ -394,6 +398,9 @@ int process_commands(struct io_uring* ring, struct conn* c) {
 
       c->rbuf_off += consumed;
       c->rlen -= consumed;
+      kvs_logDebug("[process_commands] fd=%d parsed cmd=%.*s consumed=%zu remaining=%zu",
+                   c->fd, (int)(argv[0].len > 16 ? 16 : argv[0].len), argv[0].ptr,
+                   consumed, c->rlen);
       if (c->rlen > 0) {
         continue;
       }

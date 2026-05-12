@@ -96,6 +96,7 @@ void repl_propagate(struct io_uring *ring, int argc, robj *argv)
 			/* 小命令：直接塞 wbuf */
 			memcpy(nc->wbuf + nc->wlen, cmd, len);
 			nc->wlen += len;
+			debug("propagate to fd=%d -> wbuf (wlen=%zu)", nc->fd, nc->wlen);
 		} else {
 			/* 大命令：wbuf 满后追加到 iov，若已有 iov 则合并追加 */
 			size_t old_iov = nc->iov_len;
@@ -124,6 +125,8 @@ void repl_propagate(struct io_uring *ring, int argc, robj *argv)
 			}
 			nc->iov_base = new_base;
 			nc->iov_needs_free = 1;
+			debug("propagate to fd=%d -> split wlen=%zu iov_len=%zu space=%zu",
+			      nc->fd, nc->wlen, nc->iov_len, space);
 		}
 		flush_send_queue(ring, nc);
 	}
