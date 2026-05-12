@@ -6,14 +6,14 @@
 #include <unistd.h>
 
 /* 日志级别 */
-#define MIRROR_LOG_LEVEL 2  // [修改] 默认 WARNING 级别，减少日志阻塞
+#define MIRROR_LOG_LEVEL 3  // [修改] 默认 WARNING 级别，减少日志阻塞
 
 #define MIRROR_DEBUG    0
 #define MIRROR_INFO     1
 #define MIRROR_WARNING  2
 #define MIRROR_ERROR    3
 
-#define LOG_TO_STDOUT 0
+#define LOG_TO_STDOUT 1
 #define LOG_FILE "mirror.log"
 
 /* 终端打印信息颜色 */

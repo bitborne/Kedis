@@ -65,3 +65,4 @@ results_kedis/
 results_redis/
 results_save/
 results_aof/
+results_mirror/

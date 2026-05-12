@@ -36,9 +36,13 @@ void kvs_log(int level, const char *fmt, ...);
     } while(0)
 
 /* 快速调试宏，自动带位置 */
+#ifdef KVS_NODEBUG
+#define debug(fmt, ...) ((void)0)
+#else
 #define debug(fmt, ...) \
     printf(C_DEBUG "[DEBUG] %s:%d (%s) " fmt C_RESET "\n", \
         __FILE__, __LINE__, __func__, ##__VA_ARGS__)
+#endif
 
 #define mark() \
     printf(C_DEBUG "[MARK] %s:%d (%s)" C_RESET "\n", \

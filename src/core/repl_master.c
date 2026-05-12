@@ -92,8 +92,10 @@ void repl_propagate(struct io_uring *ring, int argc, robj *argv)
 
 		debug("slave fd=%d wlen=%zu iov_len=%zu", nc->fd, nc->wlen, nc->iov_len);
 
-		if (nc->wlen + len <= RESP_BUF_SIZE) {
-			/* 小命令：直接塞 wbuf */
+		if (nc->wlen + len <= RESP_BUF_SIZE && nc->iov_len == 0) {
+			/* 小命令：直接塞 wbuf；若已有未发完的 iov，则统一追加到
+			 * iov，避免 flush_send_queue 先发了新 wbuf 数据而导致
+			 * TCP 流顺序错乱（iov 数据被延后）。 */
 			memcpy(nc->wbuf + nc->wlen, cmd, len);
 			nc->wlen += len;
 			debug("propagate to fd=%d -> wbuf (wlen=%zu)", nc->fd, nc->wlen);
@@ -114,14 +116,17 @@ void repl_propagate(struct io_uring *ring, int argc, robj *argv)
 			memcpy(new_base + old_iov, cmd, len);
 
 			size_t space = RESP_BUF_SIZE - nc->wlen;
+			size_t new_total = old_iov + len;
 			if (space > 0) {
-				memcpy(nc->wbuf + nc->wlen, new_base, space);
-				nc->wlen += space;
-				nc->iov_data = new_base + space;
-				nc->iov_len = old_iov + len - space;
+				/* new_base 只有 new_total 字节，不能越界读取 */
+				size_t to_wbuf = (space < new_total) ? space : new_total;
+				memcpy(nc->wbuf + nc->wlen, new_base, to_wbuf);
+				nc->wlen += to_wbuf;
+				nc->iov_data = new_base + to_wbuf;
+				nc->iov_len = new_total - to_wbuf;
 			} else {
 				nc->iov_data = new_base;
-				nc->iov_len = old_iov + len;
+				nc->iov_len = new_total;
 			}
 			nc->iov_base = new_base;
 			nc->iov_needs_free = 1;

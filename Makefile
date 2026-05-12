@@ -1,5 +1,7 @@
 CC = gcc
-CFLAGS = -O2 -Wall -I./include -std=gnu11
+CFLAGS_BASE = -O2 -Wall -I./include -std=gnu11
+# 默认生产模式：关闭 debug() 宏输出
+CFLAGS = $(CFLAGS_BASE) -DKVS_NODEBUG
 LDFLAGS = -lpthread -luring -ldl -ljemalloc -lrdmacm -libverbs
 
 # 主项目源文件
@@ -37,9 +39,13 @@ KMEM_TEST = tests/test_kmem
 TARGET = kvstore
 # TESTCASE = tests/testcase
 
-.PHONY: all clean
+.PHONY: all clean debug
 
 all: $(TARGET) $(TESTCASE)
+
+# Debug 模式：开启 debug() 宏输出
+debug: CFLAGS = $(CFLAGS_BASE)
+debug: clean $(TARGET)
 
 # 静态模式规则：.o 挨着 .c
 $(OBJS): %.o: %.c
