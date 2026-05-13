@@ -134,7 +134,10 @@ static struct conn* conn_pool_alloc(struct conn_pool* pool) {
   c->iov_base = NULL;
   c->iov_needs_free = 0;
   c->iov_pending_free = NULL;
+  c->iov_next = NULL;
+  c->iov_next_len = 0;
   c->is_slave = 0;
+  c->is_replconf = 0;
   c->dead = 0;
 
   /* Ensure parser and rbuf_ptr are initialized */
@@ -260,6 +263,11 @@ static void conn_free(struct conn* c) {
   if (c->iov_pending_free) {
     kvs_free(c->iov_pending_free);
     c->iov_pending_free = NULL;
+  }
+  if (c->iov_next) {
+    kvs_free(c->iov_next);
+    c->iov_next = NULL;
+    c->iov_next_len = 0;
   }
 
   if (c->fd >= 0) {
@@ -738,6 +746,17 @@ int proactor_start(unsigned short port, msg_handler handler) {
             conn_free(c);
             conn_pool_free(&g_conn_pool, c);
             break;
+          }
+
+          /* 当前 iov 已发完，且有暂存的 iov_next，提升为当前 iov */
+          if (c->iov_len == 0 && c->iov_next) {
+            c->iov_data = c->iov_next;
+            c->iov_len = c->iov_next_len;
+            c->iov_base = c->iov_next;
+            c->iov_needs_free = 1;
+            c->iov_next = NULL;
+            c->iov_next_len = 0;
+            kvs_logDebug("[OP_SEND] fd=%d promote iov_next len=%zu", c->fd, c->iov_len);
           }
 
           if (c->wlen > 0 || c->iov_len > 0) {
