@@ -67,12 +67,17 @@ struct conn {
 
   int is_replconf;         // 标记该连接是从节点到主节点的 REPLCONF 同步通道
 
-  /* 延迟释放：repl_propagate 合并 iov 时，旧 buffer 可能还有内核 inflight send */
-  char *iov_pending_free;
+  /* 主从复制命令队列：repl_propagate 直接挂链表，避免拷贝旧数据 */
+  struct repl_cmd *repl_head;
+  struct repl_cmd *repl_tail;
+  size_t repl_total;
+};
 
-  /* 当 send_inflight==1 时，新命令暂存到 iov_next，避免覆盖 iov_data */
-  char *iov_next;
-  size_t iov_next_len;
+/* 主从复制命令节点：一次性分配，data 指向结构体后面的内存 */
+struct repl_cmd {
+  struct repl_cmd *next;
+  size_t len;
+  char *data;  /* 指向 (rc + 1) 处的数据区域 */
 };
 
 typedef struct conn net_conn_t;

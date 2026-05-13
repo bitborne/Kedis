@@ -133,12 +133,12 @@ static struct conn* conn_pool_alloc(struct conn_pool* pool) {
   c->has_bulk_suffix = 0;
   c->iov_base = NULL;
   c->iov_needs_free = 0;
-  c->iov_pending_free = NULL;
-  c->iov_next = NULL;
-  c->iov_next_len = 0;
   c->is_slave = 0;
   c->is_replconf = 0;
   c->dead = 0;
+  c->repl_head = NULL;
+  c->repl_tail = NULL;
+  c->repl_total = 0;
 
   /* Ensure parser and rbuf_ptr are initialized */
   if (!c->parser) {
@@ -260,15 +260,13 @@ static void conn_free(struct conn* c) {
     c->iov_base = NULL;
     c->iov_needs_free = 0;
   }
-  if (c->iov_pending_free) {
-    kvs_free(c->iov_pending_free);
-    c->iov_pending_free = NULL;
+  while (c->repl_head) {
+    struct repl_cmd *rc = c->repl_head;
+    c->repl_head = rc->next;
+    kvs_free(rc);
   }
-  if (c->iov_next) {
-    kvs_free(c->iov_next);
-    c->iov_next = NULL;
-    c->iov_next_len = 0;
-  }
+  c->repl_tail = NULL;
+  c->repl_total = 0;
 
   if (c->fd >= 0) {
     close(c->fd);
@@ -297,7 +295,7 @@ static void conn_close_or_defer(struct conn_pool* pool, struct conn* c) {
     slave_cleanup_dead();
   }
 
-  int defer = (c->send_inflight > 0 || c->has_bulk_suffix || c->iov_len > 0);
+  int defer = (c->send_inflight > 0 || c->has_bulk_suffix || c->iov_len > 0 || c->repl_head);
   kvs_logDebug("[conn_close_or_defer] fd=%d send_inflight=%d has_bulk=%d iov_len=%zu dead=%d -> %s",
                c->fd, c->send_inflight, c->has_bulk_suffix, c->iov_len, c->dead,
                defer ? "defer" : "free");
@@ -317,11 +315,13 @@ void flush_send_queue(struct io_uring* ring, struct conn* c) {
     return;
   }
 
+#ifndef KVS_NODEBUG
   char hexbuf[64];
   int hn = 0;
   for (int i = 0; i < 16 && i < (int)c->wlen; i++)
     hn += snprintf(hexbuf + hn, sizeof(hexbuf) - hn, "%02x ", (unsigned char)c->wbuf[i]);
-  debug("flush_send fd=%d wlen=%zu iov_len=%zu wbuf_hex=%s", c->fd, c->wlen, c->iov_len, hexbuf);
+  debug("flush_send fd=%d wlen=%zu repl_total=%zu wbuf_hex=%s", c->fd, c->wlen, c->repl_total, hexbuf);
+#endif
 
   struct io_uring_sqe* sqe;
 
@@ -331,12 +331,30 @@ void flush_send_queue(struct io_uring* ring, struct conn* c) {
     if (!sqe) return;
     io_uring_prep_send(sqe, c->fd, c->wbuf, c->wlen, 0);
     c->send_inflight++;
+  } else if (c->repl_head) {
+    kvs_logDebug("[flush_send_queue] fd=%d send repl_cmds total=%zu", c->fd, c->repl_total);
+    struct iovec iov[1024];
+    int n = 0;
+    struct repl_cmd *rc = c->repl_head;
+    while (rc && n < 1024) {
+      iov[n].iov_base = rc->data;
+      iov[n].iov_len = rc->len;
+      n++;
+      rc = rc->next;
+    }
+    sqe = sqe_prep_tagged(ring, c, OP_SEND);
+    if (!sqe) return;
+    io_uring_prep_writev(sqe, c->fd, iov, n, 0);
+    c->send_inflight++;
   } else if (c->iov_len > 0) {
     kvs_logDebug("[flush_send_queue] fd=%d send iov_len=%zu", c->fd, c->iov_len);
-    hn = 0;
+#ifndef KVS_NODEBUG
+    char hexbuf[64];
+    int hn = 0;
     for (int i = 0; i < 16 && i < (int)c->iov_len; i++)
       hn += snprintf(hexbuf + hn, sizeof(hexbuf) - hn, "%02x ", (unsigned char)c->iov_data[i]);
     debug("send iov fd=%d hex=%s", c->fd, hexbuf);
+#endif
     sqe = sqe_prep_tagged(ring, c, OP_SEND);
     if (!sqe) return;
     io_uring_prep_send(sqe, c->fd, c->iov_data, c->iov_len, 0);
@@ -358,11 +376,13 @@ int process_commands(struct io_uring* ring, struct conn* c) {
   kvs_logDebug("[process_commands] fd=%d enter rlen=%zu rbuf_off=%zu wlen=%zu send_inflight=%d",
                c->fd, c->rlen, c->rbuf_off, c->wlen, c->send_inflight);
   if (c->rlen > 0) {
+#ifndef KVS_NODEBUG
     char hexbuf[64];
     int hn = 0;
     for (int i = 0; i < 16 && i < (int)c->rlen; i++)
       hn += snprintf(hexbuf + hn, sizeof(hexbuf) - hn, "%02x ", (unsigned char)c->rbuf_ptr[c->rbuf_off + i]);
     debug("rbuf hex: %s", hexbuf);
+#endif
   }
 
   /* 惰性紧缩 rbuf */
@@ -707,13 +727,8 @@ int proactor_start(unsigned short port, msg_handler handler) {
         case OP_SEND: {
           struct conn* c = (struct conn*)ptr;
           c->send_inflight--;
-          /* 当前 send 已完成，若没有其它 inflight，可安全释放旧 iov buffer */
-          if (c->send_inflight == 0 && c->iov_pending_free) {
-            kvs_free(c->iov_pending_free);
-            c->iov_pending_free = NULL;
-          }
-          kvs_logDebug("[OP_SEND] fd=%d res=%d send_inflight=%d wlen=%zu iov_len=%zu",
-                       c->fd, res, c->send_inflight, c->wlen, c->iov_len);
+          kvs_logDebug("[OP_SEND] fd=%d res=%d send_inflight=%d wlen=%zu repl_total=%zu iov_len=%zu",
+                       c->fd, res, c->send_inflight, c->wlen, c->repl_total, c->iov_len);
           if (res < 0) {
             if (res == -EAGAIN || res == -EINTR) {
               flush_send_queue(&g_ring, c);
@@ -730,6 +745,26 @@ int proactor_start(unsigned short port, msg_handler handler) {
             } else {
               memmove(c->wbuf, c->wbuf + res, c->wlen - res);
               c->wlen -= res;
+            }
+          } else if (c->repl_head) {
+            /* writev 部分发送：按 res 释放已完成的 repl_cmd */
+            size_t sent = res;
+            while (sent > 0 && c->repl_head) {
+              struct repl_cmd *rc = c->repl_head;
+              if (sent >= rc->len) {
+                sent -= rc->len;
+                c->repl_head = rc->next;
+                c->repl_total -= rc->len;
+                kvs_free(rc);
+              } else {
+                rc->data += sent;
+                rc->len -= sent;
+                c->repl_total -= sent;
+                sent = 0;
+              }
+            }
+            if (!c->repl_head) {
+              c->repl_tail = NULL;
             }
           } else if (c->iov_len > 0) {
             if ((size_t)res >= c->iov_len) {
@@ -748,18 +783,7 @@ int proactor_start(unsigned short port, msg_handler handler) {
             break;
           }
 
-          /* 当前 iov 已发完，且有暂存的 iov_next，提升为当前 iov */
-          if (c->iov_len == 0 && c->iov_next) {
-            c->iov_data = c->iov_next;
-            c->iov_len = c->iov_next_len;
-            c->iov_base = c->iov_next;
-            c->iov_needs_free = 1;
-            c->iov_next = NULL;
-            c->iov_next_len = 0;
-            kvs_logDebug("[OP_SEND] fd=%d promote iov_next len=%zu", c->fd, c->iov_len);
-          }
-
-          if (c->wlen > 0 || c->iov_len > 0) {
+          if (c->wlen > 0 || c->repl_head || c->iov_len > 0) {
             flush_send_queue(&g_ring, c);
           } else if (c->has_bulk_suffix) {
             memcpy(c->wbuf, "\r\n", 2);
@@ -769,7 +793,7 @@ int proactor_start(unsigned short port, msg_handler handler) {
           }
 
           /* wbuf 已空，rbuf 还有数据，继续处理剩余命令 */
-          if (c->rlen > 0 && c->wlen == 0 && c->iov_len == 0 && !c->has_bulk_suffix) {
+          if (c->rlen > 0 && c->wlen == 0 && !c->repl_head && c->iov_len == 0 && !c->has_bulk_suffix) {
             kvs_logDebug("[OP_SEND] fd=%d continue processing rlen=%zu", c->fd, c->rlen);
             int ret = process_commands(&g_ring, c);
             if (ret < 0) {
@@ -778,7 +802,7 @@ int proactor_start(unsigned short port, msg_handler handler) {
           }
 
           /* 释放广播大命令时分配的 iov_base */
-          if (c->iov_needs_free && c->wlen == 0 && c->iov_len == 0 && !c->has_bulk_suffix) {
+          if (c->iov_needs_free && c->wlen == 0 && !c->repl_head && c->iov_len == 0 && !c->has_bulk_suffix) {
             kvs_free(c->iov_base);
             c->iov_base = NULL;
             c->iov_needs_free = 0;

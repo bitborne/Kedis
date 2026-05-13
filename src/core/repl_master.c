@@ -112,79 +112,29 @@ void repl_propagate(struct io_uring *ring, int argc, robj *argv)
 		cmd_needs_free = 1;
 	}
 
-	char hexbuf[64];
-	int hn = 0;
-	for (int i = 0; i < 16 && i < (int)len; i++)
-		hn += snprintf(hexbuf + hn, sizeof(hexbuf) - hn, "%02x ", (unsigned char)cmd[i]);
-	debug("propagate cmd=%s len=%zu hex=%s", argv[0].ptr ? argv[0].ptr : "NULL", len, hexbuf);
-
 	for (struct slave_conn *s = g_slaves; s; s = s->next) {
 		struct conn *nc = s->nc;
 		if (nc->fd < 0 || nc->state == ST_CLOSE) continue;
 
-		debug("slave fd=%d wlen=%zu iov_len=%zu", nc->fd, nc->wlen, nc->iov_len);
-
-		/* 若已有 pending iov 且无 inflight send，先发出去，
-		 * 减少后续合并拷贝。 */
-		if (nc->iov_len > 0 && nc->send_inflight == 0)
-			flush_send_queue(ring, nc);
-
-		if (nc->wlen + len <= RESP_BUF_SIZE && nc->iov_len == 0) {
-			/* 小命令且 iov 为空：直接塞 wbuf */
-			memcpy(nc->wbuf + nc->wlen, cmd, len);
-			nc->wlen += len;
-			debug("propagate to fd=%d -> wbuf (wlen=%zu)", nc->fd, nc->wlen);
-		} else {
-			/* wbuf 满或已有 iov：追加到 iov，不再 split 到 wbuf，
-			 * 避免 flush_send_queue 只发 wbuf 不发 iov 导致积压。 */
-			size_t old_iov = nc->iov_len;
-
-			/* 限制总缓冲区大小，防止从节点跟不上时主节点 OOM */
-			if (nc->wlen + old_iov + nc->iov_next_len + len > 8 * 1024 * 1024) {
-				kvs_logError("[REPL] Slave buffer overflow fd=%d, closing\n", nc->fd);
-				nc->state = ST_CLOSE;
-				continue;
-			}
-
-			if (old_iov > 0 && nc->send_inflight) {
-				/* 当前 iov 正在内核发送中，不能覆盖 iov_data/len/base。
-				 * 把新数据暂存到 iov_next，等 OP_SEND 完成后再替换。
-				 * iov_next 只保存新命令，不复制旧数据（旧数据已在 iov 中）。 */
-				size_t next_len = nc->iov_next_len;
-				char *new_next = kvs_malloc(next_len + len);
-				if (!new_next) {
-					nc->state = ST_CLOSE;
-					continue;
-				}
-				if (next_len > 0) {
-					memcpy(new_next, nc->iov_next, next_len);
-					kvs_free(nc->iov_next);
-				}
-				memcpy(new_next + next_len, cmd, len);
-				nc->iov_next = new_next;
-				nc->iov_next_len = next_len + len;
-				debug("propagate to fd=%d -> iov_next (len=%zu)", nc->fd, nc->iov_next_len);
-			} else {
-				/* 没有 inflight send，可以安全覆盖 iov_data */
-				char *old_base = nc->iov_base;
-				char *new_base = kvs_malloc(old_iov + len);
-				if (!new_base) {
-					nc->state = ST_CLOSE;
-					continue;
-				}
-				if (old_iov > 0)
-					memcpy(new_base, nc->iov_data, old_iov);
-				if (old_base)
-					kvs_free(old_base);
-				memcpy(new_base + old_iov, cmd, len);
-
-				nc->iov_data = new_base;
-				nc->iov_len = old_iov + len;
-				nc->iov_base = new_base;
-				nc->iov_needs_free = 1;
-				debug("propagate to fd=%d -> iov (iov_len=%zu)", nc->fd, nc->iov_len);
-			}
+		struct repl_cmd *rc = kvs_malloc(sizeof(*rc) + len);
+		if (!rc) {
+			kvs_logError("[REPL] Failed to alloc repl_cmd\n");
+			nc->state = ST_CLOSE;
+			continue;
 		}
+		rc->data = (char *)(rc + 1);
+		memcpy(rc->data, cmd, len);
+		rc->len = len;
+		rc->next = NULL;
+
+		if (nc->repl_tail) {
+			nc->repl_tail->next = rc;
+		} else {
+			nc->repl_head = rc;
+		}
+		nc->repl_tail = rc;
+		nc->repl_total += len;
+
 		flush_send_queue(ring, nc);
 	}
 
