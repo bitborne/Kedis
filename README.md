@@ -89,22 +89,22 @@ Kedis 旨在打破传统存储系统在海量并发下的 I/O 瓶颈。通过基
 
 1.  **全异步 I/O 栈**：基于 `io_uring` 实现了纯异步的 Proactor 网络模型，彻底解决了传统 `epoll` 在极高并发下由于频繁上下文切换导致的性能衰减。
 2.  **内核旁路同步 (eBPF Mirror)**：在不修改应用层逻辑的前提下，利用 `eBPF` 在内核协议栈直接拦截 RESP 流量，实现对应用无感、极低开销的主从增量同步。
-3.  **异构同步双机制**：创新性地设计了“实时增量（eBPF）+ 初始全量（RDMA）”的组合。eBPF 确保主从实时数据一致，RDMA 保证在节点冷启动时，TB 级存量数据能以硬件级速度（Zero-copy）完成镜像复制。
+3.  **异构同步三机制**：创新性地设计了“实时增量（eBPF）+ 初始全量（RDMA）+ 应用层 RESP 传播”的组合。eBPF 确保主从实时数据一致；RDMA 保证在节点冷启动时，TB 级存量数据能以硬件级速度（Zero-copy）完成镜像复制；应用层 `repl_cmd` 链表 + `writev` 批量发送提供高可靠性的 fallback 复制路径，无单缓冲区大小限制。
 4.  **mmap 快照加载冷启动**：通过 `mmap` 内存映射技术，实现 KSF 快照与 AOF 日志的亚秒级数据加载。
 5.  **生产级持久化保证**：支持 **KSF 二进制快照** 与 **AOF 增量日志**，支持 `BGSAVE`，以及自定义自动快照落盘频率。
 6.  **非侵入式实时同步**：基于 eBPF 的 `mirror` 模块，在内核层实现流量劫持，支持从节点实时追踪主节点状态。
-7.  **智能内存管理**：内置定长内存池，针对 KV 常见数据分布优化。
+7.  **智能内存管理**：内置 6 尺寸类（64B / 128B / 256B / 512B / 1KB / 2KB）slab 分配器（kmem），支持线程本地缓存（TLS）、大块内存独立管理与页对齐分配，针对 KV 常见数据分布优化。
 8.  **基于 RDMA 的存量同步**：引入 RDMA 远程直接内存访问，实现主从同步中存量数据搬运的硬件级零拷贝。
 
 ### 核心组件说明
 
 | 目录 | 组件名称 | 核心技术点 |
 | :--- | :-- | :--- |
-| `src/core/` | 核心调度层 | 流式 RESP 状态机、统一命令分发路由 |
+| `src/core/` | 核心调度层 | 流式 RESP 状态机、统一命令分发路由、应用层主从复制命令传播 |
 | `src/network/` | 异步网络库 | io_uring 队列管理、固定文件/缓冲区优化、Fallback Reactor |
-| `src/engines/` | 多索引存储引擎 | 渐进式 Hash Rehash、SkipList 范围查询、RBTree 稳定查询 |
+| `src/engines/` | 多索引存储引擎 | 渐进式 Hash Rehash、SkipList、RBTree 稳定查询 |
 | `src/persistence/`| 高性能持久化 | VLQ 变长编码 AOF、mmap 优化快照加载、异步 fsync 线程 |
-| `src/utils/` | 基础工具链 | 针对 256B 小对象的定长内存池、高性能线程安全日志 |
+| `src/utils/` | 基础工具链 | 6 尺寸类 slab 内存池（kmem）含 TLS 缓存、高性能线程安全日志 |
 | `mirror/` | eBPF 同步模块 | XDP/TC 挂载点双版本、内核态 TCP 重组、Ring Buffer 通信 |
 
 ---
@@ -115,11 +115,18 @@ Kedis 旨在打破传统存储系统在海量并发下的 I/O 瓶颈。通过基
 
 Kedis 采用真正的 Proactor 模式。传统的 `epoll` 属于“通知就绪”，应用仍需调用 `read` 将数据从内核拷贝到用户态。而 `io_uring` 允许应用直接提交请求到提交队列（SQ），内核完成后直接放入完成队列（CQ），系统调用开销减少约 70% 以上。
 
+网络层实现了以下关键优化：
+- **连接级引用计数**：`send_inflight` / `recv_inflight` 计数器配合 `dead` 延迟释放标志，确保内核完成回调前连接结构不被释放。
+- **大响应零拷贝分片**：当响应超过固定 `wbuf`（4KB）时，剩余数据通过 `iov_data` / `iov_len` 引用外部缓冲区，避免额外拷贝。
+- **主从复制批量发送**：每个从节点连接维护独立的 `repl_cmd` 命令链表，`flush_send_queue` 通过 `io_uring_prep_writev` 一次性提交多个非连续缓冲区，实现零拷贝批量发送，彻底移除旧设计的 8MB 缓冲区上限。
+
 ### 同步体系：eBPF 实时增量 + RDMA 存量全量
 
 本项目将数据同步解耦为两个阶段：
 1.  **初始阶段 (Full Sync)**：针对主从刚建立连接时的存量搬运，引入 **RDMA (Remote Direct Memory Access)** 技术，允许从节点直接读取主节点内存中的快照映像，实现 GB/s 级别的传输带宽。
-2.  **实时阶段 (Incremental)**：使用 eBPF 程序挂载在网络驱动（XDP）或协议栈（TC）入口。当主节点收到命令包时，mirror 直接提取 TCP 载荷，不经过用户态存储逻辑，延迟极低。
+2.  **实时阶段 (Incremental)**：提供两条并行路径：
+    - **eBPF 内核镜像**：使用 eBPF 程序挂载在网络驱动（XDP）或协议栈（TC）入口。当主节点收到命令包时，mirror 直接提取 TCP 载荷，不经过用户态存储逻辑，延迟极低，且对应用完全无侵入。
+    - **应用层 RESP 传播**：作为 eBPF 的高可靠性 fallback，主节点在命令执行后通过 `repl_propagate` 将写命令序列化为 RESP 格式，追加到各从节点连接的 `repl_cmd` 链表中，再由 `writev` 批量发送。该路径不依赖特定网卡或内核配置，且通过 `REPLCONF` 注册机制实现从节点自动发现与静默模式处理。
 
 ### 存储引擎：四种数据结构组成的多引擎架构
 
@@ -146,12 +153,17 @@ Kedis 采用真正的 Proactor 模式。传统的 `epoll` 属于“通知就绪�
 ### 环境要求
 - **基础工具**: `gcc`, `clang`, `make`
 - **系统环境**: Linux 内核版本 5.8+ (支持 io_uring 与 eBPF ring_buf)
-- **依赖库**: `liburing`, `libbpf`
+- **依赖库**: `liburing`, `libbpf`, `librdmacm`, `libibverbs`, `jemalloc` (可选), `pthread`
 
 ### 编译依赖说明
 
 | 依赖库          | Arch Linux (pacman) | Debian/Ubuntu (apt) | 功能说明                 |
 | --------------- | ------------------- | ------------------- | ------------------------ |
+| liburing        | `liburing`          | `liburing-dev`      | io_uring 异步 I/O        |
+| libbpf          | `libbpf`            | `libbpf-dev`        | eBPF 程序加载            |
+| librdmacm       | `rdma-core`         | `librdmacm-dev`     | RDMA 连接管理            |
+| libibverbs      | `rdma-core`         | `libibverbs-dev`    | RDMA  verbs 接口         |
+| jemalloc        | `jemalloc`          | `libjemalloc-dev`   | 可选：替代 kmem 的分配器 |
 | libbfd          | `binutils`          | `binutils-dev`      | BPF 字节码反汇编         |
 | libcap          | `libcap`            | `libcap-dev`        | 细粒度权限控制 (CAP_BPF) |
 | clang-bpf-co-re | `clang`             | `clang`             | CO-RE 重定位支持         |
@@ -173,8 +185,12 @@ sudo apt install binutils-dev libcap-dev clang llvm
 
 ### 编译构建
 ```bash
-# 1. 编译主服务器
+# 1. 编译主服务器（生产模式，关闭 debug 输出）
 make
+
+# 1b. 调试模式（开启 hex dump 等详细调试信息）
+make debug
+
 # 2. 编译 eBPF 模块
 cd mirror && make prebuild && make vmlinux && make all
 ```
@@ -197,8 +213,30 @@ cd mirror && make prebuild && make vmlinux && make all
 # XDP 版本
 sudo ./mirror/src/xdp_mirror <网络接口名> <从节点IP> <从节点端口>
 # TC 版本
-sudo ./mirror/src/xdp_mirror <网络接口名> <从节点IP> <从节点端口>
+sudo ./mirror/src/mirror <网络接口名> <从节点IP> <从节点端口>
 ```
+
+#### 启动从节点（应用层复制）
+
+从节点通过配置文件指定角色和主节点地址，启动后自动发送 `REPLCONF` 完成注册：
+
+```bash
+# 从节点配置示例 (config_slave.conf)
+bind 0.0.0.0
+port 9999
+replica-mode slave
+master-host 192.168.122.122
+master-port 8888
+init-mode none
+
+# 启动从节点
+./kvstore config_slave.conf
+```
+
+从节点建立连接后会自动执行：
+1. 发送 `REPLCONF` 向主节点注册同步通道。
+2.（可选）发送 `RDMASYNC <engine_type>` 触发 RDMA 存量全量同步。
+3. 存量同步完成后，自动接收主节点通过应用层 `repl_propagate` 推送的实时写命令。
 
 ---
 
@@ -208,330 +246,149 @@ sudo ./mirror/src/xdp_mirror <网络接口名> <从节点IP> <从节点端口>
 
 - **CPU**: 18 × Intel® Core™ Ultra 5 125H
 - **MEM**: 32 GiB 内存 (30.9 GiB 可用)
-- **Kernel**: Linux 6.18.8-arch2-1 (64 位)
-> 内核版本 >= 5.8 以支持 eBPF ring_buf 特性
+- **Kernel**: 6.18.29-1-lts (64 位)
 
 ---
 
-### 持久化性能数据
+### 通用测试参数
 
-> 测试时间: 2026年2月21日
->
-> `commit: 9f1ce21b77ba7bdca16deb238db6ded88da5bfd0`
+> 以下各项 QPS 相关测试均使用同一套基准参数，便于横向对比：
 
-#### 配置文件选项
-
-仅列出可能影响性能的选项
-
-```bash
-logfile ""
-log-level 2
-
-aof-enabled yes
-auto-save-enabled 
-auto-save-seconds 10
-auto-save-changes 1000
-```
-
-#### 测试工具和选项
-
-详见`tests/pers_benchmark.sh`
-
-```bash
-# --------------------- 配置参数 ---------------------
+```sh
 HOST="127.0.0.1"
-PORT="8888"
-THREADS=8
-CONNECTIONS_PER_THREAD=50
-DATA_SIZE=128
-KEY_PREFIX="kv_"
-TOTAL_KEYS=1000000
-KEY_MIN=1
-KEY_MAX=1000000
-
-# 计算每个连接需要处理的请求数
-REQUESTS_PER_CONN=$((TOTAL_KEYS / (THREADS * CONNECTIONS_PER_THREAD)))
-
-# 使用SSET作为测试命令
-TEST_CMD="SSET"
-
+KEYS=1000000
+THREADS=4
+CONN=50
+REQS_PER_CLIENT=$((KEYS / (THREADS * CONN)))
 
 memtier_benchmark \
     -s ${HOST} \
     -p ${PORT} \
-    --command="${TEST_CMD} __key__ __data__" \
+    --command="HSET/HDEL __key__ __data__" \
     --command-ratio=1 \
     --command-key-pattern=P \
     -t ${THREADS} \
-    -c ${CONNECTIONS_PER_THREAD} \
-    -n ${REQUESTS_PER_CONN} \
-    -d ${DATA_SIZE} \
-    --key-prefix=${KEY_PREFIX} \
-    --key-minimum=${KEY_MIN} \
-    --key-maximum=${KEY_MAX} \
-    --hide-histogram \
-    --hdr-file-prefix="${OUTPUT_DIR}/${CONFIG_NAME}_hdr" \
-    --json-out-file="${OUTPUT_DIR}/${CONFIG_NAME}_result.json" \
-    --print-percentiles=50,90,95,99,99.9 \
-    2>&1 | tee "${OUTPUT_DIR}/${CONFIG_NAME}_output.log"
+    -c ${CONN} \
+    -n ${REQS_PER_CLIENT} \
+    --random-data \
+    --key-prefix="k" \
+    --key-minimum=1 \
+    --key-maximum=${KEYS} \
+    --json-out-file="$json_file" \
+    --hide-histogram
 ```
 
-#### 测试结果
+### KSF 加载时间
 
-```bash
-# 图表生成
-cd tests && python3 gen_charts.py ./pers_sset_benchmark_results 
+*更新时间: 2026.4.30*
+
+![KSF加载时间](README.assets/image-20260501001844138.png)
+
+### Pipeline 性能：Redis VS Kedis
+
+*更新时间: 2026.5.1*
+
+![pipeline性能对比](README.assets/image-20260501113651033.png)
+
+### AOF 性能（预热后）：Redis VS Kedis
+
+*更新时间: 2026.5.15*
+
+![AOF性能](README.assets/image-20260501014217042.png)
+
+### 增量同步性能
+
+*更新时间: 2026.5.1*
+
+![增量同步性能](README.assets/image-20260513162907601.png)
+
+### RDMA vs sendfile
+
+#### RDMA send（soft-RoCE）
+
+![RDMA send性能](README.assets/image-20260501120557336.png)
+
+#### sendfile
+
+![sendfile性能](README.assets/image-20260501120523806.png)
+
+### 内存分配器对比：kmem vs jemalloc
+
+*更新时间: 2026.5.6*
+
+#### 1. jemalloc — pidstat 内存趋势
+
+```
+❯ pidstat -r -p $(pidof kvstore) 1 200
+Linux 6.18.26-2-lts (Arch)
+
+10时17分25秒   UID       PID  minflt/s  majflt/s     VSZ     RSS   %MEM  Command
+10时17分26秒  1000     81024      0.00      0.00  987108  436040   1.34  kvstore
+10时17分30秒  1000     81024    205.00      0.00  987108  436472   1.35  kvstore -- 开始 SET
+10时17分31秒  1000     81024   4395.00      0.00 1009636  452888   1.40  kvstore
+10时17分35秒  1000     81024   2448.00      0.00 1084388  530220   1.63  kvstore
+10时17分36秒  1000     81024     55.00      0.00 1084388  536868   1.65  kvstore -- 开始 DEL
+10时17分37秒  1000     81024      0.00      0.00 1084388  523424   1.61  kvstore
+
+...DEL 后 RSS 稳定在 458020 KB 左右，未完全回落
 ```
 
-<img src="README.assets/image-20260221204018087.png" alt="image-20260221204018087" style="zoom: 67%;" />
+#### 2. kmem — pidstat 内存趋势
 
-<img src="README.assets/image-20260221204037592.png" alt="image-20260221204037592" style="zoom: 67%;" />
+```
+❯ pidstat -r -p $(pidof kvstore) 1 200
+Linux 6.18.26-2-lts (Arch)
 
-<img src="README.assets/image-20260221204053473.png" alt="image-20260221204053473" style="zoom: 67%;" />
+10时19分21秒   UID       PID  minflt/s  majflt/s     VSZ     RSS   %MEM  Command
+10时19分25秒  1000     82535      0.00      0.00  999396  845468   2.61  kvstore
+10时19分26秒  1000     82535   2311.00      0.00 1022436  866896   2.67  kvstore -- 开始 SET
+10时19分27秒  1000     82535  10754.00      0.00 1067492  909664   2.80  kvstore
+10时19分28秒  1000     82535  12289.00      0.00 1108452  958480   2.95  kvstore
+10时19分29秒  1000     82535  10240.00      0.00 1149412  999376   3.08  kvstore
+10时19分30秒  1000     82535   9216.00      0.00 1186276 1036096   3.19  kvstore
+10时19分31秒  1000     82535  10240.00      0.00 1227236 1076848   3.32  kvstore -- 开始 DEL
+10时19分32秒  1000     82535      0.00      0.00 1227236 1076848   3.32  kvstore
 
-<img src="README.assets/image-20260221204109200.png" alt="image-20260221204109200" style="zoom:67%;" />
-
-<img src="README.assets/image-20260221204150706.png" alt="image-20260221204150706" style="zoom:67%;" />
-
-<img src="README.assets/image-20260221204215237.png" alt="image-20260221204215237" style="zoom: 67%;" />
-
-
-### 引擎性能对比测试 (SET/GET)
-
-*测试时间: 2026年3月5日*
-
-#### 测试脚本
-
-```bash
-cd tests && ./run_full_benchmark_suite.sh --engine
+...DEL 后 RSS 稳定在 1076848 KB 左右，无 trim
 ```
 
-#### 测试配置参数
-
-| 参数 | 值 |
-|------|-----|
-| 引擎 | Array, RBTree, Hash, SkipList |
-| 数据大小 | 128B, 512B, 1024B |
-| 键空间 | 10K, 50K |
-| 线程数 | 8 |
-| 连接数 | 50 |
-| 测试时间 | 30s |
-| 测试模式 | 每个测试点独立 kvstore 实例 |
-
----
-
-#### SET 操作性能
-
-##### 吞吐量对比
-
-![SET 吞吐量对比](README.assets/set_throughput_comparison.png)
-
-##### 平均延迟对比
-
-![SET 平均延迟](README.assets/set_average_latency.png)
-
-##### P99 延迟对比
-
-![SET P99延迟](README.assets/set_p99_latency.png)
-
-##### 延迟百分位数
-
-![SET 延迟百分位数](README.assets/set_latency_percentiles_all.png)
-
----
-
-#### GET 操作性能
-
-##### 吞吐量对比
-
-![GET 吞吐量对比](README.assets/get_throughput_comparison.png)
-
-##### 平均延迟对比
-
-![GET 平均延迟](README.assets/get_average_latency.png)
-
-![GET 平均延迟(排除Array)](README.assets/get_average_latency_detail.png)
-
-##### P99 延迟对比
-
-![GET P99延迟](README.assets/get_p99_latency.png)
-
-![GET P99延迟(排除Array)](README.assets/get_p99_latency_detail.png)
-
-##### 延迟百分位数
-
-![GET 延迟百分位数](README.assets/get_latency_percentiles_all.png)
-
-![GET 延迟百分位数(排除Array)](README.assets/get_latency_percentiles_detail.png)
-
----
-
-#### 引擎综合性能雷达图
-
-![引擎性能雷达图](README.assets/engine_radar_chart.png)
-
-#### 性能汇总表
-
-![引擎性能汇总表](README.assets/engine_summary_table.png)
-
----
-
-### 混合负载性能测试
-
-*测试时间: 2026年3月5日*
-
-#### 测试脚本
-
-```bash
-cd tests && ./run_full_benchmark_suite.sh --mixed
-```
-
-#### 测试配置参数
-
-| 参数 | 值 |
-|------|-----|
-| 引擎 | Array, RBTree, Hash, SkipList |
-| 数据大小 | 128B |
-| 键空间 | 50K |
-| 线程数 | 8 |
-| 连接数 | 50 |
-| 测试时间 | 30s |
-| 测试场景 | Write_Heavy(100%SET), Write_Read_8:2, Balanced_5:5, Read_Cache_2:8, Read_Heavy(100%GET) |
-
-#### 吞吐量对比
-
-![混合负载吞吐量对比](README.assets/mixed_throughput_comparison.png)
-
-#### 延迟对比
-
-![混合负载延迟对比(排除Array)](README.assets/image-20260305115647954.png)
-
-#### 性能热力图
-
-![混合负载热力图](README.assets/mixed_throughput_heatmap.png)
-
-#### 性能汇总表
-
-![混合负载汇总表](README.assets/mixed_summary_table.png)
-
----
-
-### 主从复制性能对比：eBPF 镜像机制深度评测
-
-*测试时间: 2026年3月7日*  
-*测试场景: SkipList 引擎 SSET 操作，1000万 Key 写入*  
-*对比方案: 无复制 / TC Ingress / XDP / uprobe (kvs_resp_feed)*
-
-#### 测试动机与设计
-
-实现主从复制功能的传统方式是在应用层双写或记录 binlog，但这会带来 30%-50% 的性能损失。我尝试通过 eBPF 在内核层做流量镜像，理论上应用层零侵入、零修改。但这个方案的实际性能开销需要量化验证。
-
-为此我设计了四种测试配置：
-1.  **No Mirror**: 基准对照组，无任何复制开销
-2.  **TC Ingress**: 流量控制 ingress hook，最早期的实现
-3.  **XDP**: 网卡驱动层 hook，理论上最快但受限于驱动支持
-4.  **RESP_feed**: uprobe 挂载在协议解析函数，应用层语义最准确但用户态介入最多
-
-测试使用 `memtier_benchmark` 单线程顺序写入，确保网络带宽不构成瓶颈，重点测量复制机制本身的开销。
-
-#### 吞吐量对比
-
-![复制吞吐量对比](README.assets/01_repl_throughput.png)
-
-**关键发现**:
-- **TC Ingress** 表现最佳，仅损失 9.6% 吞吐量 (70.4K vs 77.8K QPS)
-- **XDP** 略逊于 TC，损失 10.6%，可能受限于本机回环 (lo) 驱动的 XDP 实现效率
-- **RESP_feed** 损失 23.5%，uprobe 的 trampolines 和上下文切换开销显著
-
-#### 延迟分析
-
-##### 平均延迟
-
-![复制平均延迟](README.assets/02_repl_average_latency.png)
-
-平均延迟的增长趋势与吞吐量损失基本线性对应。TC 和 XDP 维持在 5.7ms 左右，RESP_feed 上升到 6.71ms。
-
-##### P99 尾延迟
-
-![复制P99延迟](README.assets/03_repl_p99_latency.png)
-
-**意外的发现**: XDP 的 P99 延迟 (9.98ms) 反而优于 No Mirror (11.52ms)。深入分析后我认为这是**eBPF 缓存预热效应**导致的——XDP 程序在内核态持续运行，其指令和数据结构保持在 CPU L1/L2 缓存中，减少了内核网络栈路径上的缓存未命中。这个反直觉的结果说明 eBPF 不仅能做功能扩展，在某些场景下还能优化数据局部性。
-
-##### 完整延迟百分位数
-
-![复制延迟百分位数](README.assets/04_repl_latency_percentiles.png)
-
-从 P50 到 P99.9 的分布可以看出：
-- **TC/XDP** 在各分位点表现稳定，延迟方差小
-- **No Mirror** 在高百分位 (P99.9: 15.8ms) 表现较差，可能因为缺少 eBPF 缓存预热
-- **RESP_feed** 全分位点延迟最高，印证了用户态拦截的成本
-
-#### 性能开销总结
-
-![复制性能开销](README.assets/05_repl_overhead.png)
-
-#### 数据汇总表
-
-![复制性能汇总表](README.assets/06_repl_summary_table.png)
-
-#### 技术决策建议
-
-基于以上实测数据，我在项目中做出以下技术选型：
-
-1.  **默认启用 TC Ingress**: 在大多数生产环境网卡上，TC 的通用性和性能达到最佳平衡点。9.6% 的吞吐损失换取实时主从同步，ROI 极高。
-
-2.  **XDP 作为高配选项**: 对于支持 XDP Native 驱动的网卡（如 Intel ixgbe/i40e），可切换至 XDP 模式获得更低延迟。
-
-3.  **RESP_feed 用于调试**: 虽然性能损失较大，但 uprobe 能精确捕获应用层协议解析状态，适合用于数据一致性验证或异常排查，不作为生产同步主力。
-
-4.  **混合部署策略**: 对于写入密集但延迟不敏感的冷数据，可关闭 mirror；对于热数据，启用 TC mirror。通过配置中心动态切换，实现性能与可靠性的灵活权衡。
-
----
-
-### 内存分配器对比测试：自研 kmem vs jemalloc
-
-*测试时间: 2026年3月6日*  
-*测试工具: Valgrind Massif + 自定义 Python 分析脚本*  
-*测试场景: 100万 Key 的完整生命周期（SSET → SGET → SDEL）*
-
-#### 测试设计思路
-
-在高性能存储系统中，内存分配器的效率直接影响系统的吞吐量和稳定性。为了量化自研 kmem 分配器的优势，我设计了以下对比测试方案：
-
-1.  **控制变量**: 使用同一套 Kedis 代码，仅通过宏切换 `HAVE_JEMALLOC` 控制使用 jemalloc 或 kmem
-2.  **完整生命周期**: 测试覆盖数据插入（SET）、读取（GET）、删除（DEL）三个阶段，观察内存的申请与归还行为
-3.  **精准测量**: 使用 Valgrind Massif 工具记录堆内存的精确变化，采样间隔 100ms，确保不遗漏关键的内存波动
-
-#### 完整内存趋势对比
-
-![内存分配器完整对比](README.assets/allocator_comparison.png)
-
-#### SET 阶段细节分析
-
-![SET阶段双轴对比](README.assets/allocator_comparison_detail.png)
-
-![内存特征对比](README.assets/allocator_comparison_summary.png)
-
-完整测试脚本与可视化代码位于 `tests/gen_mem_allocator_charts.py`，可复用于其他内存分配器对比研究。
+#### 3. QPS 数据对比
+
+| 分配器 | 状态 | HSET QPS | HDEL QPS |
+|:------:|:----:|:--------:|:--------:|
+| **jemalloc** | **未预热** | 196,813 | 201,302 |
+| **jemalloc** | **预热后** | 199,344 | 199,484 |
+| **kmem** | **未预热** | 192,400 | 194,944 |
+| **kmem** | **预热后** | 197,804 | 196,703 |
 
 ---
 
 ## 发展路线
 
-- [x] **RDMA 存量全量克隆**：实现基于 RDMA Read 的大规模存量数据全量同步，压榨硬件带宽极限。
-- [x] **内存池性能测试**：通过 `valgrind` 的 `massif` 工具，对比基于**自研内存池**与 **jemalloc** 的两种 Kedis 的堆内存变化趋势（峰值内存节省 97.9%，归还率 97% vs 5%）。
-- [ ] **eBPF 挂载点对比研究**：深入对比 **XDP vs TC vs Uprobe** 在高频同步下的系统 QPS 与丢包率。
-- [ ] **io_uring 固定缓冲区优化**：引入 `IORING_REGISTER_BUFFERS` 实现真正的零拷贝内存路径。
+- [x] **RDMA 存量全量克隆**：实现基于 RDMA Read 的大规模存量数据全量同步。
+- [x] **eBPF 挂载点对比研究**：已完成 XDP / TC / Uprobe 三种挂载点的主从复制性能深度评测（详见上方性能测试章节）。
+- [x] **应用层 RESP 主从复制**：实现基于 `repl_cmd` 链表 + `writev` 批量发送的应用层命令传播，作为 eBPF 的高可靠性 fallback。
+- [ ] **io_uring 固定缓冲区优化**：引入 `IORING_REGISTER_BUFFERS` 实现真正的零拷贝内存路径（`rbuf_ptr` 已指针化预留）。
 
 ---
 
 ## 贡献
 
-欢迎任何形式的贡献！在提交 PR 之前，请确保已通过所有 `tests/` 下的基本测试 `test.sh`。
+欢迎任何形式的贡献！在提交 PR 之前，请确保已通过 `tests/` 下的测试套件。
 
 ```bash
-# 需要用到 root 权限以启动 eBPF 程序
+# 运行所有功能测试（含 eBPF 增量复制测试，需要 root）
 sudo tests/test.sh
+
+# 或分别运行各模块测试
+python3 tests/test_basic.py        # CRUD 跨引擎测试
+python3 tests/test_aof.py          # AOF 持久化测试
+python3 tests/test_snapshot.py     # KSF 快照测试
+python3 tests/test_incre_repl.py   # 增量复制测试（无需 root 时测试应用层传播）
+python3 tests/test_all.py          # 聚合测试
+
+# 符合性测试
+python3 tests/conformance.py
 ```
 
 ## 支持
@@ -543,4 +400,4 @@ sudo tests/test.sh
 - eBPF 代码：Dual BSD/GPL。
 
 ---
-*最后更新: 2026-03-06*
+*最后更新: 2026-05-15*
