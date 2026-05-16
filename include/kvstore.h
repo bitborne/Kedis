@@ -115,6 +115,7 @@ enum {
      */
     KVS_CMD_RDMASYNC,
     KVS_CMD_REPLCONF,      // 从节点注册命令
+    KVS_CMD_PING,          // 心跳检测命令
 
     KVS_CMD_COUNT
 };

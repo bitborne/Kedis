@@ -116,7 +116,7 @@ const char*
                  "HDEL", "HMOD", "HEXIST", "RSET", "RGET", "RDEL",
                  "RMOD", "REXIST", "SSET", "SGET", "SDEL", "SMOD",
                  "SEXIST", "SAVE", "BGSAVE", "SYNC", "REPLICAOF",
-                 "RDMASYNC", "REPLCONF"};    // 添加SAVE、BGSAVE、SYNC、REPLICAOF和RDMASYNC命令
+                 "RDMASYNC", "REPLCONF", "PING"};    // 添加SAVE、BGSAVE、SYNC、REPLICAOF、RDMASYNC和PING命令
 
 
 // 命令查找 hash 表（开放寻址）
@@ -226,7 +226,9 @@ int is_read_command(const char* command) {
             /* 持久化命令：不修改 KV 数据 */
             strcasecmp(command, "SAVE") == 0 || strcasecmp(command, "BGSAVE") == 0 ||
             /* 同步触发命令：控制命令，非数据修改 */
-            strcasecmp(command, "SYNC") == 0) {
+            strcasecmp(command, "SYNC") == 0 ||
+            /* 心跳检测 */
+            strcasecmp(command, "PING") == 0) {
         return 1;
     }
     return 0;
@@ -1121,6 +1123,14 @@ int kvs_protocol(reply_builder_t *rb, int argc, robj *argv) {
 
                 return 0;
             }
+
+        case KVS_CMD_PING:
+            if (argc > 1) {
+                rb_add_reply_bulk_len(rb, argv[1].ptr, argv[1].len);
+            } else {
+                rb_add_reply_status(rb, "PONG");
+            }
+            break;
 
         default:
             rb_add_reply_error(rb, "UNKNOWN COMMAND");
